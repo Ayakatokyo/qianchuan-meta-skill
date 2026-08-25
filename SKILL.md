@@ -1,5 +1,5 @@
 ---
-name: yuntu-meta-skill
+name: qianchuan-meta-skill
 description: 将千川素材分析的自然语言意图转为 QuerySpec 与 HighlightSpec，再由直接报表连接器确定性筛选候选素材和选择本地高光帧；不执行 RPA、视频下载、AI 分析或报告生成。
 ---
 
