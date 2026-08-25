@@ -4,7 +4,7 @@
 
 - 状态：已确认，作为下一次实现对话的设计输入。
 - 方案：方案 2，分层迁移。
-- 范围：把原千川视频高光帧技能中已经验证的 RPA 可靠性能力迁入元技能，并与现有 `QuerySpec`、`HighlightSpec` 串成自动链路。
+- 范围：把原千川视频高光帧技能中已经验证的 RPA 可靠性能力迁入元技能，并与现有 `QuerySpec`、`HighlightSpec` 串成受控执行链路。
 - 本轮不实现代码、不执行真实 RPA、不修改原技能仓库。
 
 原技能实现参考 `codex/migrate-direct-material-data` 分支（RPA 适配器、波次调度、运行时隔离、CSV 解析、工件回执和批量验证）。迁移时复用其行为契约，不复制合并式 CLI 的全部业务逻辑。
@@ -19,7 +19,7 @@
 QuerySpec + HighlightSpec
         -> 直接千川报表取数
         -> 候选素材池落盘
-        -> 自动解析唯一 RPA 授权账号
+        -> 显式执行授权后解析唯一 RPA 授权账号
         -> 按素材 ID 直接提交 RPA 诊断
         -> 波次调度、失败补位、恢复和回执持久化
         -> 解析诊断 CSV 为规范化 records
@@ -28,7 +28,7 @@ QuerySpec + HighlightSpec
         -> 验证并生成 rpa-ready 素材清单
 ```
 
-用户不需要在 API 素材列表落盘后再次确认；素材 ID 从候选工件传入 RPA 后立即执行。查询条件和高光帧标准仍由模型转换为受控 Spec，脚本只做确定性校验和执行。
+默认执行只产生或复用候选工件；携带显式 RPA 执行授权后，素材 ID 才会从候选工件传入 RPA。查询条件和高光帧标准仍由模型转换为受控 Spec，脚本只做确定性校验和执行。
 
 ### 2.2 非目标
 
@@ -107,16 +107,17 @@ python scripts/run_meta_skill.py query \
 
 `query` 的职责到 `top_materials.json`、`query-receipt.json` 和源数据落盘为止。它不能触发 RPA、视频下载、抽帧、AI 分析或报告生成，便于调试和只取数场景。
 
-### 4.2 `run`：自动 RPA 入口
+### 4.2 `run`：显式授权的 RPA 入口
 
 ```bash
 python scripts/run_meta_skill.py run \
   --query-spec /path/query-spec.json \
   --highlight-spec /path/highlight-spec.json \
+  --execute-rpa \
   --output-dir /path/run
 ```
 
-`run` 先执行与 `query` 完全相同的 Spec 校验和报表取数。候选工件成功落盘后，不请求人工确认，直接读取其中的素材 ID 并执行 RPA。`run` 必须支持从已有运行目录恢复：若查询工件和配置指纹一致，可跳过已完成的查询阶段；若指纹不一致，必须拒绝复用旧工件。
+`run` 先执行与 `query` 完全相同的 Spec 校验和报表取数。没有 `--execute-rpa` 时，在候选工件成功落盘或复用后停止并写入生命周期回执；携带该参数时才读取其中的素材 ID 并执行 RPA。`run` 必须支持从已有运行目录恢复：若查询工件和配置指纹一致，可跳过已完成的查询阶段；若指纹不一致，必须拒绝复用旧工件。
 
 ### 4.3 `select-frames`：本地独立入口
 
@@ -136,7 +137,7 @@ python scripts/run_meta_skill.py run \
 
 ### 5.2 授权账号解析
 
-`run` 在提交第一波素材前调用 RPA 授权账户列表接口，并按以下规则解析：
+授权执行的 `run` 在提交第一波素材前调用 RPA 授权账户列表接口，并按以下规则解析：
 
 1. 0 个匹配账号：失败，错误类型 `rpa_account_unavailable`。
 2. 多个匹配账号：失败，错误类型 `rpa_account_ambiguous`，禁止静默选择。
@@ -247,7 +248,7 @@ RPA CSV 使用原技能解析器的字段分隔、结构化字段、数值校验
 ### 配置与入口
 
 - `candidateTopN` 缺省、等于和大于 `targetTopN` 的规范化行为；小于目标时在执行前失败。
-- `query` 只生成候选工件，绝不调用 RPA；`run` 在候选落盘后自动调用 RPA，且不等待人工确认。
+- `query` 只生成候选工件，绝不调用 RPA；未携带 `--execute-rpa` 的 `run` 同样不得解析账号或调用 RPA，携带该参数的 `run` 才在候选落盘后继续执行。
 - 旧 `--config` 入口仍可完成兼容查询。
 
 ### 账号、周期与安全

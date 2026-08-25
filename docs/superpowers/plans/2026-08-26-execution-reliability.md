@@ -208,4 +208,3 @@ Expected: all tests pass, compilation succeeds, and no whitespace errors are rep
 git add tests/test_run_meta_skill.py tests/test_run_verifier.py
 git commit -m "test: cover portable authorized run verification"
 ```
-

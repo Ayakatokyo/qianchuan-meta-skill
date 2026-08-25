@@ -67,7 +67,7 @@ RUN/
 
 ## 测试门禁
 
-必须测试：`candidateTopN` 兼容和边界；`query` 不触发 RPA；`run` 自动继续；0/1/多账号；报表/RPA ID 隔离；CUSTOM 日期；CSV `\x01`、结构化字段、SHOW_COUNT 和无效数值；超时隔离；延迟 CSV 有限恢复；波次屏障、失败补位、目标上限；中断 checkpoint；指纹/日期/工件篡改恢复；临时视频清理；六指标局部峰、全局最大、同秒合并、第 0 秒；JPEG 和批量验证；敏感信息脱敏。
+必须测试：`candidateTopN` 兼容和边界；`query` 不触发 RPA；未携带 `--execute-rpa` 的 `run` 不解析账号或触发 RPA，携带该参数的 `run` 才继续；0/1/多账号；报表/RPA ID 隔离；CUSTOM 日期；CSV `\x01`、结构化字段、SHOW_COUNT 和无效数值；超时隔离；延迟 CSV 有限恢复；波次屏障、失败补位、目标上限；中断 checkpoint；指纹/日期/工件篡改恢复；临时视频清理；六指标局部峰、全局最大、同秒合并、第 0 秒；JPEG 和批量验证；敏感信息脱敏。
 
 ## 非目标
 
