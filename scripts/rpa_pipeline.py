@@ -124,19 +124,37 @@ def _completed_artifacts_are_valid(entry, paths):
     if not _completed(entry):
         return False
     try:
-        csv_path = Path(entry["diagnosisCsvPath"])
+        csv_path = Path(entry["diagnosisCsvPath"]) if entry.get("diagnosisCsvPath") else None
         records_path = Path(entry["diagnosisRecordsPath"])
         receipt_path = artifact_path(paths["receipts"], entry["materialId"], ".json")
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         records = json.loads(records_path.read_text(encoding="utf-8"))
     except (KeyError, OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return False
+    def within(root, path):
+        if path is None:
+            return True
+        try:
+            root_path = Path(root).resolve()
+            return os.path.commonpath((str(root_path), str(path.resolve()))) == str(root_path)
+        except ValueError:
+            return False
+    if not within(paths["csv"], csv_path) or not within(paths["records"], records_path):
+        return False
+    frames = entry.get("highlightFrames", [])
+    if not isinstance(frames, list):
+        return False
+    for frame in frames:
+        if not isinstance(frame, dict):
+            return False
+        frame_path = frame.get("framePath")
+        if frame_path and (not within(paths["frames"], Path(frame_path)) or not _is_jpeg(frame_path)):
+            return False
     return (
-        csv_path.is_file()
-        and csv_path.stat().st_size > 0
+        (not csv_path or (csv_path.is_file() and csv_path.stat().st_size > 0))
         and receipt.get("state") == "records_persisted"
         and receipt.get("materialId") == entry["materialId"]
-        and receipt.get("csvSha256") == _sha256(csv_path)
+        and (not csv_path or receipt.get("csvSha256") == _sha256(csv_path))
         and isinstance(records, list)
         and any(isinstance(record, dict) and str(record.get("materialId") or "") == entry["materialId"] for record in records)
     )
@@ -179,10 +197,10 @@ def _retain_records(entry, result, paths):
     if not isinstance(records, list) or not any(isinstance(item, dict) and str(item.get("materialId") or "") == entry["materialId"] for item in records):
         raise RpaPipelineError("rpa_records_invalid: records do not contain the candidate material", "rpa_records_invalid")
     csv_path = result.get("csvPath")
-    if not csv_path:
-        raise RpaPipelineError("rpa_csv_artifact_unavailable: diagnostic CSV was not returned", "rpa_csv_artifact_unavailable")
-    retained_csv = artifact_path(paths["csv"], entry["materialId"], ".csv")
-    _copy_file_atomically(csv_path, retained_csv)
+    retained_csv = None
+    if csv_path:
+        retained_csv = artifact_path(paths["csv"], entry["materialId"], ".csv")
+        _copy_file_atomically(csv_path, retained_csv)
     records_path = artifact_path(paths["records"], entry["materialId"], ".json")
     _write_json(records_path, records)
     receipt = {
@@ -190,9 +208,10 @@ def _retain_records(entry, result, paths):
         "materialId": entry["materialId"],
         "clientAttemptId": result.get("clientAttemptId") or entry["materialId"],
         "state": "records_persisted",
-        "csvPath": str(retained_csv),
-        "csvSizeBytes": retained_csv.stat().st_size,
-        "csvSha256": _sha256(retained_csv),
+        "csvPath": str(retained_csv) if retained_csv else None,
+        "csvSizeBytes": retained_csv.stat().st_size if retained_csv else None,
+        "csvSha256": _sha256(retained_csv) if retained_csv else None,
+        "sourceType": "csv" if retained_csv else "payload",
         "recordsPath": str(records_path),
         "gatewayReceipt": result.get("gatewayReceipt") or {},
     }
@@ -207,7 +226,7 @@ def _failure(entry, error):
 
 
 def _ready_payload(entries, fingerprint):
-    selected = [entry for entry in entries if _completed(entry)]
+    selected = sorted((entry for entry in entries if _completed(entry)), key=lambda item: item.get("rank", 0))
     return {"schemaVersion": 1, "configurationFingerprint": fingerprint, "materialCount": len(selected), "materials": [{"rank": item["rank"], "materialId": item["materialId"], "diagnosisCsvPath": item["diagnosisCsvPath"], "diagnosisRecordsPath": item["diagnosisRecordsPath"], "highlightFrames": item.get("highlightFrames", [])} for item in selected]}
 
 
@@ -261,10 +280,12 @@ def build_postprocessor(policy, options, *, download_video=download_file, extrac
 
 
 def _verify(paths, entries, fingerprint, target_top_n):
-    selected = [entry for entry in entries if _completed(entry)]
+    selected = sorted((entry for entry in entries if _completed(entry)), key=lambda item: item.get("rank", 0))[:target_top_n]
     errors = []
     for entry in selected:
         for key in ("diagnosisCsvPath", "diagnosisRecordsPath"):
+            if key == "diagnosisCsvPath" and not entry.get(key):
+                continue
             path = Path(entry[key] or "")
             if not path.is_file() or path.stat().st_size <= 0:
                 errors.append("%s missing for %s" % (key, entry["materialId"]))
@@ -331,8 +352,10 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
 
     next_index = 0
     while next_index < len(entries) and sum(_completed(item) for item in entries) < target_top_n:
-        wave = [item for item in entries[next_index:next_index + options["rpaConcurrency"]] if not _completed(item)]
-        next_index += options["rpaConcurrency"]
+        remaining = target_top_n - sum(_completed(item) for item in entries)
+        wave_size = min(options["rpaConcurrency"], max(1, remaining))
+        wave = [item for item in entries[next_index:next_index + wave_size] if not _completed(item)]
+        next_index += wave_size
         if not wave:
             continue
         with ThreadPoolExecutor(max_workers=len(wave)) as executor:

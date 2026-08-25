@@ -247,7 +247,7 @@ def main(argv=None):
         def fetch(entry, paths):
             return run_isolated(
                 {
-                    "shopId": query["shopId"],
+                    "shopId": account.get("rpaShopId") or account["accountId"],
                     "rpaAccountId": account["accountId"],
                     "materialId": entry["materialId"],
                     "startDate": query["period"]["startDate"],

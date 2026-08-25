@@ -50,6 +50,20 @@ def _structured(value, field_name, source, row_number):
     return parsed
 
 
+def _normalize_crowd_metric(record, source, row_number):
+    if record.get("recordType") != "crowd_analysis" or record.get("displayMetric") != "SHOW_COUNT" or record.get("metricValue") not in (None, ""):
+        return
+    values = []
+    for metric in record.get("Metrics", {}).values():
+        if isinstance(metric, dict) and metric.get("Value") not in (None, ""):
+            values.append(_number(metric["Value"], "Metrics.Value", source, row_number))
+    if not values:
+        raise _error(source, row_number, "SHOW_COUNT crowd record has no numeric Metrics.Value")
+    if len(values) > 1:
+        raise _error(source, row_number, "multiple numeric Metrics.Value entries")
+    record["metricValue"] = values[0]
+
+
 def parse_diagnosis_csv(path):
     source = Path(path)
     try:
@@ -77,6 +91,7 @@ def parse_diagnosis_csv(path):
         for field in ("durationSec", "metricValue"):
             if field in record:
                 record[field] = _number(record[field], field, source, row_number)
+        _normalize_crowd_metric(record, source, row_number)
         records.append(record)
     if not records:
         raise RpaCsvError("RPA CSV %s has no records" % source)

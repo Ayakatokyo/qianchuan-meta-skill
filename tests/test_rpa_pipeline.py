@@ -45,6 +45,27 @@ class RpaPipelineTests(unittest.TestCase):
         self.assertTrue(result["succeeded"])
         self.assertEqual([item["materialId"] for item in ready["materials"]], ["m-2"])
 
+    def test_never_submits_or_returns_more_than_target_top_n(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def fetch(entry, _paths):
+                calls.append(entry["materialId"])
+                return {"records": [{"materialId": entry["materialId"]}], "csvPath": self._csv(root), "gatewayReceipt": {}}
+            result = run_rpa_pipeline(
+                root,
+                {"materials": [candidate("m-1", 1), candidate("m-2", 2), candidate("m-3", 3)], "collection": {"candidateTopN": 3, "targetTopN": 1}},
+                configuration_fingerprint="fingerprint",
+                period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
+                options={"rpaConcurrency": 3, "recoveryAttempts": 1},
+                fetch_diagnosis=fetch,
+                postprocess=lambda _entry, _records, _paths: {"frames": []},
+            )
+            ready = json.loads((root / "rpa" / "top_materials_rpa_ready.json").read_text(encoding="utf-8"))
+        self.assertTrue(result["succeeded"])
+        self.assertEqual(calls, ["m-1"])
+        self.assertEqual([item["materialId"] for item in ready["materials"]], ["m-1"])
+
     def test_resume_reuses_completed_material_only_when_fingerprint_matches(self):
         calls = []
         with tempfile.TemporaryDirectory() as directory:

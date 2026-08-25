@@ -35,3 +35,11 @@ class RpaCsvParserTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RpaCsvError, "finite number"):
             parse_diagnosis_csv(path)
+
+    def test_normalizes_show_count_from_structured_metrics(self):
+        path = self.write_csv(
+            "recordType\x01displayMetric\x01metricValue\x01Metrics\n"
+            "crowd_analysis\x01SHOW_COUNT\x01\x01{\"audience\": {\"Value\": \"12\"}}\n"
+        )
+        records = parse_diagnosis_csv(path)
+        self.assertEqual(records[0]["metricValue"], 12.0)

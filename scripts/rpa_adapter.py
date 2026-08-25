@@ -83,7 +83,9 @@ def select_rpa_account(payload):
     unique = {(item["accountId"], item["platform"]) for item in matching}
     if len(unique) != 1:
         raise RpaAdapterError("rpa_account_ambiguous: multiple authorized RPA accounts", "rpa_account_ambiguous")
-    return matching[0]
+    selected = matching[0]
+    selected["rpaShopId"] = selected["accountId"]
+    return selected
 
 
 def build_diagnosis_params(material_id, start_date, end_date):
@@ -165,10 +167,16 @@ def fetch_diagnosis(*, shop_id, rpa_account_id, material_id, start_date, end_dat
     except (requests.RequestException, ValueError) as exc:
         raise RpaAdapterError("unable to fetch RPA material diagnosis") from exc
     data = result.get("data") if isinstance(result, dict) else None
+    if isinstance(data, list):
+        return data, None, redact_gateway_payload(result)
     if not isinstance(data, dict) or result.get("success") is False:
         raise RpaAdapterError("RPA gateway returned an invalid result")
     content = data.get("result_content")
     if data.get("result_type") == "files":
+        if result.get("success") is not True or result.get("code") not in (200, "200"):
+            raise RpaAdapterError("rpa_gateway_client_error: RPA files response was not successful")
+        if not isinstance(content, dict) or content.get("status") != "COMPLETED" or content.get("failedInstances", 0) != 0:
+            raise RpaAdapterError("rpa_csv_artifact_unavailable: RPA files task did not complete", "rpa_csv_artifact_unavailable")
         files = content.get("files") if isinstance(content, dict) else None
         url = files[0].get("fileUrl") if isinstance(files, list) and files and isinstance(files[0], dict) else None
         if not isinstance(url, str) or not url:

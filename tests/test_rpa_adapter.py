@@ -48,16 +48,17 @@ class RpaAdapterTests(unittest.TestCase):
             {"data": [{"platform": rpa_adapter.PLATFORM, "accountId": "rpa-1"}]}
         )
 
-        self.assertEqual(account, {"accountId": "rpa-1", "platform": rpa_adapter.PLATFORM})
+        self.assertEqual(account["accountId"], "rpa-1")
+        self.assertEqual(account["rpaShopId"], "rpa-1")
         with self.assertRaisesRegex(rpa_adapter.RpaAdapterError, "rpa_account_unavailable"):
             rpa_adapter.select_rpa_account({"data": []})
         with self.assertRaisesRegex(rpa_adapter.RpaAdapterError, "rpa_account_ambiguous"):
             rpa_adapter.select_rpa_account({"data": [{"accountId": "one"}, {"accountId": "two"}]})
 
-        self.assertEqual(
-            rpa_adapter.select_rpa_account({"data": [{"shop_id": "rpa-shop-1", "account": "operator"}]}),
-            {"accountId": "rpa-shop-1", "platform": rpa_adapter.PLATFORM},
+        legacy_account = rpa_adapter.select_rpa_account(
+            {"data": [{"shop_id": "rpa-shop-1", "account": "operator"}]}
         )
+        self.assertEqual(legacy_account["rpaShopId"], "rpa-shop-1")
 
     def test_builds_custom_period_without_reusing_shop_id_as_account_id(self):
         params = rpa_adapter.build_diagnosis_params("material-1", "2026-08-01", "2026-08-24")
@@ -80,3 +81,36 @@ class RpaAdapterTests(unittest.TestCase):
 
         self.assertEqual(summary["authorization"], "[redacted]")
         self.assertEqual(summary["fileUrl"], "https://x.test/a")
+
+    def test_rejects_incomplete_files_task_before_download(self):
+        session = FakeSession(
+            FakeResponse({"success": True, "code": 200, "data": {"result_type": "files", "result_content": {"status": "FAILED", "files": [{"fileUrl": "https://x.test/a.csv"}]}}})
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(rpa_adapter.RpaAdapterError, "did not complete"):
+                rpa_adapter.fetch_diagnosis(
+                    shop_id="report-shop",
+                    rpa_account_id="rpa-shop",
+                    material_id="m-1",
+                    start_date="2026-08-01",
+                    end_date="2026-08-02",
+                    csv_dir=Path(directory),
+                    environ={"ENV_BACKEND_HOST": "https://gateway.test", "YUCE_AUTHORIZATION": "auth", "YUCE_SESSION_ID": "session"},
+                    session=session,
+                )
+
+    def test_accepts_direct_record_list_envelope(self):
+        session = FakeSession(FakeResponse({"success": True, "data": [{"materialId": "m-1"}]}))
+        with tempfile.TemporaryDirectory() as directory:
+            records, csv_path, _receipt = rpa_adapter.fetch_diagnosis(
+                shop_id="report-shop",
+                rpa_account_id="rpa-shop",
+                material_id="m-1",
+                start_date="2026-08-01",
+                end_date="2026-08-02",
+                csv_dir=Path(directory),
+                environ={"ENV_BACKEND_HOST": "https://gateway.test", "YUCE_AUTHORIZATION": "auth", "YUCE_SESSION_ID": "session"},
+                session=session,
+            )
+        self.assertEqual(records, [{"materialId": "m-1"}])
+        self.assertIsNone(csv_path)
