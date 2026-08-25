@@ -203,6 +203,16 @@ def _retain_records(entry, result, paths):
         _copy_file_atomically(csv_path, retained_csv)
     records_path = artifact_path(paths["records"], entry["materialId"], ".json")
     _write_json(records_path, records)
+    receipt_path = artifact_path(paths["receipts"], entry["materialId"], ".json")
+    _write_json(receipt_path, {
+        "schemaVersion": 1,
+        "materialId": entry["materialId"],
+        "clientAttemptId": result.get("clientAttemptId") or entry["materialId"],
+        "state": "artifact_downloaded",
+        "csvPath": str(retained_csv) if retained_csv else None,
+        "csvSizeBytes": retained_csv.stat().st_size if retained_csv else None,
+        "csvSha256": _sha256(retained_csv) if retained_csv else None,
+    })
     receipt = {
         "schemaVersion": 1,
         "materialId": entry["materialId"],
@@ -213,9 +223,9 @@ def _retain_records(entry, result, paths):
         "csvSha256": _sha256(retained_csv) if retained_csv else None,
         "sourceType": "csv" if retained_csv else "payload",
         "recordsPath": str(records_path),
-        "gatewayReceipt": result.get("gatewayReceipt") or {},
+        "sourceType": "csv" if retained_csv else "payload",
     }
-    _write_json(artifact_path(paths["receipts"], entry["materialId"], ".json"), receipt)
+    _write_json(receipt_path, receipt)
     entry.update({"rpaStatus": "selected", "diagnosisCsvPath": str(retained_csv), "diagnosisRecordsPath": str(records_path), "recordsPersisted": True})
     return records
 
@@ -335,6 +345,12 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
         started = time.monotonic()
         entry.update({"rpaStatus": "submitted", "status": "running", "failureReason": None})
         entry["rpaRecoveryAttempts"] = []
+        _write_json(artifact_path(paths["receipts"], entry["materialId"], ".json"), {
+            "schemaVersion": 1,
+            "materialId": entry["materialId"],
+            "clientAttemptId": entry["materialId"],
+            "state": "submitted",
+        })
         for attempt in range(options["recoveryAttempts"]):
             try:
                 result = fetch_diagnosis(entry, paths)
@@ -344,7 +360,7 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
             except Exception as exc:
                 entry["rpaRecoveryAttempts"].append({"attempt": attempt + 1, "errorType": type(exc).__name__, "errorMessage": str(exc)})
                 if attempt + 1 < options["recoveryAttempts"]:
-                    time.sleep(options["recoveryBackoffSec"] * (2 ** attempt))
+                    time.sleep(min(options["csvWaitWindowSec"], options["recoveryBackoffSec"] * (2 ** attempt)))
                     continue
                 _failure(entry, exc)
                 entry["timingsSec"]["rpa"] = time.monotonic() - started
