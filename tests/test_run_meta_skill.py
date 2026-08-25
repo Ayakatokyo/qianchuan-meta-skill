@@ -330,6 +330,22 @@ class MetaSkillCliTests(unittest.TestCase):
         self.assertEqual(receipt["stages"]["rpa"]["status"], "succeeded")
         self.assertEqual(receipt["stages"]["batchVerification"]["status"], "succeeded")
 
+    def test_run_uses_legacy_config_in_rpa_next_command(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = self.write_config(root)
+            output_dir = root / "run"
+            with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]), patch.object(
+                run_meta_skill, "list_rpa_accounts", side_effect=AssertionError("RPA account must not be resolved")
+            ), patch("builtins.print") as output:
+                status = run_meta_skill.main(["run", "--config", str(config_path), "--output-dir", str(output_dir)])
+
+        self.assertEqual(status, 0)
+        self.assertIn(
+            "next_command=run --execute-rpa --config %s --output-dir %s" % (config_path, output_dir),
+            [call.args[0] for call in output.call_args_list],
+        )
+
     def test_run_returns_nonzero_for_partial_rpa_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -254,9 +254,10 @@ def main(argv=None):
             receipt.finish_stage("query", reused=True)
         if not args.execute_rpa:
             receipt.finish(True)
+            spec_args = "--config %s" % args.config if args.config else "--query-spec %s --highlight-spec %s" % (args.query_spec, args.highlight_spec)
             print("top_materials_json=%s" % (output_dir / "top_materials.json"))
             print("query_receipt=%s" % (output_dir / "query-receipt.json"))
-            print("next_command=run --execute-rpa --query-spec %s --highlight-spec %s --output-dir %s" % (args.query_spec or args.config, args.highlight_spec or args.config, output_dir))
+            print("next_command=run --execute-rpa %s --output-dir %s" % (spec_args, output_dir))
             return 0
         options = _rpa_options_from_args(args)
         _write_json(output_dir / "resolved-rpa-options.json", options)
