@@ -18,6 +18,7 @@ from qianchuan_report_client import ReportClientError, fetch_material_report
 from rpa_adapter import RpaAdapterError, fetch_diagnosis_worker, list_rpa_accounts
 from rpa_pipeline import RpaPipelineError, build_postprocessor, resolve_rpa_options, run_rpa_pipeline
 from rpa_runtime import RpaRuntimeError, run_isolated
+from run_verifier import RunVerificationError, verify_completed_run
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -202,12 +203,17 @@ def build_parser():
     frames.add_argument("--records-json", required=True)
     frames.add_argument("--video", required=True)
     frames.add_argument("--output-dir", required=True)
+    verify_run = commands.add_parser("verify-run")
+    verify_run.add_argument("--output-dir", required=True)
     return parser
 
 
 def main(argv=None):
     try:
         args = build_parser().parse_args(argv)
+        if args.command == "verify-run":
+            print(json.dumps(verify_completed_run(args.output_dir), ensure_ascii=False))
+            return 0
         registry = load_field_registry(REGISTRY_PATH)
         query_spec, highlight_spec, query, policy = _load_specs(
             args, registry, require_query=args.command in {"validate", "query", "run"}
@@ -278,7 +284,7 @@ def main(argv=None):
         print("query_receipt=%s" % (output_dir / "query-receipt.json"))
         print("top_materials_rpa_ready=%s" % outcome["readyPath"])
         return 0
-    except (MetaSkillError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError) as exc:
+    except (MetaSkillError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError, RunVerificationError) as exc:
         print("meta skill failed: %s" % exc, file=sys.stderr)
         return 2
 
