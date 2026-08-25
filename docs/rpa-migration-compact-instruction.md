@@ -13,10 +13,11 @@
 ```bash
 python scripts/run_meta_skill.py validate --query-spec QUERY.json --highlight-spec HIGHLIGHT.json
 python scripts/run_meta_skill.py query --query-spec QUERY.json --highlight-spec HIGHLIGHT.json --output-dir RUN
-python scripts/run_meta_skill.py run --query-spec QUERY.json --highlight-spec HIGHLIGHT.json --output-dir RUN
+python scripts/run_meta_skill.py run --query-spec QUERY.json --highlight-spec HIGHLIGHT.json --execute-rpa --output-dir RUN
+python scripts/run_meta_skill.py verify-run --output-dir RUN
 ```
 
-`query` 只能取数和落盘候选工件，绝不能启动 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 在候选工件成功后自动继续，不等待人工确认；已有运行目录只有在配置指纹和日期完全一致时才可恢复。
+`query` 只能取数和落盘候选工件，绝不能启动 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认只查询或复用候选并写入生命周期回执；只有携带 `--execute-rpa` 才会启动 RPA、视频下载和抽帧。已有运行目录只有在配置指纹和日期完全一致时才可恢复。`verify-run` 不访问网络，可离线校验完成运行的便携工件。
 
 ## Spec 约束
 
