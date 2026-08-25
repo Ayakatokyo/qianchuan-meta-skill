@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "query": {
+    "schemaVersion": 1,
+    "period": {
+      "startDate": "2026-08-01",
+      "endDate": "2026-08-07"
+    },
+    "advertiserId": "1770096415226951",
+    "topN": 9,
+    "dimensionFilters": [
+      {
+        "field": "material_type",
+        "operator": "eq",
+        "value": "直播素材"
+      }
+    ],
+    "metricFilters": [
+      {
+        "field": "net_settlement_roi",
+        "operator": "gte",
+        "value": 1.2
+      }
+    ],
+    "sort": {
+      "field": "overall_cost",
+      "direction": "desc"
+    }
+  },
+  "highlightPolicy": {
+    "schemaVersion": 1,
+    "includeZeroSecond": true,
+    "policies": [
+      {
+        "metric": "CLICK_COUNT",
+        "mode": "local_peaks",
+        "maxFrames": 3
+      },
+      {
+        "metric": "SHARE_COUNT",
+        "mode": "global_maximum",
+        "maxFrames": 1
+      }
+    ]
+  }
+}
