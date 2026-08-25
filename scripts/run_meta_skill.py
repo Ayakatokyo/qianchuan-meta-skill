@@ -15,6 +15,9 @@ from frame_extractor import FrameExtractionError, extract_highlight_frames
 from field_registry import FieldRegistryError, load_field_registry
 from material_query import MaterialQueryError, execute_material_query
 from qianchuan_report_client import ReportClientError, fetch_material_report
+from rpa_adapter import RpaAdapterError, fetch_diagnosis_worker, list_rpa_accounts
+from rpa_pipeline import RpaPipelineError, build_postprocessor, resolve_rpa_options, run_rpa_pipeline
+from rpa_runtime import RpaRuntimeError, run_isolated
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -111,10 +114,60 @@ def _top_materials_payload(result, query):
         "actualStartDate": query["period"]["startDate"],
         "actualEndDate": query["period"]["endDate"],
         "materialCount": len(result["materials"]),
+        "collection": {
+            "candidateTopN": query["candidateTopN"],
+            "targetTopN": query["targetTopN"],
+        },
         "rankingMetric": query["sort"]["field"],
         "filters": {"advertiserId": query["advertiserId"], "dimensionFilters": query["dimensionFilters"], "metricFilters": query["metricFilters"]},
         "materials": result["materials"],
     }
+
+
+def _write_query_artifacts(output_dir, query_spec, highlight_spec, query, policy, registry):
+    output_dir = Path(output_dir)
+    write_resolved_specs(output_dir, query_spec, highlight_spec)
+    fingerprint = spec_fingerprint(query_spec, highlight_spec)
+    result = execute_material_query(collect_report_records(query, output_dir, registry), query, registry)
+    result["receipt"]["source"] = {"type": "direct_material_report"}
+    result["receipt"]["configurationFingerprint"] = fingerprint
+    top_materials = _top_materials_payload(result, query)
+    top_materials["configurationFingerprint"] = fingerprint
+    _write_json(output_dir / "top_materials.json", top_materials)
+    _write_json(output_dir / "query-receipt.json", result["receipt"])
+    _write_json(output_dir / "highlight-policy.json", policy)
+    return top_materials, fingerprint
+
+
+def _reusable_top_materials(output_dir, fingerprint):
+    output_dir = Path(output_dir)
+    top_path = output_dir / "top_materials.json"
+    fingerprint_path = output_dir / "configuration-fingerprint.json"
+    if not top_path.exists() and not fingerprint_path.exists():
+        return None
+    if not top_path.exists() or not fingerprint_path.exists():
+        raise MetaSkillError("existing query artifacts are incomplete and cannot be reused")
+    persisted = _read_json(fingerprint_path, "configuration fingerprint")
+    if persisted.get("configurationFingerprint") != fingerprint:
+        raise MetaSkillError("configuration fingerprint does not match existing query artifacts")
+    payload = _read_json(top_path, "top materials")
+    if payload.get("configurationFingerprint") != fingerprint:
+        raise MetaSkillError("top materials fingerprint does not match existing query artifacts")
+    return payload
+
+
+def _rpa_options_from_args(args):
+    values = {
+        "rpaConcurrency": args.rpa_concurrency,
+        "materialTimeoutSec": args.material_timeout_sec,
+        "csvWaitWindowSec": args.csv_wait_window_sec,
+        "recoveryAttempts": args.recovery_attempts,
+        "recoveryBackoffSec": args.recovery_backoff_sec,
+        "csvMaxBytes": args.csv_max_bytes,
+        "videoMaxBytes": args.video_max_bytes,
+        "downloadDeadlineSec": args.download_deadline_sec,
+    }
+    return resolve_rpa_options({key: value for key, value in values.items() if value is not None})
 
 
 def build_parser():
@@ -130,6 +183,19 @@ def build_parser():
     query.add_argument("--query-spec")
     query.add_argument("--highlight-spec")
     query.add_argument("--output-dir", required=True)
+    run = commands.add_parser("run")
+    run.add_argument("--config")
+    run.add_argument("--query-spec")
+    run.add_argument("--highlight-spec")
+    run.add_argument("--output-dir", required=True)
+    run.add_argument("--rpa-concurrency", type=int)
+    run.add_argument("--material-timeout-sec", type=int)
+    run.add_argument("--csv-wait-window-sec", type=int)
+    run.add_argument("--recovery-attempts", type=int)
+    run.add_argument("--recovery-backoff-sec", type=float)
+    run.add_argument("--csv-max-bytes", type=int)
+    run.add_argument("--video-max-bytes", type=int)
+    run.add_argument("--download-deadline-sec", type=int)
     frames = commands.add_parser("select-frames")
     frames.add_argument("--config")
     frames.add_argument("--highlight-spec")
@@ -144,7 +210,7 @@ def main(argv=None):
         args = build_parser().parse_args(argv)
         registry = load_field_registry(REGISTRY_PATH)
         query_spec, highlight_spec, query, policy = _load_specs(
-            args, registry, require_query=args.command in {"validate", "query"}
+            args, registry, require_query=args.command in {"validate", "query", "run"}
         )
         if args.command == "validate":
             print(json.dumps(_json_safe({
@@ -163,20 +229,56 @@ def main(argv=None):
             print("frame_summary=%s" % (Path(args.output_dir) / "summary.json"))
             return 0
         output_dir = Path(args.output_dir)
-        write_resolved_specs(output_dir, query_spec, highlight_spec)
         fingerprint = spec_fingerprint(query_spec, highlight_spec)
-        result = execute_material_query(collect_report_records(query, output_dir, registry), query, registry)
-        result["receipt"]["source"] = {"type": "direct_material_report"}
-        result["receipt"]["configurationFingerprint"] = fingerprint
-        top_materials = _top_materials_payload(result, query)
-        top_materials["configurationFingerprint"] = fingerprint
-        _write_json(output_dir / "top_materials.json", top_materials)
-        _write_json(output_dir / "query-receipt.json", result["receipt"])
-        _write_json(output_dir / "highlight-policy.json", policy)
+        if args.command == "query":
+            _write_query_artifacts(output_dir, query_spec, highlight_spec, query, policy, registry)
+            print("top_materials_json=%s" % (output_dir / "top_materials.json"))
+            print("query_receipt=%s" % (output_dir / "query-receipt.json"))
+            return 0
+        top_materials = _reusable_top_materials(output_dir, fingerprint)
+        if top_materials is None:
+            top_materials, fingerprint = _write_query_artifacts(
+                output_dir, query_spec, highlight_spec, query, policy, registry
+            )
+        options = _rpa_options_from_args(args)
+        _write_json(output_dir / "resolved-rpa-options.json", options)
+        account = list_rpa_accounts()
+
+        def fetch(entry, paths):
+            return run_isolated(
+                {
+                    "shopId": query["shopId"],
+                    "rpaAccountId": account["accountId"],
+                    "materialId": entry["materialId"],
+                    "startDate": query["period"]["startDate"],
+                    "endDate": query["period"]["endDate"],
+                    "csvDir": str(paths["csv"]),
+                    "gatewayTimeoutSec": options["materialTimeoutSec"],
+                    "csvMaxBytes": options["csvMaxBytes"],
+                    "downloadDeadlineSec": options["downloadDeadlineSec"],
+                },
+                timeout_sec=options["materialTimeoutSec"],
+                worker=fetch_diagnosis_worker,
+            )
+
+        outcome = run_rpa_pipeline(
+            output_dir,
+            top_materials,
+            configuration_fingerprint=fingerprint,
+            period=query["period"],
+            options=options,
+            account={"accountId": account["accountId"], "platform": account["platform"]},
+            fetch_diagnosis=fetch,
+            postprocess=build_postprocessor(policy, options),
+        )
+        if not outcome["succeeded"]:
+            print("rpa batch partial failure; verification=%s" % outcome["verificationPath"], file=sys.stderr)
+            return 2
         print("top_materials_json=%s" % (output_dir / "top_materials.json"))
         print("query_receipt=%s" % (output_dir / "query-receipt.json"))
+        print("top_materials_rpa_ready=%s" % outcome["readyPath"])
         return 0
-    except (MetaSkillError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError) as exc:
+    except (MetaSkillError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError) as exc:
         print("meta skill failed: %s" % exc, file=sys.stderr)
         return 2
 

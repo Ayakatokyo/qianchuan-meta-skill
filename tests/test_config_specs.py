@@ -66,6 +66,22 @@ class ConfigSpecTests(unittest.TestCase):
         self.assertEqual(query["sort"], {"field": "overall_cost", "direction": "desc"})
         self.assertEqual(query["metricFilters"][0]["value"], "1.5")
 
+    def test_query_spec_defaults_candidate_pool_to_target_and_accepts_larger_pool(self):
+        defaulted = resolve_query_spec(query_spec(), self.registry)
+        expanded = resolve_query_spec(
+            query_spec(collection={"candidateTopN": 27, "targetTopN": 9}), self.registry
+        )
+
+        self.assertEqual(defaulted["collection"], {"candidateTopN": 9, "targetTopN": 9})
+        self.assertEqual(expanded["collection"], {"candidateTopN": 27, "targetTopN": 9})
+        self.assertEqual(query_spec_to_query_config(expanded)["candidateTopN"], 27)
+
+    def test_query_spec_rejects_candidate_pool_smaller_than_target(self):
+        with self.assertRaisesRegex(ConfigSpecError, "candidateTopN"):
+            resolve_query_spec(
+                query_spec(collection={"candidateTopN": 8, "targetTopN": 9}), self.registry
+            )
+
     def test_query_spec_rejects_unknown_and_unregistered_fields(self):
         invalid = query_spec()
         invalid["unexpected"] = True

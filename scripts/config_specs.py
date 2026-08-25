@@ -59,7 +59,7 @@ def resolve_query_spec(payload, registry):
     ranking = _object(payload.get("ranking"), "QuerySpec.ranking")
     _keys(ranking, {"field", "direction"}, "QuerySpec.ranking")
     collection = _object(payload.get("collection"), "QuerySpec.collection")
-    _keys(collection, {"targetTopN"}, "QuerySpec.collection")
+    _keys(collection, {"candidateTopN", "targetTopN"}, "QuerySpec.collection")
 
     legacy_query = {
         "schemaVersion": 1,
@@ -71,6 +71,14 @@ def resolve_query_spec(payload, registry):
         "sort": {"field": ranking.get("field"), "direction": ranking.get("direction")},
         "topN": collection.get("targetTopN"),
     }
+    try:
+        target_query = parse_query_config(legacy_query, registry)
+    except MaterialQueryError as exc:
+        raise ConfigSpecError(str(exc)) from exc
+    candidate_top_n = collection.get("candidateTopN", target_query["topN"])
+    if type(candidate_top_n) is not int or candidate_top_n < target_query["topN"]:
+        raise ConfigSpecError("QuerySpec.collection.candidateTopN must be an integer greater than or equal to targetTopN")
+    legacy_query["topN"] = candidate_top_n
     try:
         query = parse_query_config(legacy_query, registry)
     except MaterialQueryError as exc:
@@ -85,7 +93,7 @@ def resolve_query_spec(payload, registry):
             "metricFilters": _json_safe(query["metricFilters"]),
         },
         "ranking": query["sort"],
-        "collection": {"targetTopN": query["topN"]},
+        "collection": {"candidateTopN": query["topN"], "targetTopN": target_query["topN"]},
     }
 
 
@@ -98,7 +106,9 @@ def query_spec_to_query_config(spec):
         "dimensionFilters": spec["filters"]["dimensionFilters"],
         "metricFilters": spec["filters"]["metricFilters"],
         "sort": spec["ranking"],
-        "topN": spec["collection"]["targetTopN"],
+        "topN": spec["collection"]["candidateTopN"],
+        "candidateTopN": spec["collection"]["candidateTopN"],
+        "targetTopN": spec["collection"]["targetTopN"],
     }
 
 

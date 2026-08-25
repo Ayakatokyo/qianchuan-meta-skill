@@ -138,6 +138,28 @@ class MetaSkillCliTests(unittest.TestCase):
         self.assertTrue(resolved_highlight_exists)
         self.assertEqual(receipt["configurationFingerprint"], fingerprint["configurationFingerprint"])
 
+    def test_query_uses_candidate_pool_size_and_persists_both_collection_counts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            query_path, highlight_path = self.write_specs(root)
+            query = json.loads(query_path.read_text(encoding="utf-8"))
+            query["collection"] = {"candidateTopN": 2, "targetTopN": 1}
+            query_path.write_text(json.dumps(query), encoding="utf-8")
+            output_dir = root / "run"
+            with patch.object(
+                run_meta_skill,
+                "fetch_material_report",
+                return_value=[origin_row("m-1", 10, 2), origin_row("m-2", 9, 1)],
+            ):
+                status = run_meta_skill.main(
+                    ["query", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir)]
+                )
+            payload = json.loads((output_dir / "top_materials.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["collection"], {"candidateTopN": 2, "targetTopN": 1})
+        self.assertEqual([item["materialId"] for item in payload["materials"]], ["m-1", "m-2"])
+
     def test_query_collects_direct_report_records_and_stops_after_candidates(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -261,3 +283,37 @@ class MetaSkillCliTests(unittest.TestCase):
             (ROOT / "scripts" / "run_meta_skill.py").read_text(encoding="utf-8"),
         )
         self.assertFalse((ROOT / "scripts" / "asset_table_client.py").exists())
+
+    def test_run_queries_candidates_then_invokes_rpa_without_confirmation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            query_path, highlight_path = self.write_specs(root)
+            output_dir = root / "run"
+            with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]) as collect, patch.object(
+                run_meta_skill, "list_rpa_accounts", return_value={"accountId": "rpa-1", "platform": "RPA_JULIANG_QC_ACCOUNT_PASSWORD"}
+            ) as accounts, patch.object(run_meta_skill, "run_rpa_pipeline", return_value={"succeeded": True, "readyPath": str(output_dir / "rpa" / "top_materials_rpa_ready.json")}) as pipeline:
+                status = run_meta_skill.main(
+                    ["run", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir)]
+                )
+
+            options = json.loads((output_dir / "resolved-rpa-options.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        collect.assert_called_once()
+        accounts.assert_called_once()
+        pipeline.assert_called_once()
+        self.assertEqual(options["rpaConcurrency"], 3)
+        self.assertNotIn("authorization", options)
+
+    def test_run_returns_nonzero_for_partial_rpa_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            query_path, highlight_path = self.write_specs(root)
+            with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]), patch.object(
+                run_meta_skill, "list_rpa_accounts", return_value={"accountId": "rpa-1", "platform": "RPA_JULIANG_QC_ACCOUNT_PASSWORD"}
+            ), patch.object(run_meta_skill, "run_rpa_pipeline", return_value={"succeeded": False, "verificationPath": "batch-verification.json"}):
+                status = run_meta_skill.main(
+                    ["run", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path), "--output-dir", str(root / "run")]
+                )
+
+        self.assertEqual(status, 2)

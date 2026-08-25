@@ -1,11 +1,11 @@
 ---
 name: qianchuan-meta-skill
-description: 将千川素材分析的自然语言意图转为 QuerySpec 与 HighlightSpec，再由直接报表连接器确定性筛选候选素材和选择本地高光帧；不执行 RPA、视频下载、AI 分析或报告生成。
+description: 将千川素材分析的自然语言意图转为 QuerySpec 与 HighlightSpec，再由直接报表连接器和受控 RPA 流程确定性筛选候选素材、获取诊断数据并选择本地高光帧；不执行 AI 商业分析、报告生成或用户专属技能生成。
 ---
 
 # 千川素材分析元技能
 
-当前能力只覆盖受控素材查询与高光帧策略配置。它采用“模型理解需求，脚本确定性执行”的分层：模型不得直接调用接口或自由生成字段，只能将意图转化为下述两份 JSON；当请求所需信息完整时，CLI 可直接严格校验、取数、筛选和审计落盘。
+当前能力覆盖受控素材查询、RPA 诊断、视频临时下载和高光帧策略配置。它采用“模型理解需求，脚本确定性执行”的分层：模型不得直接调用接口或自由生成字段，只能将意图转化为下述两份 JSON；当请求所需信息完整时，CLI 可直接严格校验、取数、筛选、RPA 执行和审计落盘。
 
 ## 自然语言到 Spec
 
@@ -31,7 +31,7 @@ description: 将千川素材分析的自然语言意图转为 QuerySpec 与 High
     "metricFilters": [{"field": "net_settlement_roi", "operator": "gte", "value": 1.2}]
   },
   "ranking": {"field": "overall_cost", "direction": "desc"},
-  "collection": {"targetTopN": 9}
+  "collection": {"candidateTopN": 27, "targetTopN": 9}
 }
 ```
 
@@ -69,13 +69,18 @@ python scripts/run_meta_skill.py query \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
   --output-dir /path/to/new-run
+
+python scripts/run_meta_skill.py run \
+  --query-spec /path/to/query-spec.json \
+  --highlight-spec /path/to/highlight-spec.json \
+  --output-dir /path/to/new-run
 ```
 
-每次 `query` 都会在运行目录写入 `resolved-query-spec.json`、`resolved-highlight-spec.json` 和 `configuration-fingerprint.json`，随后写入脱敏 `source-data/`、`top_materials.json`、`query-receipt.json` 与兼容用的 `highlight-policy.json`。查询在候选工件输出后停止；不得触发 RPA、视频下载、抽帧、AI 分析或报告生成。
+`query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 在候选工件成功落盘后自动解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复，临时下载视频并按 `HighlightSpec` 抽帧；长期工件只保留脱敏回执、诊断 CSV、records、JPEG 和 `top_materials_rpa_ready.json`。
 
 ## 高光帧策略
 
-抽帧仅在已有本地视频与互动曲线时执行，不会发起报表查询：
+独立抽帧仅在已有本地视频与互动曲线时执行，不会发起报表查询；`run` 内部会自动准备这些输入：
 
 ```bash
 python scripts/run_meta_skill.py select-frames \
@@ -87,4 +92,4 @@ python scripts/run_meta_skill.py select-frames \
 
 过渡期仍可用旧合并式 `--config` 入口，但新请求必须优先使用独立的 `--query-spec` 和 `--highlight-spec`。
 
-阶段三的商业分析 Prompt 标准化和阶段四的独立技能生成尚未实现。
+阶段三的 AI 商业分析 Prompt 标准化、报告生成和阶段四的独立技能生成尚未实现。
