@@ -284,26 +284,51 @@ class MetaSkillCliTests(unittest.TestCase):
         )
         self.assertFalse((ROOT / "scripts" / "asset_table_client.py").exists())
 
-    def test_run_queries_candidates_then_invokes_rpa_without_confirmation(self):
+    def test_run_requires_execute_rpa_before_resolving_rpa_account(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            query_path, highlight_path = self.write_specs(root)
+            output_dir = root / "run"
+            with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]) as collect, patch.object(
+                run_meta_skill, "list_rpa_accounts", side_effect=AssertionError("RPA account must not be resolved")
+            ), patch.object(run_meta_skill, "run_rpa_pipeline", side_effect=AssertionError("RPA pipeline must not run")):
+                status = run_meta_skill.main(
+                    ["run", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir)]
+                )
+
+            receipt = json.loads((output_dir / "run-receipt.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        collect.assert_called_once()
+        self.assertFalse(receipt["executionAuthorized"])
+        self.assertEqual(receipt["status"], "succeeded")
+        self.assertEqual(receipt["stages"]["query"]["status"], "succeeded")
+        self.assertEqual(receipt["stages"]["rpa"]["status"], "not_requested")
+        self.assertEqual(receipt["stages"]["batchVerification"]["status"], "not_requested")
+
+    def test_run_executes_rpa_only_with_explicit_authorization(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             query_path, highlight_path = self.write_specs(root)
             output_dir = root / "run"
             with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]) as collect, patch.object(
                 run_meta_skill, "list_rpa_accounts", return_value={"accountId": "rpa-1", "platform": "RPA_JULIANG_QC_ACCOUNT_PASSWORD"}
-            ) as accounts, patch.object(run_meta_skill, "run_rpa_pipeline", return_value={"succeeded": True, "readyPath": str(output_dir / "rpa" / "top_materials_rpa_ready.json")}) as pipeline:
+            ) as accounts, patch.object(
+                run_meta_skill, "run_rpa_pipeline", return_value={"succeeded": True, "readyPath": str(output_dir / "rpa" / "top_materials_rpa_ready.json"), "verificationPath": str(output_dir / "rpa" / "batch-verification.json")}
+            ) as pipeline:
                 status = run_meta_skill.main(
-                    ["run", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir)]
+                    ["run", "--execute-rpa", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir)]
                 )
 
-            options = json.loads((output_dir / "resolved-rpa-options.json").read_text(encoding="utf-8"))
+            receipt = json.loads((output_dir / "run-receipt.json").read_text(encoding="utf-8"))
 
         self.assertEqual(status, 0)
         collect.assert_called_once()
         accounts.assert_called_once()
         pipeline.assert_called_once()
-        self.assertEqual(options["rpaConcurrency"], 3)
-        self.assertNotIn("authorization", options)
+        self.assertTrue(receipt["executionAuthorized"])
+        self.assertEqual(receipt["stages"]["rpa"]["status"], "succeeded")
+        self.assertEqual(receipt["stages"]["batchVerification"]["status"], "succeeded")
 
     def test_run_returns_nonzero_for_partial_rpa_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -313,7 +338,7 @@ class MetaSkillCliTests(unittest.TestCase):
                 run_meta_skill, "list_rpa_accounts", return_value={"accountId": "rpa-1", "platform": "RPA_JULIANG_QC_ACCOUNT_PASSWORD"}
             ), patch.object(run_meta_skill, "run_rpa_pipeline", return_value={"succeeded": False, "verificationPath": "batch-verification.json"}):
                 status = run_meta_skill.main(
-                    ["run", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path), "--output-dir", str(root / "run")]
+                    ["run", "--execute-rpa", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path), "--output-dir", str(root / "run")]
                 )
 
         self.assertEqual(status, 2)

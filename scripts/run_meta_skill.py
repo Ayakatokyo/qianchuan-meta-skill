@@ -18,6 +18,7 @@ from qianchuan_report_client import ReportClientError, fetch_material_report
 from rpa_adapter import RpaAdapterError, fetch_diagnosis_worker, list_rpa_accounts
 from rpa_pipeline import RpaPipelineError, build_postprocessor, resolve_rpa_options, run_rpa_pipeline
 from rpa_runtime import RpaRuntimeError, run_isolated
+from run_receipt import RunReceipt
 from run_verifier import RunVerificationError, verify_completed_run
 
 
@@ -189,6 +190,7 @@ def build_parser():
     run.add_argument("--query-spec")
     run.add_argument("--highlight-spec")
     run.add_argument("--output-dir", required=True)
+    run.add_argument("--execute-rpa", action="store_true")
     run.add_argument("--rpa-concurrency", type=int)
     run.add_argument("--material-timeout-sec", type=int)
     run.add_argument("--csv-wait-window-sec", type=int)
@@ -209,6 +211,7 @@ def build_parser():
 
 
 def main(argv=None):
+    receipt = None
     try:
         args = build_parser().parse_args(argv)
         if args.command == "verify-run":
@@ -241,13 +244,23 @@ def main(argv=None):
             print("top_materials_json=%s" % (output_dir / "top_materials.json"))
             print("query_receipt=%s" % (output_dir / "query-receipt.json"))
             return 0
+        receipt = RunReceipt(output_dir, fingerprint, "run", args.execute_rpa)
+        receipt.start_stage("query")
         top_materials = _reusable_top_materials(output_dir, fingerprint)
         if top_materials is None:
-            top_materials, fingerprint = _write_query_artifacts(
-                output_dir, query_spec, highlight_spec, query, policy, registry
-            )
+            top_materials, fingerprint = _write_query_artifacts(output_dir, query_spec, highlight_spec, query, policy, registry)
+            receipt.finish_stage("query", reused=False)
+        else:
+            receipt.finish_stage("query", reused=True)
+        if not args.execute_rpa:
+            receipt.finish(True)
+            print("top_materials_json=%s" % (output_dir / "top_materials.json"))
+            print("query_receipt=%s" % (output_dir / "query-receipt.json"))
+            print("next_command=run --execute-rpa --query-spec %s --highlight-spec %s --output-dir %s" % (args.query_spec or args.config, args.highlight_spec or args.config, output_dir))
+            return 0
         options = _rpa_options_from_args(args)
         _write_json(output_dir / "resolved-rpa-options.json", options)
+        receipt.start_stage("rpa")
         account = list_rpa_accounts()
 
         def fetch(entry, paths):
@@ -277,14 +290,23 @@ def main(argv=None):
             fetch_diagnosis=fetch,
             postprocess=build_postprocessor(policy, options),
         )
+        receipt.finish_stage("rpa")
+        receipt.start_stage("batchVerification")
         if not outcome["succeeded"]:
+            receipt.fail_stage("batchVerification", RpaPipelineError("RPA batch partial failure"))
+            receipt.finish(False)
             print("rpa batch partial failure; verification=%s" % outcome["verificationPath"], file=sys.stderr)
             return 2
+        receipt.finish_stage("batchVerification", verificationPath=outcome["verificationPath"])
+        receipt.finish(True)
         print("top_materials_json=%s" % (output_dir / "top_materials.json"))
         print("query_receipt=%s" % (output_dir / "query-receipt.json"))
         print("top_materials_rpa_ready=%s" % outcome["readyPath"])
         return 0
     except (MetaSkillError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError, RunVerificationError) as exc:
+        if receipt is not None:
+            receipt.fail_active_stage(exc)
+            receipt.finish(False)
         print("meta skill failed: %s" % exc, file=sys.stderr)
         return 2
 

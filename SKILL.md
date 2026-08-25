@@ -73,10 +73,14 @@ python scripts/run_meta_skill.py query \
 python scripts/run_meta_skill.py run \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
+  --execute-rpa \
   --output-dir /path/to/new-run
+
+python scripts/run_meta_skill.py verify-run \
+  --output-dir /path/to/completed-run
 ```
 
-`query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 在候选工件成功落盘后自动解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复，临时下载视频并按 `HighlightSpec` 抽帧；长期工件只保留脱敏回执、诊断 CSV、records、JPEG 和 `top_materials_rpa_ready.json`。
+`query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认同样只查询或复用候选工件，并写入 `run-receipt.json`；只有显式传入 `--execute-rpa` 才会解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复，临时下载视频并按 `HighlightSpec` 抽帧。长期工件只保留脱敏回执、诊断 CSV、records、JPEG 和 `top_materials_rpa_ready.json`。`verify-run` 完全离线，不读取凭据或调用外部服务，可校验已完成运行目录的相对路径、哈希、JSON 与 JPEG 工件。
 
 ## 高光帧策略
 
