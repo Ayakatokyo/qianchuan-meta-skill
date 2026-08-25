@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -13,48 +14,52 @@ from run_verifier import RunVerificationError, verify_completed_run  # noqa: E40
 
 
 class RunVerifierTests(unittest.TestCase):
+    def _completed_run(self, root):
+        material_id = "123"
+        csv_path = root / "rpa" / "diagnosis-csv" / (material_id + ".csv")
+        records_path = root / "rpa" / "diagnosis-records" / (material_id + ".json")
+        summary_path = root / "rpa" / "peak-frames" / material_id / "summary.json"
+        frame_path = root / "rpa" / "peak-frames" / material_id / "01_0s.jpg"
+        csv_path.parent.mkdir(parents=True)
+        records_path.parent.mkdir(parents=True)
+        summary_path.parent.mkdir(parents=True)
+        csv_path.write_text("diagnosis", encoding="utf-8")
+        records_path.write_text(json.dumps([{"materialId": material_id}]), encoding="utf-8")
+        summary_path.write_text(json.dumps({"status": "succeeded"}), encoding="utf-8")
+        frame_path.write_bytes(b"\xff\xd8frame\xff\xd9")
+
+        def artifact(path):
+            payload = path.read_bytes()
+            return {
+                "artifactPath": path.relative_to(root).as_posix(),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "sizeBytes": len(payload),
+            }
+
+        (root / "rpa" / "batch-verification.json").write_text(
+            json.dumps({"configurationFingerprint": "fingerprint", "targetTopN": 1, "succeededCount": 1, "status": "succeeded", "errors": []}),
+            encoding="utf-8",
+        )
+        (root / "rpa" / "top_materials_rpa_ready.json").write_text(
+            json.dumps({
+                "configurationFingerprint": "fingerprint",
+                "materialCount": 1,
+                "materials": [{
+                    "materialId": material_id,
+                    "diagnosisCsvArtifact": artifact(csv_path),
+                    "diagnosisRecordsArtifact": artifact(records_path),
+                    "highlightSummaryArtifact": artifact(summary_path),
+                    "highlightFrames": [{"artifact": artifact(frame_path)}],
+                }],
+            }),
+            encoding="utf-8",
+        )
+        return frame_path
+
     def test_verify_completed_run_checks_artifact_hashes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            material_id = "123"
-            csv_path = root / "rpa" / "diagnosis-csv" / (material_id + ".csv")
-            records_path = root / "rpa" / "diagnosis-records" / (material_id + ".json")
-            summary_path = root / "rpa" / "peak-frames" / material_id / "summary.json"
-            frame_path = root / "rpa" / "peak-frames" / material_id / "01_0s.jpg"
-            csv_path.parent.mkdir(parents=True)
-            records_path.parent.mkdir(parents=True)
-            summary_path.parent.mkdir(parents=True)
-            csv_path.write_text("diagnosis", encoding="utf-8")
-            records_path.write_text(json.dumps([{"materialId": material_id}]), encoding="utf-8")
-            summary_path.write_text(json.dumps({"status": "succeeded"}), encoding="utf-8")
-            frame_path.write_bytes(b"\xff\xd8frame\xff\xd9")
-
-            def artifact(path):
-                payload = path.read_bytes()
-                return {
-                    "artifactPath": path.relative_to(root).as_posix(),
-                    "sha256": hashlib.sha256(payload).hexdigest(),
-                    "sizeBytes": len(payload),
-                }
-
-            (root / "rpa" / "batch-verification.json").write_text(
-                json.dumps({"configurationFingerprint": "fingerprint", "targetTopN": 1, "succeededCount": 1, "status": "succeeded", "errors": []}),
-                encoding="utf-8",
-            )
-            (root / "rpa" / "top_materials_rpa_ready.json").write_text(
-                json.dumps({
-                    "configurationFingerprint": "fingerprint",
-                    "materialCount": 1,
-                    "materials": [{
-                        "materialId": material_id,
-                        "diagnosisCsvArtifact": artifact(csv_path),
-                        "diagnosisRecordsArtifact": artifact(records_path),
-                        "highlightSummaryArtifact": artifact(summary_path),
-                        "highlightFrames": [{"artifact": artifact(frame_path)}],
-                    }],
-                }),
-                encoding="utf-8",
-            )
+            frame_path = self._completed_run(root)
 
             result = verify_completed_run(root)
             frame_path.write_bytes(b"\xff\xd8other\xff\xd9")
@@ -63,3 +68,15 @@ class RunVerifierTests(unittest.TestCase):
 
         self.assertTrue(result["valid"])
         self.assertEqual(result["verifiedMaterialCount"], 1)
+
+    def test_verify_completed_run_succeeds_after_directory_copy(self):
+        with tempfile.TemporaryDirectory() as source_directory, tempfile.TemporaryDirectory() as target_directory:
+            source = Path(source_directory) / "run"
+            source.mkdir()
+            self._completed_run(source)
+            copied = Path(target_directory) / "copied-run"
+            shutil.copytree(source, copied)
+            result = verify_completed_run(copied)
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["verifiedFileCount"], 4)
