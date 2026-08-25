@@ -167,6 +167,52 @@ class RpaPipelineTests(unittest.TestCase):
         self.assertTrue(downloaded)
         self.assertFalse(downloaded[0].exists())
 
+    def test_ready_artifacts_use_relative_paths_and_integrity_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def extract_frames(_records, _policy, _video, output_dir):
+                frame_path = Path(output_dir) / "01_0s.jpg"
+                frame_path.parent.mkdir(parents=True, exist_ok=True)
+                frame_path.write_bytes(b"\xff\xd8\xff\xd9")
+                summary_path = Path(output_dir) / "summary.json"
+                summary_path.write_text(json.dumps({"status": "succeeded"}), encoding="utf-8")
+                return {"frames": [{"framePath": str(frame_path), "durationSec": 0, "selectionEvidence": []}]}
+
+            postprocess = build_postprocessor(
+                {"schemaVersion": 1, "includeZeroSecond": True, "policies": []},
+                {"videoMaxBytes": 1024, "downloadDeadlineSec": 5},
+                download_video=lambda _url, target, **_kwargs: target.write_bytes(b"temporary-video"),
+                extract_frames=extract_frames,
+            )
+            run_rpa_pipeline(
+                root,
+                {"materials": [candidate("m-1", 1)], "collection": {"candidateTopN": 1, "targetTopN": 1}},
+                configuration_fingerprint="fingerprint",
+                period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
+                options={"rpaConcurrency": 1},
+                fetch_diagnosis=lambda entry, _paths: {
+                    "records": [{"recordType": "material_info", "materialId": entry["materialId"], "videoUrl": "https://video.test/m-1"}],
+                    "csvPath": self._csv(root),
+                },
+                postprocess=postprocess,
+            )
+            ready = json.loads((root / "rpa" / "top_materials_rpa_ready.json").read_text(encoding="utf-8"))
+            receipt = json.loads((root / "rpa" / "rpa-receipts" / "m-1.json").read_text(encoding="utf-8"))
+
+        material = ready["materials"][0]
+        for artifact in (
+            material["diagnosisCsvArtifact"],
+            material["diagnosisRecordsArtifact"],
+            material["highlightSummaryArtifact"],
+            material["highlightFrames"][0]["artifact"],
+            receipt["diagnosisRecordsArtifact"],
+        ):
+            self.assertFalse(Path(artifact["artifactPath"]).is_absolute())
+            self.assertNotIn("..", Path(artifact["artifactPath"]).parts)
+            self.assertRegex(artifact["sha256"], r"^[0-9a-f]{64}$")
+            self.assertGreater(artifact["sizeBytes"], 0)
+
     @staticmethod
     def _csv(root):
         path = root / "input.csv"

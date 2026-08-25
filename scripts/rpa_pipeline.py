@@ -81,6 +81,22 @@ def _sha256(path):
     return digest.hexdigest()
 
 
+def _artifact_metadata(run_root, path):
+    run_root = Path(run_root).resolve()
+    artifact = Path(path).resolve()
+    try:
+        relative = artifact.relative_to(run_root)
+    except ValueError as exc:
+        raise RpaPipelineError("artifact is outside the run directory", "artifact_path_invalid") from exc
+    if not artifact.is_file() or artifact.stat().st_size <= 0:
+        raise RpaPipelineError("artifact is missing or empty", "artifact_path_invalid")
+    return {
+        "artifactPath": relative.as_posix(),
+        "sha256": _sha256(artifact),
+        "sizeBytes": artifact.stat().st_size,
+    }
+
+
 def _paths(output_dir):
     root = Path(output_dir) / "rpa"
     return {
@@ -203,6 +219,9 @@ def _retain_records(entry, result, paths):
         _copy_file_atomically(csv_path, retained_csv)
     records_path = artifact_path(paths["records"], entry["materialId"], ".json")
     _write_json(records_path, records)
+    run_root = paths["root"].parent
+    csv_artifact = _artifact_metadata(run_root, retained_csv) if retained_csv else None
+    records_artifact = _artifact_metadata(run_root, records_path)
     receipt_path = artifact_path(paths["receipts"], entry["materialId"], ".json")
     _write_json(receipt_path, {
         "schemaVersion": 1,
@@ -218,15 +237,20 @@ def _retain_records(entry, result, paths):
         "materialId": entry["materialId"],
         "clientAttemptId": result.get("clientAttemptId") or entry["materialId"],
         "state": "records_persisted",
-        "csvPath": str(retained_csv) if retained_csv else None,
-        "csvSizeBytes": retained_csv.stat().st_size if retained_csv else None,
-        "csvSha256": _sha256(retained_csv) if retained_csv else None,
-        "sourceType": "csv" if retained_csv else "payload",
-        "recordsPath": str(records_path),
+        "diagnosisCsvArtifact": csv_artifact,
+        "diagnosisRecordsArtifact": records_artifact,
+        "csvSha256": csv_artifact["sha256"] if csv_artifact else None,
         "sourceType": "csv" if retained_csv else "payload",
     }
     _write_json(receipt_path, receipt)
-    entry.update({"rpaStatus": "selected", "diagnosisCsvPath": str(retained_csv), "diagnosisRecordsPath": str(records_path), "recordsPersisted": True})
+    entry.update({
+        "rpaStatus": "selected",
+        "diagnosisCsvPath": str(retained_csv),
+        "diagnosisRecordsPath": str(records_path),
+        "diagnosisCsvArtifact": csv_artifact,
+        "diagnosisRecordsArtifact": records_artifact,
+        "recordsPersisted": True,
+    })
     return records
 
 
@@ -237,7 +261,27 @@ def _failure(entry, error):
 
 def _ready_payload(entries, fingerprint):
     selected = sorted((entry for entry in entries if _completed(entry)), key=lambda item: item.get("rank", 0))
-    return {"schemaVersion": 1, "configurationFingerprint": fingerprint, "materialCount": len(selected), "materials": [{"rank": item["rank"], "materialId": item["materialId"], "diagnosisCsvPath": item["diagnosisCsvPath"], "diagnosisRecordsPath": item["diagnosisRecordsPath"], "highlightFrames": item.get("highlightFrames", [])} for item in selected]}
+    # The selected entries keep runtime paths for resume. The public ready payload replaces them with portable references.
+    def material(item):
+        records_path = Path(item["diagnosisRecordsPath"])
+        root = records_path.parents[2]
+        frames = []
+        for frame in item.get("highlightFrames", []):
+            portable = {key: value for key, value in frame.items() if key != "framePath"}
+            portable["artifact"] = _artifact_metadata(root, frame["framePath"])
+            frames.append(portable)
+        payload = {
+            "rank": item["rank"],
+            "materialId": item["materialId"],
+            "diagnosisCsvArtifact": item.get("diagnosisCsvArtifact"),
+            "diagnosisRecordsArtifact": item["diagnosisRecordsArtifact"],
+            "highlightFrames": frames,
+        }
+        summary_path = item.get("highlightSummaryPath")
+        if summary_path and Path(summary_path).is_file():
+            payload["highlightSummaryArtifact"] = _artifact_metadata(root, summary_path)
+        return payload
+    return {"schemaVersion": 1, "configurationFingerprint": fingerprint, "materialCount": len(selected), "materials": [material(item) for item in selected]}
 
 
 def _video_url(records, material_id):
@@ -388,6 +432,7 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
                 if not isinstance(frames, list):
                     raise RpaPipelineError("frame_verification_failed: postprocess did not return frames", "frame_verification_failed")
                 entry.update({"postprocessStatus": "succeeded", "status": "succeeded", "highlightFrames": frames})
+                entry["highlightSummaryPath"] = postprocessed.get("summaryPath")
             except Exception as exc:
                 entry.update({"postprocessStatus": "failed", "status": "failed", "failureReason": getattr(exc, "error_type", "frame_extraction_failed"), "errorType": type(exc).__name__, "errorMessage": str(exc)})
             _persist(paths, entries, configuration_fingerprint, period, options, account)
