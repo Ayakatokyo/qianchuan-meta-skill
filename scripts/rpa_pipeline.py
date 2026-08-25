@@ -273,8 +273,8 @@ def _ready_payload(entries, fingerprint):
         payload = {
             "rank": item["rank"],
             "materialId": item["materialId"],
-            "diagnosisCsvArtifact": item.get("diagnosisCsvArtifact"),
-            "diagnosisRecordsArtifact": item["diagnosisRecordsArtifact"],
+            "diagnosisCsvArtifact": _artifact_metadata(root, item["diagnosisCsvPath"]) if item.get("diagnosisCsvPath") else None,
+            "diagnosisRecordsArtifact": _artifact_metadata(root, records_path),
             "highlightFrames": frames,
         }
         summary_path = item.get("highlightSummaryPath")

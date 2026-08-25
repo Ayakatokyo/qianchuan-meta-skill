@@ -116,6 +116,37 @@ class RpaPipelineTests(unittest.TestCase):
 
         self.assertEqual(calls, ["m-1", "m-1"])
 
+    def test_resume_republishes_portable_metadata_from_old_manifest(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            csv_path = self._csv(root)
+
+            def fetch(entry, _paths):
+                calls.append(entry["materialId"])
+                return {"records": [{"materialId": entry["materialId"]}], "csvPath": csv_path}
+
+            arguments = {
+                "configuration_fingerprint": "fingerprint",
+                "period": {"startDate": "2026-08-01", "endDate": "2026-08-02"},
+                "options": {"rpaConcurrency": 1},
+                "fetch_diagnosis": fetch,
+                "postprocess": lambda _entry, _records, _paths: {"frames": []},
+            }
+            payload = {"materials": [candidate("m-1", 1)], "collection": {"candidateTopN": 1, "targetTopN": 1}}
+            run_rpa_pipeline(root, payload, **arguments)
+            manifest_path = root / "rpa" / "batch-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["materials"][0].pop("diagnosisCsvArtifact")
+            manifest["materials"][0].pop("diagnosisRecordsArtifact")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            run_rpa_pipeline(root, payload, **arguments)
+            ready = json.loads((root / "rpa" / "top_materials_rpa_ready.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(calls, ["m-1"])
+        self.assertEqual(ready["materials"][0]["diagnosisRecordsArtifact"]["artifactPath"], "rpa/diagnosis-records/m-1.json")
+
     def test_rejects_duplicate_candidate_material_ids_before_submitting_rpa(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(RpaPipelineError, "duplicate"):
