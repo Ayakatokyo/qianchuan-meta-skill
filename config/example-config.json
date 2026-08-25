@@ -6,6 +6,7 @@
       "startDate": "2026-08-01",
       "endDate": "2026-08-07"
     },
+    "shopId": "replace-with-shop-id",
     "advertiserId": "1770096415226951",
     "topN": 9,
     "dimensionFilters": [

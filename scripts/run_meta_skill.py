@@ -7,11 +7,11 @@ from pathlib import Path
 import sys
 import tempfile
 
-from asset_table_client import client_from_environment
 from frame_extractor import FrameExtractionError, extract_highlight_frames
 from field_registry import FieldRegistryError, load_field_registry
 from highlight_policy import HighlightPolicyError, normalize_highlight_policy
 from material_query import MaterialQueryError, execute_material_query, parse_query_config
+from qianchuan_report_client import ReportClientError, fetch_material_report
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,10 +74,14 @@ def _write_json(path, payload):
         raise
 
 
-def collect_origin_rows(query):
-    client = client_from_environment()
-    table = client.discover_table()
-    return list(client.iter_origin_rows(table, query["period"]["startDate"], query["period"]["endDate"], query["advertiserId"]))
+def collect_report_records(query, output_dir):
+    return fetch_material_report(
+        query["shopId"],
+        query["advertiserId"],
+        query["period"]["startDate"],
+        query["period"]["endDate"],
+        output_dir=Path(output_dir) / "source-data",
+    )
 
 
 def _top_materials_payload(result, query):
@@ -120,15 +124,16 @@ def main(argv=None):
             summary = extract_highlight_frames(records, policy, args.video, args.output_dir)
             print("frame_summary=%s" % (Path(args.output_dir) / "summary.json"))
             return 0
-        result = execute_material_query(collect_origin_rows(query), query, registry)
         output_dir = Path(args.output_dir)
+        result = execute_material_query(collect_report_records(query, output_dir), query, registry)
+        result["receipt"]["source"] = {"type": "direct_material_report"}
         _write_json(output_dir / "top_materials.json", _top_materials_payload(result, query))
         _write_json(output_dir / "query-receipt.json", result["receipt"])
         _write_json(output_dir / "highlight-policy.json", policy)
         print("top_materials_json=%s" % (output_dir / "top_materials.json"))
         print("query_receipt=%s" % (output_dir / "query-receipt.json"))
         return 0
-    except (MetaSkillError, MaterialQueryError, FieldRegistryError, FrameExtractionError) as exc:
+    except (MetaSkillError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError) as exc:
         print("meta skill failed: %s" % exc, file=sys.stderr)
         return 2
 

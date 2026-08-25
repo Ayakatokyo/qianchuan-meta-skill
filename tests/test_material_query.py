@@ -1,4 +1,3 @@
-import json
 import sys
 import unittest
 from pathlib import Path
@@ -12,21 +11,18 @@ from material_query import MaterialQueryError, execute_material_query, parse_que
 
 
 def origin_row(material_id, name, material_type, cost, net_settlement):
-    return json.dumps(
-        {
-            "dimensions": {
-                "material_id": {"Value": material_id},
-                "roi2_material_video_name": {"ValueStr": name},
-                "roi2_material_type_v3": {"ValueStr": material_type},
-                "roi2_material_video_type": {"ValueStr": "短视频"},
-            },
-            "metrics": {
-                "stat_cost_for_overall_roi2": {"Value": str(cost)},
-                "total_order_settle_amount_for_roi2_1h": {"Value": str(net_settlement)},
-            },
+    return {
+        "dimensions": {
+            "material_id": {"Value": material_id},
+            "roi2_material_video_name": {"ValueStr": name},
+            "roi2_material_type_v3": {"ValueStr": material_type},
+            "roi2_material_video_type": {"ValueStr": "短视频"},
         },
-        ensure_ascii=False,
-    )
+        "metrics": {
+            "stat_cost_for_overall_roi2": {"Value": str(cost)},
+            "total_order_settle_amount_for_roi2_1h": {"Value": str(net_settlement)},
+        },
+    }
 
 
 class MaterialQueryTests(unittest.TestCase):
@@ -36,6 +32,7 @@ class MaterialQueryTests(unittest.TestCase):
             {
                 "schemaVersion": 1,
                 "period": {"startDate": "2026-08-01", "endDate": "2026-08-07"},
+                "shopId": "shop-1",
                 "advertiserId": "1770096415226951",
                 "topN": 2,
                 "dimensionFilters": [{"field": "material_type", "operator": "eq", "value": "直播素材"}],
@@ -102,3 +99,26 @@ class MaterialQueryTests(unittest.TestCase):
                 "sourceRowCount": 2,
             }
         ])
+
+    def test_requires_shop_id_and_accepts_direct_report_records(self):
+        raw_query = {
+            "schemaVersion": 1,
+            "period": {"startDate": "2026-08-01", "endDate": "2026-08-07"},
+            "advertiserId": "1770096415226951",
+            "topN": 1,
+            "dimensionFilters": [],
+            "metricFilters": [],
+            "sort": {"field": "overall_cost", "direction": "desc"},
+        }
+        with self.assertRaisesRegex(MaterialQueryError, "shopId"):
+            parse_query_config(raw_query, self.registry)
+
+        raw_query["shopId"] = "shop-1"
+        result = execute_material_query(
+            [origin_row("m-1", "素材一", "直播素材", 10, 20)],
+            raw_query,
+            self.registry,
+        )
+
+        self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1"])
+        self.assertEqual(result["receipt"]["query"]["shopId"], "shop-1")

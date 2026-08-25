@@ -7,7 +7,6 @@
     {"id": "material_type", "label": "素材类型", "kind": "dimension", "source": ["dimensions", "roi2_material_type_v3", "ValueStr"], "operators": ["eq", "in", "contains", "regex"], "filterStage": "row", "sortable": false},
     {"id": "video_type", "label": "视频类型", "kind": "dimension", "source": ["dimensions", "roi2_material_video_type", "ValueStr"], "operators": ["eq", "in", "contains", "regex"], "filterStage": "row", "sortable": false},
     {"id": "anchor_id", "label": "主播ID", "kind": "dimension", "source": ["dimensions", "anchor_id", "Value"], "operators": ["eq", "in"], "filterStage": "row", "sortable": false},
-    {"id": "stat_date", "label": "统计日期", "kind": "dimension", "source": ["dimensions", "stat_time_day", "Value"], "operators": ["eq", "in", "gte", "lte", "between"], "filterStage": "row", "sortable": false},
     {"id": "overall_cost", "label": "整体消耗", "kind": "atomic_metric", "source": ["metrics", "stat_cost_for_overall_roi2", "Value"], "operators": ["eq", "gt", "gte", "lt", "lte", "between"], "filterStage": "aggregate", "sortable": true},
     {"id": "base_cost", "label": "基础消耗", "kind": "atomic_metric", "source": ["metrics", "basic_stat_cost_for_roi2_v2", "Value"], "operators": ["eq", "gt", "gte", "lt", "lte", "between"], "filterStage": "aggregate", "sortable": true},
     {"id": "overall_order_count", "label": "整体成交订单数", "kind": "atomic_metric", "source": ["metrics", "total_pay_order_count_for_roi2", "Value"], "operators": ["eq", "gt", "gte", "lt", "lte", "between"], "filterStage": "aggregate", "sortable": true},

@@ -24,3 +24,8 @@ class FieldRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(FieldRegistryError, "does not allow"):
             registry.validate_operator("overall_cost", "regex")
 
+    def test_does_not_expose_asset_table_only_stat_date_dimension(self):
+        registry = load_field_registry(ROOT / "config" / "asset-field-registry-v1.json")
+
+        with self.assertRaisesRegex(FieldRegistryError, "unknown field"):
+            registry.require("stat_date")

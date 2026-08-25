@@ -13,21 +13,18 @@ import run_meta_skill  # noqa: E402
 
 
 def origin_row(material_id, cost, amount):
-    return json.dumps(
-        {
-            "dimensions": {
-                "material_id": {"Value": material_id},
-                "roi2_material_video_name": {"ValueStr": "素材" + material_id},
-                "roi2_material_type_v3": {"ValueStr": "直播素材"},
-                "roi2_material_video_type": {"ValueStr": "短视频"},
-            },
-            "metrics": {
-                "stat_cost_for_overall_roi2": {"Value": str(cost)},
-                "total_order_settle_amount_for_roi2_1h": {"Value": str(amount)},
-            },
+    return {
+        "dimensions": {
+            "material_id": {"Value": material_id},
+            "roi2_material_video_name": {"ValueStr": "素材" + material_id},
+            "roi2_material_type_v3": {"ValueStr": "直播素材"},
+            "roi2_material_video_type": {"ValueStr": "短视频"},
         },
-        ensure_ascii=False,
-    )
+        "metrics": {
+            "stat_cost_for_overall_roi2": {"Value": str(cost)},
+            "total_order_settle_amount_for_roi2_1h": {"Value": str(amount)},
+        },
+    }
 
 
 class MetaSkillCliTests(unittest.TestCase):
@@ -40,6 +37,7 @@ class MetaSkillCliTests(unittest.TestCase):
                     "query": {
                         "schemaVersion": 1,
                         "period": {"startDate": "2026-08-01", "endDate": "2026-08-07"},
+                        "shopId": "shop-1",
                         "advertiserId": "1770096415226951",
                         "topN": 1,
                         "dimensionFilters": [],
@@ -58,10 +56,34 @@ class MetaSkillCliTests(unittest.TestCase):
         )
         return path
 
+    def test_query_collects_direct_report_records_and_stops_after_candidates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = self.write_config(root)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["query"]["shopId"] = "shop-1"
+            config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+            output_dir = root / "run"
+            records = [origin_row("m-1", 2, 2), origin_row("m-2", 10, 1)]
+            with patch.object(run_meta_skill, "fetch_material_report", return_value=records) as fetch:
+                status = run_meta_skill.main(
+                    ["query", "--config", str(config_path), "--output-dir", str(output_dir)]
+                )
+
+            top_materials = json.loads((output_dir / "top_materials.json").read_text(encoding="utf-8"))
+            receipt = json.loads((output_dir / "query-receipt.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(fetch.call_args.args[:4], ("shop-1", "1770096415226951", "2026-08-01", "2026-08-07"))
+        self.assertEqual(fetch.call_args.kwargs["output_dir"], output_dir / "source-data")
+        self.assertEqual([item["materialId"] for item in top_materials["materials"]], ["m-2"])
+        self.assertEqual(receipt["source"], {"type": "direct_material_report"})
+        self.assertFalse((output_dir / "diagnosis-records").exists())
+
     def test_validate_checks_config_without_collecting_rows(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = self.write_config(Path(temp_dir))
-            with patch.object(run_meta_skill, "collect_origin_rows") as collect:
+            with patch.object(run_meta_skill, "fetch_material_report") as collect:
                 status = run_meta_skill.main(["validate", "--config", str(config_path)])
 
         self.assertEqual(status, 0)
@@ -89,7 +111,7 @@ class MetaSkillCliTests(unittest.TestCase):
             output_dir = root / "run"
             with patch.object(
                 run_meta_skill,
-                "collect_origin_rows",
+                "fetch_material_report",
                 return_value=[origin_row("m-1", 2, 2), origin_row("m-2", 10, 1)],
             ) as collect:
                 status = run_meta_skill.main(
@@ -112,7 +134,7 @@ class MetaSkillCliTests(unittest.TestCase):
             records_path = root / "records.json"
             records_path.write_text("[]", encoding="utf-8")
             output_dir = root / "frames"
-            with patch.object(run_meta_skill, "collect_origin_rows") as collect, patch.object(
+            with patch.object(run_meta_skill, "fetch_material_report") as collect, patch.object(
                 run_meta_skill,
                 "extract_highlight_frames",
                 return_value={"status": "succeeded", "frames": []},
@@ -127,3 +149,10 @@ class MetaSkillCliTests(unittest.TestCase):
         self.assertEqual(status, 0)
         collect.assert_not_called()
         self.assertEqual(extract.call_args.args[1]["policies"][0]["metric"], "CLICK_COUNT")
+
+    def test_query_has_no_asset_table_dependency(self):
+        self.assertNotIn(
+            "asset_table_client",
+            (ROOT / "scripts" / "run_meta_skill.py").read_text(encoding="utf-8"),
+        )
+        self.assertFalse((ROOT / "scripts" / "asset_table_client.py").exists())

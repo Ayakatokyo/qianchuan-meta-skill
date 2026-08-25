@@ -1,4 +1,3 @@
-import json
 import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -110,6 +109,9 @@ def parse_query_config(raw, registry):
     advertiser_id = _text(raw.get("advertiserId"))
     if not advertiser_id.isdigit():
         raise MaterialQueryError("advertiserId must contain digits only")
+    shop_id = _text(raw.get("shopId"))
+    if not shop_id:
+        raise MaterialQueryError("shopId must be nonempty")
     top_n = raw.get("topN")
     if type(top_n) is not int or top_n <= 0:
         raise MaterialQueryError("topN must be a positive integer")
@@ -131,6 +133,7 @@ def parse_query_config(raw, registry):
     return {
         "schemaVersion": 1,
         "period": _validate_period(raw.get("period")),
+        "shopId": shop_id,
         "advertiserId": advertiser_id,
         "topN": top_n,
         "dimensionFilters": dimension_filters,
@@ -191,14 +194,12 @@ def execute_material_query(raw_rows, raw_query, registry):
     aggregates = {}
     excluded = []
     aigc_source_row_count = 0
-    for raw in raw_rows:
-        try:
-            row = json.loads(raw)
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise MaterialQueryError("origin_data is not valid JSON") from exc
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            raise MaterialQueryError("material report record must be an object")
         material_id = _text(_value_at(row, registry.require("material_id")["source"]))
         if not material_id:
-            raise MaterialQueryError("origin_data material ID is missing")
+            raise MaterialQueryError("material report material ID is missing")
         if material_id == _AIGC_DYNAMIC_CREATIVE_MATERIAL_ID:
             aigc_source_row_count += 1
             continue
