@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import run_meta_skill  # noqa: E402
+from field_registry import load_field_registry  # noqa: E402
 
 
 def origin_row(material_id, cost, amount):
@@ -28,6 +29,22 @@ def origin_row(material_id, cost, amount):
 
 
 class MetaSkillCliTests(unittest.TestCase):
+    def test_connector_order_by_maps_atomic_and_derived_rankings(self):
+        registry = load_field_registry(run_meta_skill.REGISTRY_PATH)
+
+        self.assertEqual(
+            run_meta_skill._connector_order_by(
+                {"sort": {"field": "net_settlement_amount", "direction": "asc"}}, registry
+            ),
+            [{"field": "total_order_settle_amount_for_roi2_1h", "type": 1}],
+        )
+        self.assertEqual(
+            run_meta_skill._connector_order_by(
+                {"sort": {"field": "net_settlement_roi", "direction": "desc"}}, registry
+            ),
+            [{"field": "stat_cost_for_overall_roi2", "type": 2}],
+        )
+
     def write_config(self, directory):
         path = directory / "config.json"
         path.write_text(
@@ -56,6 +73,71 @@ class MetaSkillCliTests(unittest.TestCase):
         )
         return path
 
+    def write_specs(self, directory):
+        query_path = directory / "query-spec.json"
+        highlight_path = directory / "highlight-spec.json"
+        query_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "source": "qianchuan_direct_material_report",
+                    "scope": {"shopId": "shop-1", "advertiserId": "1770096415226951"},
+                    "period": {"startDate": "2026-08-01", "endDate": "2026-08-07"},
+                    "filters": {"dimensionFilters": [], "metricFilters": []},
+                    "ranking": {"field": "overall_cost", "direction": "desc"},
+                    "collection": {"targetTopN": 1},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        highlight_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "includeZeroSecond": True,
+                    "metrics": {
+                        "CLICK_COUNT": {"enabled": True, "strategy": "local_peaks", "maxFrames": 3},
+                        "LOSE_COUNT": {"enabled": False},
+                        "LIKE_COUNT": {"enabled": False},
+                        "COMMENT_COUNT": {"enabled": False},
+                        "SHARE_COUNT": {"enabled": False},
+                        "NEW_FOLLOWER_COUNT": {"enabled": False},
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return query_path, highlight_path
+
+    def test_query_accepts_independent_specs_and_persists_resolved_audit_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            query_path, highlight_path = self.write_specs(root)
+            output_dir = root / "run"
+            with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]) as fetch:
+                status = run_meta_skill.main(
+                    [
+                        "query", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path),
+                        "--output-dir", str(output_dir),
+                    ]
+                )
+
+            receipt = json.loads((output_dir / "query-receipt.json").read_text(encoding="utf-8"))
+            fingerprint = json.loads((output_dir / "configuration-fingerprint.json").read_text(encoding="utf-8"))
+            resolved_query_exists = (output_dir / "resolved-query-spec.json").is_file()
+            resolved_highlight_exists = (output_dir / "resolved-highlight-spec.json").is_file()
+
+        self.assertEqual(status, 0)
+        self.assertEqual(fetch.call_args.args[:4], ("shop-1", "1770096415226951", "2026-08-01", "2026-08-07"))
+        self.assertEqual(
+            fetch.call_args.kwargs["order_by"], [{"field": "stat_cost_for_overall_roi2", "type": 2}]
+        )
+        self.assertTrue(resolved_query_exists)
+        self.assertTrue(resolved_highlight_exists)
+        self.assertEqual(receipt["configurationFingerprint"], fingerprint["configurationFingerprint"])
+
     def test_query_collects_direct_report_records_and_stops_after_candidates(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -75,6 +157,9 @@ class MetaSkillCliTests(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertEqual(fetch.call_args.args[:4], ("shop-1", "1770096415226951", "2026-08-01", "2026-08-07"))
+        self.assertEqual(
+            fetch.call_args.kwargs["order_by"], [{"field": "stat_cost_for_overall_roi2", "type": 2}]
+        )
         self.assertEqual(fetch.call_args.kwargs["output_dir"], output_dir / "source-data")
         self.assertEqual([item["materialId"] for item in top_materials["materials"]], ["m-2"])
         self.assertEqual(receipt["source"], {"type": "direct_material_report"})
@@ -143,6 +228,26 @@ class MetaSkillCliTests(unittest.TestCase):
                     [
                         "select-frames", "--config", str(config_path), "--records-json", str(records_path),
                         "--video", "video.mp4", "--output-dir", str(output_dir),
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        collect.assert_not_called()
+        self.assertEqual(extract.call_args.args[1]["policies"][0]["metric"], "CLICK_COUNT")
+
+    def test_select_frames_accepts_an_independent_highlight_spec(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _query_path, highlight_path = self.write_specs(root)
+            records_path = root / "records.json"
+            records_path.write_text("[]", encoding="utf-8")
+            with patch.object(run_meta_skill, "fetch_material_report") as collect, patch.object(
+                run_meta_skill, "extract_highlight_frames", return_value={"status": "succeeded", "frames": []}
+            ) as extract:
+                status = run_meta_skill.main(
+                    [
+                        "select-frames", "--highlight-spec", str(highlight_path),
+                        "--records-json", str(records_path), "--video", "video.mp4", "--output-dir", str(root / "frames"),
                     ]
                 )
 

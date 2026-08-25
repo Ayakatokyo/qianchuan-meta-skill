@@ -7,10 +7,13 @@ from pathlib import Path
 import sys
 import tempfile
 
+from config_specs import (
+    ConfigSpecError, highlight_spec_to_policy, legacy_config_to_specs, query_spec_to_query_config,
+    resolve_highlight_spec, resolve_query_spec, spec_fingerprint, write_resolved_specs,
+)
 from frame_extractor import FrameExtractionError, extract_highlight_frames
 from field_registry import FieldRegistryError, load_field_registry
-from highlight_policy import HighlightPolicyError, normalize_highlight_policy
-from material_query import MaterialQueryError, execute_material_query, parse_query_config
+from material_query import MaterialQueryError, execute_material_query
 from qianchuan_report_client import ReportClientError, fetch_material_report
 
 
@@ -44,17 +47,23 @@ def _json_safe(value):
     return value
 
 
-def load_config(path):
-    payload = _read_json(path, "meta-skill config")
-    if payload.get("schemaVersion") != 1:
-        raise MetaSkillError("meta-skill config schemaVersion must be 1")
-    registry = load_field_registry(REGISTRY_PATH)
+def _load_specs(args, registry, *, require_query):
+    query_spec_path = getattr(args, "query_spec", None)
+    highlight_spec_path = getattr(args, "highlight_spec", None)
+    if args.config and (query_spec_path or highlight_spec_path):
+        raise MetaSkillError("--config cannot be combined with --query-spec or --highlight-spec")
     try:
-        query = parse_query_config(payload.get("query"), registry)
-        policy = normalize_highlight_policy(payload.get("highlightPolicy"))
-    except (MaterialQueryError, HighlightPolicyError) as exc:
+        if args.config:
+            query_spec, highlight_spec = legacy_config_to_specs(_read_json(args.config, "meta-skill config"), registry)
+        else:
+            if not highlight_spec_path or (require_query and not query_spec_path):
+                raise MetaSkillError("--query-spec and --highlight-spec are required")
+            query_spec = resolve_query_spec(_read_json(query_spec_path, "QuerySpec"), registry) if query_spec_path else None
+            highlight_spec = resolve_highlight_spec(_read_json(highlight_spec_path, "HighlightSpec"))
+    except (ConfigSpecError, MaterialQueryError) as exc:
         raise MetaSkillError(str(exc)) from exc
-    return registry, query, policy
+    query = query_spec_to_query_config(query_spec) if query_spec is not None else None
+    return query_spec, highlight_spec, query, highlight_spec_to_policy(highlight_spec)
 
 
 def _write_json(path, payload):
@@ -74,13 +83,25 @@ def _write_json(path, payload):
         raise
 
 
-def collect_report_records(query, output_dir):
+def _connector_order_by(query, registry):
+    entry = registry.require(query["sort"]["field"])
+    source = entry.get("source")
+    if isinstance(source, list) and len(source) >= 2 and source[0] == "metrics":
+        field = source[1]
+    else:
+        # Derived metrics are ranked locally after aggregation; overall cost is a stable gateway fallback.
+        field = "stat_cost_for_overall_roi2"
+    return [{"field": field, "type": 2 if query["sort"]["direction"] == "desc" else 1}]
+
+
+def collect_report_records(query, output_dir, registry):
     return fetch_material_report(
         query["shopId"],
         query["advertiserId"],
         query["period"]["startDate"],
         query["period"]["endDate"],
         output_dir=Path(output_dir) / "source-data",
+        order_by=_connector_order_by(query, registry),
     )
 
 
@@ -100,12 +121,18 @@ def build_parser():
     parser = argparse.ArgumentParser(description="Query confirmed Qianchuan asset fields and prepare custom highlight policy.")
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate")
-    validate.add_argument("--config", required=True)
+    for command in (validate,):
+        command.add_argument("--config")
+        command.add_argument("--query-spec")
+        command.add_argument("--highlight-spec")
     query = commands.add_parser("query")
-    query.add_argument("--config", required=True)
+    query.add_argument("--config")
+    query.add_argument("--query-spec")
+    query.add_argument("--highlight-spec")
     query.add_argument("--output-dir", required=True)
     frames = commands.add_parser("select-frames")
-    frames.add_argument("--config", required=True)
+    frames.add_argument("--config")
+    frames.add_argument("--highlight-spec")
     frames.add_argument("--records-json", required=True)
     frames.add_argument("--video", required=True)
     frames.add_argument("--output-dir", required=True)
@@ -115,9 +142,20 @@ def build_parser():
 def main(argv=None):
     try:
         args = build_parser().parse_args(argv)
-        registry, query, policy = load_config(args.config)
+        registry = load_field_registry(REGISTRY_PATH)
+        query_spec, highlight_spec, query, policy = _load_specs(
+            args, registry, require_query=args.command in {"validate", "query"}
+        )
         if args.command == "validate":
-            print(json.dumps(_json_safe({"valid": True, "registryVersion": registry.version, "query": query, "highlightPolicy": policy}), ensure_ascii=False))
+            print(json.dumps(_json_safe({
+                "valid": True,
+                "registryVersion": registry.version,
+                "querySpec": query_spec,
+                "highlightSpec": highlight_spec,
+                "configurationFingerprint": spec_fingerprint(query_spec, highlight_spec),
+                "query": query,
+                "highlightPolicy": policy,
+            }), ensure_ascii=False))
             return 0
         if args.command == "select-frames":
             records = _read_json(args.records_json, "diagnosis records", list)
@@ -125,15 +163,20 @@ def main(argv=None):
             print("frame_summary=%s" % (Path(args.output_dir) / "summary.json"))
             return 0
         output_dir = Path(args.output_dir)
-        result = execute_material_query(collect_report_records(query, output_dir), query, registry)
+        write_resolved_specs(output_dir, query_spec, highlight_spec)
+        fingerprint = spec_fingerprint(query_spec, highlight_spec)
+        result = execute_material_query(collect_report_records(query, output_dir, registry), query, registry)
         result["receipt"]["source"] = {"type": "direct_material_report"}
-        _write_json(output_dir / "top_materials.json", _top_materials_payload(result, query))
+        result["receipt"]["configurationFingerprint"] = fingerprint
+        top_materials = _top_materials_payload(result, query)
+        top_materials["configurationFingerprint"] = fingerprint
+        _write_json(output_dir / "top_materials.json", top_materials)
         _write_json(output_dir / "query-receipt.json", result["receipt"])
         _write_json(output_dir / "highlight-policy.json", policy)
         print("top_materials_json=%s" % (output_dir / "top_materials.json"))
         print("query_receipt=%s" % (output_dir / "query-receipt.json"))
         return 0
-    except (MetaSkillError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError) as exc:
+    except (MetaSkillError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError) as exc:
         print("meta skill failed: %s" % exc, file=sys.stderr)
         return 2
 

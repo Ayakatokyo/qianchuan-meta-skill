@@ -62,7 +62,7 @@ def _runtime_context(environ):
     }
 
 
-def _business_params(advertiser_id, start_date, end_date):
+def _business_params(advertiser_id, start_date, end_date, *, order_by=None):
     if not str(advertiser_id).isdigit():
         raise ReportClientError("advertiser ID is invalid")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(start_date)) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(end_date)):
@@ -75,7 +75,7 @@ def _business_params(advertiser_id, start_date, end_date):
         "dimensions": list(DIMENSIONS),
         "metrics": list(METRICS),
         "filters": list(FILTERS),
-        "orderBy": [{"field": "stat_cost_for_roi2", "type": 2}],
+        "orderBy": list(order_by or [{"field": "stat_cost_for_overall_roi2", "type": 2}]),
     }
 
 
@@ -125,9 +125,17 @@ def _validate_records(records):
     return records
 
 
+def _write_stage_status(source_dir, stage, status, **details):
+    payload = {"stage": stage, "status": status}
+    payload.update(details)
+    _write_json(Path(source_dir) / (stage + "-status.json"), payload)
+
+
 def _records_from_result(result, source_dir, session):
     data = result.get("data")
     if isinstance(data, list):
+        _write_stage_status(source_dir, "result-download", "not_required")
+        _write_stage_status(source_dir, "result-parse", "not_required")
         return _validate_records(data)
     if not isinstance(data, dict):
         raise ReportClientError("material report response is missing data")
@@ -143,6 +151,8 @@ def _records_from_result(result, source_dir, session):
             raise ReportClientError("material report payload is not valid JSON") from exc
     if isinstance(content, dict) and "payload" in content:
         content = content["payload"]
+    _write_stage_status(source_dir, "result-download", "not_required")
+    _write_stage_status(source_dir, "result-parse", "not_required")
     return _validate_records(content)
 
 
@@ -157,7 +167,18 @@ def _records_from_files(content, source_dir, session):
         raise ReportClientError("material report result file URL is missing")
     filename = Path(urlsplit(file_url).path).name or "material-report.csv"
     raw_path = source_dir / filename
-    _download_file(file_url, raw_path, session)
+    try:
+        _download_file(file_url, raw_path, session)
+    except ReportClientError as exc:
+        _write_stage_status(
+            source_dir, "result-download", "failed", filename=filename, error=str(exc)
+        )
+        _write_stage_status(source_dir, "result-parse", "not_started")
+        raise ReportClientError(
+            "material report gateway completed, but result-file download failed; "
+            "see result-download-status.json"
+        ) from exc
+    _write_stage_status(source_dir, "result-download", "completed", filename=filename)
     structured_path = raw_path.with_suffix(raw_path.suffix + ".structured.json")
     records = []
     try:
@@ -170,8 +191,14 @@ def _records_from_files(content, source_dir, session):
                     raise ReportClientError("material report result file row %s is not an object" % row_number)
                 records.append(record)
     except (OSError, UnicodeError, csv.Error, json.JSONDecodeError) as exc:
-        raise ReportClientError("material report result file could not be structured") from exc
+        _write_stage_status(source_dir, "result-parse", "failed", filename=filename, error=str(exc))
+        raise ReportClientError(
+            "material report result file could not be structured; see result-parse-status.json"
+        ) from exc
     _write_json(structured_path, records)
+    _write_stage_status(
+        source_dir, "result-parse", "completed", filename=filename, recordCount=len(records)
+    )
     return _validate_records(records)
 
 
@@ -195,7 +222,21 @@ def _download_file(file_url, target_path, session):
             close()
 
 
-def fetch_material_report(shop_id, advertiser_id, start_date, end_date, *, output_dir, environ=None, session=None):
+def _validate_gateway_result(result):
+    if not isinstance(result, dict):
+        raise ReportClientError("material report gateway returned a non-object response")
+    if result.get("success") is False:
+        raise ReportClientError("material report gateway returned failure: %s" % (result.get("msg") or result))
+    content = result.get("data", {}).get("result_content", {}) if isinstance(result.get("data"), dict) else {}
+    if isinstance(content, dict) and content.get("status") == "FAILED":
+        failures = content.get("failedErrors") or []
+        detail = failures[0].get("errorMsg") if failures and isinstance(failures[0], dict) else None
+        raise ReportClientError("material report task failed: %s" % (detail or content))
+
+
+def fetch_material_report(
+    shop_id, advertiser_id, start_date, end_date, *, output_dir, order_by=None, environ=None, session=None
+):
     if not str(shop_id or "").strip():
         raise ReportClientError("shop ID is required")
     context = _runtime_context(os.environ if environ is None else environ)
@@ -208,7 +249,7 @@ def fetch_material_report(shop_id, advertiser_id, start_date, end_date, *, outpu
         "platform": "OCEANENGINE",
         "function_code": FUNCTION_CODE,
         "response_content_type": "fetch",
-        "business_params": _business_params(advertiser_id, start_date, end_date),
+        "business_params": _business_params(advertiser_id, start_date, end_date, order_by=order_by),
         "shop_id": str(shop_id).strip(),
     }
     session = requests.Session() if session is None else session
@@ -224,7 +265,12 @@ def fetch_material_report(shop_id, advertiser_id, start_date, end_date, *, outpu
         result = response.json()
     except (requests.RequestException, ValueError) as exc:
         raise ReportClientError("material report request failed") from exc
-    if not isinstance(result, dict) or result.get("success") is False:
-        raise ReportClientError("material report gateway returned failure")
+    _validate_gateway_result(result)
     _write_json(source_dir / "gateway-response.json", _redact(result))
+    _write_stage_status(
+        source_dir,
+        "gateway",
+        "completed",
+        resultType=result.get("data", {}).get("result_type") if isinstance(result.get("data"), dict) else None,
+    )
     return _records_from_result(result, source_dir, session)

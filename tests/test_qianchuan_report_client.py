@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import requests
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -91,6 +93,12 @@ class QianchuanReportClientTests(unittest.TestCase):
         self.assertEqual(
             session.post_call["json"]["business_params"]["advertiserId"], 1770096415226951
         )
+        business_params = session.post_call["json"]["business_params"]
+        self.assertIn("stat_cost_for_overall_roi2", business_params["metrics"])
+        self.assertNotIn("stat_cost_for_roi2", business_params["metrics"])
+        self.assertEqual(
+            business_params["orderBy"], [{"field": "stat_cost_for_overall_roi2", "type": 2}]
+        )
         self.assertEqual(
             session.post_call["json"]["business_params"]["startTime"], "2026-08-01 00:00:00"
         )
@@ -98,6 +106,39 @@ class QianchuanReportClientTests(unittest.TestCase):
         self.assertNotIn("authorization-secret", gateway_response)
         self.assertNotIn("agent-session", gateway_response)
         self.assertNotIn("cookie-session", gateway_response)
+
+    def test_uses_the_resolved_gateway_sort(self):
+        session = FakeSession(FakeResponse({
+            "success": True,
+            "data": {"result_type": "payload", "result_content": {"payload": [material_record()]}},
+        }))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client.fetch_material_report(
+                "shop-1", "1770096415226951", "2026-08-01", "2026-08-07",
+                output_dir=Path(temp_dir),
+                order_by=[{"field": "total_order_settle_amount_for_roi2_1h", "type": 1}],
+                environ=valid_env(),
+                session=session,
+            )
+
+        self.assertEqual(
+            session.post_call["json"]["business_params"]["orderBy"],
+            [{"field": "total_order_settle_amount_for_roi2_1h", "type": 1}],
+        )
+
+    def test_reports_gateway_task_failure_detail(self):
+        session = FakeSession(FakeResponse({
+            "success": True,
+            "data": {"result_type": "files", "result_content": {
+                "status": "FAILED", "failedErrors": [{"errorMsg": "invalid metric"}],
+            }},
+        }))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(client.ReportClientError, "invalid metric"):
+                client.fetch_material_report(
+                    "shop-1", "1770096415226951", "2026-08-01", "2026-08-07",
+                    output_dir=Path(temp_dir), environ=valid_env(), session=session,
+                )
 
     def test_files_response_writes_structured_records_and_redacts_url(self):
         csv_content = (
@@ -130,6 +171,33 @@ class QianchuanReportClientTests(unittest.TestCase):
             self.assertTrue((root / "report.csv.structured.json").is_file())
         self.assertIsNotNone(session.get_call)
         self.assertNotIn("signed-secret", gateway_response)
+
+    def test_keeps_gateway_receipt_and_stage_status_when_csv_download_fails(self):
+        result = {
+            "success": True,
+            "data": {"result_type": "files", "result_content": {
+                "status": "COMPLETED", "failedInstances": 0,
+                "files": [{"fileUrl": "http://gateway.test/report.csv?token=signed-secret"}],
+            }},
+        }
+        session = FakeSession(FakeResponse(result), FakeResponse(requests.RequestException("network unavailable")))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with self.assertRaisesRegex(client.ReportClientError, "gateway completed"):
+                client.fetch_material_report(
+                    "shop-1", "1770096415226951", "2026-08-01", "2026-08-07",
+                    output_dir=root, environ=valid_env(), session=session,
+                )
+
+            gateway = json.loads((root / "gateway-status.json").read_text(encoding="utf-8"))
+            download = json.loads((root / "result-download-status.json").read_text(encoding="utf-8"))
+            parse = json.loads((root / "result-parse-status.json").read_text(encoding="utf-8"))
+            receipt = (root / "gateway-response.json").read_text(encoding="utf-8")
+
+        self.assertEqual(gateway["status"], "completed")
+        self.assertEqual(download["status"], "failed")
+        self.assertEqual(parse["status"], "not_started")
+        self.assertNotIn("signed-secret", receipt)
 
 
 if __name__ == "__main__":
