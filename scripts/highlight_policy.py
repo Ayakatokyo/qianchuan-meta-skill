@@ -29,8 +29,10 @@ def normalize_highlight_policy(raw):
     if type(include_zero) is not bool:
         raise HighlightPolicyError("includeZeroSecond must be a boolean")
     policies = raw.get("policies")
-    if not isinstance(policies, list) or not policies:
-        raise HighlightPolicyError("highlight policy requires at least one policy")
+    if not isinstance(policies, list):
+        raise HighlightPolicyError("highlight policy policies must be a list")
+    if not policies and not include_zero:
+        raise HighlightPolicyError("highlight policy requires a policy when includeZeroSecond is false")
     normalized = []
     seen = set()
     for item in policies:
