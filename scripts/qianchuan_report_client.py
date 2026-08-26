@@ -13,22 +13,119 @@ import requests
 
 FUNCTION_CODE = "OCEANENGINE_UNI_PROMOTION_PLAN_DATA_REQUESTS_ZDY"
 DATA_TOPIC = "OVERALL_ROI_LIVE_MATERIAL_VIDEO"
-DIMENSIONS = [
+DEFAULT_DIMENSIONS = [
+    "ecp_app_id",
+    "roi2_material_type_v3",
+    "roi2_material_video_play_info",
+    "roi2_material_video_name",
+    "roi2_material_video_type",
+    "material_create_time_v2",
     "material_id",
     "anchor_id",
-    "roi2_material_video_name",
-    "roi2_material_type_v3",
-    "roi2_material_video_type",
 ]
-METRICS = [
+DEFAULT_METRICS = [
     "stat_cost_for_overall_roi2",
-    "basic_stat_cost_for_roi2_v2",
-    "total_pay_order_count_for_roi2",
-    "total_order_settle_count_for_roi2_1h",
+    "total_prepay_and_pay_settle_overall_roi2_1h",
+    "total_cost_per_pay_order_settle_for_overall_roi2_1h",
     "total_order_settle_amount_for_roi2_1h",
-    "total_pay_order_gmv_include_coupon_for_roi2",
+    "stat_cost_for_roi2",
+    "total_prepay_and_pay_settle_roi2_1h",
+    "total_cost_per_pay_order_settle_for_roi2_1h",
+    "total_order_settle_count_for_roi2_1h",
+    "no_refund_ecom_coupon_amount_for_roi2",
+    "total_order_settle_amount_rate_for_roi2_1h",
     "total_refund_order_count_for_roi2_1h",
+    "total_refund_order_gmv_for_roi2_1h_rate",
     "total_refund_order_gmv_for_roi2_1h_all",
+    "total_order_real_settle_amount_for_roi2_1h",
+    "no_refund_ecom_platform_subsidy_amount_for_roi2",
+    "total_order_settle_count_rate_for_roi2_1h",
+    "total_pay_order_count_for_roi2",
+    "total_pay_order_gmv_rate_for_roi2",
+    "total_pay_order_gmv_include_coupon_for_roi2",
+    "cost_rate_for_roi2",
+    "total_prepay_and_pay_order_roi2",
+    "total_pay_order_gmv_for_roi2",
+    "total_ecom_platform_subsidy_amount_for_roi2",
+    "basic_stat_cost_for_roi2_v2",
+    "total_cost_per_pay_order_for_roi2",
+    "total_pay_order_coupon_amount_for_roi2",
+    "total_prepay_order_count_for_roi2",
+    "total_prepay_order_gmv_for_roi2",
+    "total_unfinished_estimate_order_gmv_for_roi2",
+    "total_prepay_and_pay_settle_roi2_7d",
+    "total_order_settle_amount_for_roi2_7d",
+    "total_order_settle_count_for_roi2_7d",
+    "total_cost_per_pay_order_settle_for_roi2_7d",
+    "total_order_settle_amount_rate_for_roi2_7d",
+    "total_order_settle_count_rate_for_roi2_7d",
+    "total_prepay_and_pay_settle_roi2_14d",
+    "total_order_settle_amount_for_roi2_14d",
+    "total_order_settle_count_for_roi2_14d",
+    "total_cost_per_pay_order_settle_for_roi2_14d",
+    "total_order_settle_amount_rate_for_roi2_14d",
+    "total_order_settle_count_rate_for_roi2_14d",
+    "total_prepay_and_pay_settle_roi2_30d",
+    "total_order_settle_amount_for_roi2_30d",
+    "total_order_settle_count_for_roi2_30d",
+    "total_cost_per_pay_order_settle_for_roi2_30d",
+    "total_order_settle_amount_rate_for_roi2_30d",
+    "total_order_settle_count_rate_for_roi2_30d",
+    "total_prepay_and_pay_settle_roi2_90d",
+    "total_order_settle_amount_for_roi2_90d",
+    "total_order_settle_count_for_roi2_90d",
+    "total_cost_per_pay_order_settle_for_roi2_90d",
+    "total_order_settle_amount_rate_for_roi2_90d",
+    "total_order_settle_count_rate_for_roi2_90d",
+    "additional_delivery_stat_cost_for_roi2_assist",
+    "additional_delivery_total_pay_order_count_for_roi2_assist",
+    "additional_delivery_total_pay_order_gmv_include_coupon_for_roi2_assist",
+    "additional_delivery_total_prepay_and_pay_order_roi2_assist",
+    "additional_delivery_show_cnt_for_roi2_assist",
+    "additional_delivery_ctr_for_roi2_assist",
+    "additional_delivery_click_cnt_for_roi2_assist",
+    "additional_delivery_convert_rate_for_roi2_assist",
+    "additional_delivery_total_pay_order_gmv_for_roi2_assist",
+    "additional_delivery_total_pay_order_coupon_amount_for_roi2_assist",
+    "additional_delivery_total_ecom_platform_subsidy_amount_for_roi2_assist",
+    "additional_delivery_total_unfinished_estimate_order_gmv_for_roi2_assist",
+    "additional_delivery_pay_convert_cost_for_roi2_assist_v2",
+    "additional_delivery_pay_convert_cnt_for_roi2_assist_v2",
+    "additional_delivery_total_order_settle_amount_for_roi2_1h_assist",
+    "additional_delivery_total_prepay_and_pay_settle_roi2_1h_assist",
+    "additional_delivery_total_order_settle_count_for_roi2_1h_assist",
+    "additional_delivery_convert_rate_for_roi2_1h_assist",
+    "additional_delivery_total_cost_per_pay_order_settle_for_roi2_1h_assist",
+    "additional_delivery_total_order_real_settle_amount_for_roi2_1h_assist",
+    "additional_delivery_no_refund_ecom_coupon_amount_for_roi2_assist",
+    "additional_delivery_no_refund_ecom_platform_subsidy_amount_for_roi2_assist",
+    "additional_delivery_total_order_settle_amount_rate_for_roi2_1h_assist",
+    "additional_delivery_total_order_settle_count_rate_for_roi2_1h_assist",
+    "additional_delivery_total_refund_order_count_for_roi2_1h_assist",
+    "additional_delivery_total_refund_order_gmv_for_roi2_1h_all_assist",
+    "additional_delivery_total_refund_order_gmv_for_roi2_1h_rate_assist",
+    "additional_delivery_total_prepay_and_pay_settle_roi2_7d_assist",
+    "additional_delivery_total_order_settle_amount_for_roi2_7d_assist",
+    "additional_delivery_total_order_settle_count_for_roi2_7d_assist",
+    "additional_delivery_total_cost_per_pay_order_settle_for_roi2_7d_assist",
+    "additional_delivery_total_order_settle_amount_rate_for_roi2_7d_assist",
+    "additional_delivery_total_order_settle_count_rate_for_roi2_7d_assist",
+    "live_show_count_for_roi2_v2",
+    "live_cvr_rate_for_roi2_v2",
+    "live_watch_count_for_roi2_v2",
+    "live_convert_rate_for_roi2_v2",
+    "total_cpc_for_roi2",
+    "total_ecpm_for_roi2",
+    "video_avg_watch_duration_for_roi2",
+    "video_comment_count_for_roi2_v2",
+    "video_follow_count_for_roi2",
+    "video_like_count_for_roi2",
+    "video_play_count_for_roi2_v2",
+    "video_play_duration_2s_rate_for_roi2",
+    "video_play_duration_3s_rate_for_roi2",
+    "video_play_duration_5s_rate_for_roi2",
+    "video_play_duration_10s_rate_for_roi2",
+    "video_play_finish_rate_for_roi2_v2",
 ]
 FILTERS = [
     {"field": "ecp_app_id", "operator": 7, "values": ["1", "2"]},
@@ -62,20 +159,35 @@ def _runtime_context(environ):
     }
 
 
+def _validate_field_contract(order_by):
+    if len(DEFAULT_DIMENSIONS) > 10:
+        raise ReportClientError("material aggregate query exceeds 10 dimension limit")
+    if len(DEFAULT_DIMENSIONS) != len(set(DEFAULT_DIMENSIONS)):
+        raise ReportClientError("material aggregate dimensions contain duplicates")
+    if len(DEFAULT_METRICS) != len(set(DEFAULT_METRICS)):
+        raise ReportClientError("material aggregate metrics contain duplicates")
+    if {"stat_time_day", "range_stat_time_hour"}.intersection(DEFAULT_DIMENSIONS):
+        raise ReportClientError("material aggregate query includes temporal dimensions")
+    if not order_by or order_by[0].get("field") not in DEFAULT_METRICS:
+        raise ReportClientError("material aggregate sort field is not a metric")
+
+
 def _business_params(advertiser_id, start_date, end_date, *, order_by=None):
     if not str(advertiser_id).isdigit():
         raise ReportClientError("advertiser ID is invalid")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(start_date)) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(end_date)):
         raise ReportClientError("report dates must use YYYY-MM-DD")
+    resolved_order_by = list(order_by or [{"field": "stat_cost_for_overall_roi2", "type": 2}])
+    _validate_field_contract(resolved_order_by)
     return {
         "advertiserId": int(advertiser_id),
         "startTime": str(start_date) + " 00:00:00",
         "endTime": str(end_date) + " 23:59:59",
         "dataTopic": DATA_TOPIC,
-        "dimensions": list(DIMENSIONS),
-        "metrics": list(METRICS),
+        "dimensions": list(DEFAULT_DIMENSIONS),
+        "metrics": list(DEFAULT_METRICS),
         "filters": list(FILTERS),
-        "orderBy": list(order_by or [{"field": "stat_cost_for_overall_roi2", "type": 2}]),
+        "orderBy": resolved_order_by,
     }
 
 
@@ -123,6 +235,31 @@ def _validate_records(records):
     if any(not isinstance(record, dict) for record in records):
         raise ReportClientError("material report payload contains a non-object record")
     return records
+
+
+def _validate_record_fields(records):
+    missing = set()
+    for record in records:
+        metrics = record.get("metrics") if isinstance(record.get("metrics"), dict) else {}
+        missing.update(field for field in DEFAULT_METRICS if field not in metrics)
+    if missing:
+        raise ReportClientError(
+            "material report missing expected metrics: " + ", ".join(sorted(missing))
+        )
+
+
+def _write_field_manifest(source_dir, advertiser_id, start_date, end_date, order_by, records):
+    params = _business_params(advertiser_id, start_date, end_date, order_by=order_by)
+    _write_json(Path(source_dir) / "field-manifest.json", {
+        "dataTopic": params["dataTopic"],
+        "dimensions": params["dimensions"],
+        "metrics": params["metrics"],
+        "filters": params["filters"],
+        "orderBy": params["orderBy"],
+        "startTime": params["startTime"],
+        "endTime": params["endTime"],
+        "recordCount": len(records),
+    })
 
 
 def _write_stage_status(source_dir, stage, status, **details):
@@ -273,4 +410,7 @@ def fetch_material_report(
         "completed",
         resultType=result.get("data", {}).get("result_type") if isinstance(result.get("data"), dict) else None,
     )
-    return _records_from_result(result, source_dir, session)
+    records = _records_from_result(result, source_dir, session)
+    _validate_record_fields(records)
+    _write_field_manifest(source_dir, advertiser_id, start_date, end_date, order_by, records)
+    return records
