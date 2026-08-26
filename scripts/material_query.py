@@ -168,17 +168,22 @@ def _matches(value, item):
 
 def _metrics_for_row(row, registry):
     metrics = {}
+    unavailable = set()
     for entry in registry.entries():
         if entry["kind"] != "atomic_metric":
             continue
         raw = _value_at(row, entry["source"])
-        if raw is not None:
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            unavailable.add(entry["id"])
+        else:
             metrics[entry["id"]] = _decimal(raw, entry["id"])
-    return metrics
+    return metrics, unavailable
 
 
-def _derived_metrics(metrics, registry):
+def _derived_metrics(metrics, registry, unavailable=()):
     result = dict(metrics)
+    for field in unavailable:
+        result[field] = None
     for entry in registry.entries():
         if entry["kind"] != "derived_metric":
             continue
@@ -191,15 +196,20 @@ def _derived_metrics(metrics, registry):
 
 def execute_material_query(raw_rows, raw_query, registry):
     query = parse_query_config(raw_query, registry)
+    raw_rows = list(raw_rows)
     aggregates = {}
     excluded = []
     aigc_source_row_count = 0
-    for row in raw_rows:
+    skipped_source_record_count = 0
+    material_id_source = registry.require("material_id")["source"]
+    for source_row_index, row in enumerate(raw_rows, start=1):
         if not isinstance(row, dict):
             raise MaterialQueryError("material report record must be an object")
-        material_id = _text(_value_at(row, registry.require("material_id")["source"]))
+        material_id = _text(_value_at(row, material_id_source))
         if not material_id:
-            raise MaterialQueryError("material report material ID is missing")
+            skipped_source_record_count += 1
+            excluded.append({"sourceRowIndex": source_row_index, "reason": "missing_material_id"})
+            continue
         if material_id == _AIGC_DYNAMIC_CREATIVE_MATERIAL_ID:
             aigc_source_row_count += 1
             continue
@@ -207,11 +217,27 @@ def execute_material_query(raw_rows, raw_query, registry):
             entry["id"]: _text(_value_at(row, entry["source"]))
             for entry in registry.entries() if entry["kind"] == "dimension"
         }
+        unavailable_dimension = next(
+            (item for item in query["dimensionFilters"] if not dimensions.get(item["field"])),
+            None,
+        )
+        if unavailable_dimension is not None:
+            excluded.append({
+                "materialId": material_id,
+                "reason": "unavailable_dimension_value",
+                "field": unavailable_dimension["field"],
+            })
+            continue
         if any(not _matches(dimensions[item["field"]], item) for item in query["dimensionFilters"]):
             excluded.append({"materialId": material_id, "reason": "dimension_filter"})
             continue
-        aggregate = aggregates.setdefault(material_id, {"dimensions": dimensions, "metrics": {}})
-        for key, value in _metrics_for_row(row, registry).items():
+        aggregate = aggregates.setdefault(
+            material_id,
+            {"dimensions": dimensions, "metrics": {}, "unavailableMetrics": set()},
+        )
+        row_metrics, row_unavailable = _metrics_for_row(row, registry)
+        aggregate["unavailableMetrics"].update(row_unavailable)
+        for key, value in row_metrics.items():
             aggregate["metrics"][key] = aggregate["metrics"].get(key, Decimal("0")) + value
 
     if aigc_source_row_count:
@@ -223,7 +249,7 @@ def execute_material_query(raw_rows, raw_query, registry):
 
     candidates = []
     for material_id, aggregate in sorted(aggregates.items()):
-        metrics = _derived_metrics(aggregate["metrics"], registry)
+        metrics = _derived_metrics(aggregate["metrics"], registry, aggregate["unavailableMetrics"])
         unavailable = any(metrics.get(item["field"]) is None for item in query["metricFilters"])
         if unavailable or any(not _matches(metrics[item["field"]], item) for item in query["metricFilters"]):
             excluded.append({"materialId": material_id, "reason": "unavailable_metric_value" if unavailable else "metric_filter"})
@@ -252,8 +278,14 @@ def execute_material_query(raw_rows, raw_query, registry):
         "query": query,
         "sort": query["sort"],
         "candidateCount": len(aggregates),
+        "sourceRecordCount": len(raw_rows),
+        "skippedSourceRecordCount": skipped_source_record_count,
         "passedCount": len(candidates),
         "returnedCount": len(materials),
         "excluded": excluded,
+        "exclusionSummary": {
+            reason: sum(1 for item in excluded if item["reason"] == reason)
+            for reason in sorted({item["reason"] for item in excluded})
+        },
     }
     return {"materials": materials, "receipt": receipt}

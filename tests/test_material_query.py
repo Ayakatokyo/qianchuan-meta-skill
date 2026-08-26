@@ -122,3 +122,49 @@ class MaterialQueryTests(unittest.TestCase):
 
         self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1"])
         self.assertEqual(result["receipt"]["query"]["shopId"], "shop-1")
+
+    def test_skips_missing_material_id_without_aborting_other_candidates(self):
+        broken = origin_row("m-broken", "缺失ID", "直播素材", 99, 99)
+        del broken["dimensions"]["material_id"]
+        result = execute_material_query(
+            [broken, origin_row("m-1", "可用素材", "直播素材", 10, 20)],
+            self.query,
+            self.registry,
+        )
+
+        self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1"])
+        self.assertEqual(result["receipt"]["sourceRecordCount"], 2)
+        self.assertEqual(result["receipt"]["skippedSourceRecordCount"], 1)
+        self.assertIn(
+            {"sourceRowIndex": 1, "reason": "missing_material_id"},
+            result["receipt"]["excluded"],
+        )
+
+    def test_excludes_missing_active_dimension_with_a_data_quality_reason(self):
+        broken = origin_row("m-broken", "缺少类型", "直播素材", 10, 20)
+        del broken["dimensions"]["roi2_material_type_v3"]
+        result = execute_material_query(
+            [broken, origin_row("m-1", "可用素材", "直播素材", 10, 20)],
+            self.query,
+            self.registry,
+        )
+
+        self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1"])
+        self.assertIn(
+            {"materialId": "m-broken", "reason": "unavailable_dimension_value", "field": "material_type"},
+            result["receipt"]["excluded"],
+        )
+
+    def test_does_not_sum_partial_metric_rows_as_complete_material(self):
+        first = origin_row("m-1", "素材一", "直播素材", 10, 20)
+        second = origin_row("m-1", "素材一", "直播素材", 10, 20)
+        del second["metrics"]["stat_cost_for_overall_roi2"]
+        query = dict(self.query)
+        query["dimensionFilters"] = []
+        query["metricFilters"] = []
+        query["sort"] = {"field": "overall_cost", "direction": "desc"}
+
+        result = execute_material_query([first, second], query, self.registry)
+
+        self.assertEqual(result["materials"], [])
+        self.assertEqual(result["receipt"]["excluded"][0]["reason"], "unavailable_sort_value")
