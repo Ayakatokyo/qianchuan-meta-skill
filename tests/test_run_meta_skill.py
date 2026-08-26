@@ -234,6 +234,29 @@ class MetaSkillCliTests(unittest.TestCase):
         self.assertEqual(receipt["returnedCount"], 1)
         self.assertFalse((output_dir / "diagnosis-records").exists())
 
+    def test_query_receipt_preserves_source_data_quality_counts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = self.write_config(root)
+            broken = origin_row("m-broken", 99, 99)
+            del broken["dimensions"]["material_id"]
+            output_dir = root / "run"
+            with patch.object(
+                run_meta_skill,
+                "fetch_material_report",
+                return_value=[broken, origin_row("m-1", 10, 20)],
+            ):
+                status = run_meta_skill.main(
+                    ["query", "--config", str(config_path), "--output-dir", str(output_dir)]
+                )
+            receipt = json.loads((output_dir / "query-receipt.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(receipt["source"], {"type": "direct_material_report"})
+        self.assertEqual(receipt["sourceRecordCount"], 2)
+        self.assertEqual(receipt["skippedSourceRecordCount"], 1)
+        self.assertEqual(receipt["exclusionSummary"]["missing_material_id"], 1)
+
     def test_select_frames_uses_configured_policy_without_collecting_rows(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -329,6 +352,44 @@ class MetaSkillCliTests(unittest.TestCase):
         self.assertTrue(receipt["executionAuthorized"])
         self.assertEqual(receipt["stages"]["rpa"]["status"], "succeeded")
         self.assertEqual(receipt["stages"]["batchVerification"]["status"], "succeeded")
+
+    def test_authorized_run_passes_selected_material_and_resolved_period_to_rpa(self):
+        invocation = {}
+
+        def pipeline_side_effect(*_args, **kwargs):
+            fetch_diagnosis = kwargs["fetch_diagnosis"]
+            fetch_diagnosis({"materialId": "m-1"}, {"csv": Path(temp_dir) / "csv"})
+            return {
+                "succeeded": True,
+                "readyPath": str(output_dir / "rpa" / "top_materials_rpa_ready.json"),
+                "verificationPath": str(output_dir / "rpa" / "batch-verification.json"),
+            }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            query_path, highlight_path = self.write_specs(root)
+            output_dir = root / "run"
+
+            def isolated_side_effect(payload, **_kwargs):
+                invocation.update(payload)
+                return {"records": []}
+
+            with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]), patch.object(
+                run_meta_skill, "list_rpa_accounts", return_value={"accountId": "rpa-1", "platform": "RPA"}
+            ), patch.object(run_meta_skill, "run_isolated", side_effect=isolated_side_effect), patch.object(
+                run_meta_skill, "run_rpa_pipeline", side_effect=pipeline_side_effect
+            ):
+                status = run_meta_skill.main(
+                    [
+                        "run", "--execute-rpa", "--query-spec", str(query_path),
+                        "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir),
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(invocation["materialId"], "m-1")
+        self.assertEqual(invocation["startDate"], "2026-08-01")
+        self.assertEqual(invocation["endDate"], "2026-08-07")
 
     def test_run_uses_legacy_config_in_rpa_next_command(self):
         with tempfile.TemporaryDirectory() as temp_dir:
