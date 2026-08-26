@@ -71,9 +71,7 @@ def _normalize_filter(raw, registry, expected_kind):
         entry = registry.validate_operator(field_id, operator)
     except FieldRegistryError as exc:
         raise MaterialQueryError(str(exc)) from exc
-    if entry["kind"] != expected_kind and not (
-        expected_kind == "metric" and entry["kind"] in {"atomic_metric", "derived_metric"}
-    ):
+    if entry["kind"] != expected_kind:
         raise MaterialQueryError("field %s has the wrong filter type" % field_id)
     allowed = _DIMENSION_OPERATORS if expected_kind == "dimension" else _METRIC_OPERATORS
     if operator not in allowed:
@@ -125,7 +123,7 @@ def parse_query_config(raw, registry):
         entry = registry.require(field_id)
     except FieldRegistryError as exc:
         raise MaterialQueryError(str(exc)) from exc
-    if entry["kind"] not in {"atomic_metric", "derived_metric"} or not entry.get("sortable"):
+    if entry["kind"] != "metric" or not entry.get("sortable"):
         raise MaterialQueryError("sort field must be a sortable metric")
     direction = _text(sort.get("direction")).lower()
     if direction not in {"asc", "desc"}:
@@ -170,7 +168,7 @@ def _metrics_for_row(row, registry):
     metrics = {}
     unavailable = set()
     for entry in registry.entries():
-        if entry["kind"] != "atomic_metric":
+        if entry["kind"] != "metric":
             continue
         raw = _value_at(row, entry["source"])
         if raw is None or (isinstance(raw, str) and not raw.strip()):
@@ -180,27 +178,14 @@ def _metrics_for_row(row, registry):
     return metrics, unavailable
 
 
-def _derived_metrics(metrics, registry, unavailable=()):
-    result = dict(metrics)
-    for field in unavailable:
-        result[field] = None
-    for entry in registry.entries():
-        if entry["kind"] != "derived_metric":
-            continue
-        formula = entry["formula"]
-        numerator = result.get(formula["numerator"])
-        denominator = result.get(formula["denominator"])
-        result[entry["id"]] = None if numerator is None or denominator in (None, Decimal("0")) else numerator / denominator
-    return result
-
-
 def execute_material_query(raw_rows, raw_query, registry):
     query = parse_query_config(raw_query, registry)
     raw_rows = list(raw_rows)
-    aggregates = {}
+    candidates = []
     excluded = []
     aigc_source_row_count = 0
     skipped_source_record_count = 0
+    seen_material_ids = set()
     material_id_source = registry.require("material_id")["source"]
     for source_row_index, row in enumerate(raw_rows, start=1):
         if not isinstance(row, dict):
@@ -213,6 +198,9 @@ def execute_material_query(raw_rows, raw_query, registry):
         if material_id == _AIGC_DYNAMIC_CREATIVE_MATERIAL_ID:
             aigc_source_row_count += 1
             continue
+        if material_id in seen_material_ids:
+            raise MaterialQueryError("duplicate material_id in material report: %s" % material_id)
+        seen_material_ids.add(material_id)
         dimensions = {
             entry["id"]: _text(_value_at(row, entry["source"]))
             for entry in registry.entries() if entry["kind"] == "dimension"
@@ -231,25 +219,10 @@ def execute_material_query(raw_rows, raw_query, registry):
         if any(not _matches(dimensions[item["field"]], item) for item in query["dimensionFilters"]):
             excluded.append({"materialId": material_id, "reason": "dimension_filter"})
             continue
-        aggregate = aggregates.setdefault(
-            material_id,
-            {"dimensions": dimensions, "metrics": {}, "unavailableMetrics": set()},
-        )
         row_metrics, row_unavailable = _metrics_for_row(row, registry)
-        aggregate["unavailableMetrics"].update(row_unavailable)
-        for key, value in row_metrics.items():
-            aggregate["metrics"][key] = aggregate["metrics"].get(key, Decimal("0")) + value
-
-    if aigc_source_row_count:
-        excluded.append({
-            "materialId": _AIGC_DYNAMIC_CREATIVE_MATERIAL_ID,
-            "reason": _AIGC_DYNAMIC_CREATIVE_EXCLUSION_REASON,
-            "sourceRowCount": aigc_source_row_count,
-        })
-
-    candidates = []
-    for material_id, aggregate in sorted(aggregates.items()):
-        metrics = _derived_metrics(aggregate["metrics"], registry, aggregate["unavailableMetrics"])
+        metrics = dict(row_metrics)
+        for field in row_unavailable:
+            metrics[field] = None
         unavailable = any(metrics.get(item["field"]) is None for item in query["metricFilters"])
         if unavailable or any(not _matches(metrics[item["field"]], item) for item in query["metricFilters"]):
             excluded.append({"materialId": material_id, "reason": "unavailable_metric_value" if unavailable else "metric_filter"})
@@ -258,16 +231,24 @@ def execute_material_query(raw_rows, raw_query, registry):
         if sort_value is None:
             excluded.append({"materialId": material_id, "reason": "unavailable_sort_value"})
             continue
-        candidates.append({"materialId": material_id, "dimensions": aggregate["dimensions"], "metrics": metrics, "sortValue": sort_value})
+        candidates.append({"materialId": material_id, "dimensions": dimensions, "metrics": metrics, "sortValue": sort_value})
+
+    if aigc_source_row_count:
+        excluded.append({
+            "materialId": _AIGC_DYNAMIC_CREATIVE_MATERIAL_ID,
+            "reason": _AIGC_DYNAMIC_CREATIVE_EXCLUSION_REASON,
+            "sourceRowCount": aigc_source_row_count,
+        })
+
     candidates.sort(key=lambda item: (item["sortValue"], item["materialId"]), reverse=query["sort"]["direction"] == "desc")
     materials = []
     for rank, candidate in enumerate(candidates[:query["topN"]], start=1):
         materials.append({
             "rank": rank,
             "materialId": candidate["materialId"],
-            "materialName": candidate["dimensions"].get("material_name", ""),
-            "materialType": candidate["dimensions"].get("material_type", ""),
-            "videoType": candidate["dimensions"].get("video_type", ""),
+            "materialName": candidate["dimensions"].get("roi2_material_video_name", ""),
+            "materialType": candidate["dimensions"].get("roi2_material_type_v3", ""),
+            "videoType": candidate["dimensions"].get("roi2_material_video_type", ""),
             "rankingMetric": query["sort"]["field"],
             "sortValue": _decimal_text(candidate["sortValue"]),
             "metrics": {key: _decimal_text(value) if value is not None else None for key, value in candidate["metrics"].items()},
@@ -277,7 +258,7 @@ def execute_material_query(raw_rows, raw_query, registry):
         "registryVersion": registry.version,
         "query": query,
         "sort": query["sort"],
-        "candidateCount": len(aggregates),
+        "candidateCount": len(seen_material_ids),
         "sourceRecordCount": len(raw_rows),
         "skippedSourceRecordCount": skipped_source_record_count,
         "passedCount": len(candidates),

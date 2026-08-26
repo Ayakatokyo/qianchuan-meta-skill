@@ -11,20 +11,20 @@
     "topN": 9,
     "dimensionFilters": [
       {
-        "field": "material_type",
+        "field": "roi2_material_type_v3",
         "operator": "eq",
         "value": "直播素材"
       }
     ],
     "metricFilters": [
       {
-        "field": "net_settlement_roi",
+        "field": "total_prepay_and_pay_settle_roi2_1h",
         "operator": "gte",
         "value": 1.2
       }
     ],
     "sort": {
-      "field": "overall_cost",
+      "field": "stat_cost_for_overall_roi2",
       "direction": "desc"
     }
   },

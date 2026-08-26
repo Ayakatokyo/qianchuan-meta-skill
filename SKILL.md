@@ -27,21 +27,21 @@ description: 将千川素材分析的自然语言意图转为 QuerySpec 与 High
   "scope": {"shopId": "授权店铺 ID", "advertiserId": "广告主 ID"},
   "period": {"startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD"},
   "filters": {
-    "dimensionFilters": [{"field": "material_type", "operator": "eq", "value": "直播素材"}],
-    "metricFilters": [{"field": "net_settlement_roi", "operator": "gte", "value": 1.2}]
+    "dimensionFilters": [{"field": "roi2_material_type_v3", "operator": "eq", "value": "直播素材"}],
+    "metricFilters": [{"field": "total_prepay_and_pay_settle_roi2_1h", "operator": "gte", "value": 1.2}]
   },
-  "ranking": {"field": "overall_cost", "direction": "desc"},
+  "ranking": {"field": "stat_cost_for_overall_roi2", "direction": "desc"},
   "collection": {"candidateTopN": 27, "targetTopN": 9}
 }
 ```
 
-排序字段必须是注册表中 `sortable` 的原子或派生指标；方向只能是 `asc` 或 `desc`。已支持的素材维度是 `material_id`、`material_name`、`material_type`、`video_type`、`anchor_id`；支持的投放指标及其派生指标以注册表为准。
+用户以中文业务名表达筛选意图；模型查阅注册表的中文 `label` 后，必须在 QuerySpec 的 `field` 中写入对应 API 原始字段名。排序字段必须是注册表中 `sortable` 的直出指标，方向只能是 `asc` 或 `desc`。已支持的字段全集为固定报表契约中的 8 个素材维度和 102 个指标，完整清单以 `scripts/qianchuan_report_client.py` 的 `DEFAULT_DIMENSIONS` 和 `DEFAULT_METRICS` 为准。API 百分比字段使用其原始百分点，例如 `66.67` 表示 66.67%，而非 0.6667。
 
 ### 原始采集字段
 
-每次日期范围素材汇总查询固定请求 8 个非时间维度和 102 个已验证原始指标，并在 `source-data/field-manifest.json` 写入本次请求的脱敏字段清单。原始字段用于完整落盘与审计；它们不会自动成为 QuerySpec 字段。
+每次日期范围素材汇总查询固定请求 8 个非时间维度和 102 个已验证原始指标，并在 `source-data/field-manifest.json` 写入本次请求的脱敏字段清单。每个已请求字段也已注册为 QuerySpec 字段：维度可用于筛选，102 个指标均可用于筛选和排序。
 
-QuerySpec 仍只能使用 `config/asset-field-registry-v1.json` 的 18 个受控业务字段：5 个素材维度、8 个原子指标、5 个派生指标。未注册的原始指标不得用于筛选或排序。
+QuerySpec 的 `field` 必须来自 `config/asset-field-registry-v1.json`。注册表的 `label` 仅用于将中文意图映射到 API 字段；已确认的前端中文名称会被保留，其他新开放字段暂使用 API 原始名作为技术标签。后续可通过 `metadata.pre_input` 提供客户可选指标的中文引导，不改变此处的 API 字段契约。候选从单条素材汇总结果直接读取，不做本地累加或派生计算；非 AIGC 素材 ID 重复时查询失败。
 
 ### HighlightSpec
 

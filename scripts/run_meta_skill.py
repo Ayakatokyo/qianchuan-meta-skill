@@ -91,12 +91,9 @@ def _write_json(path, payload):
 def _connector_order_by(query, registry):
     entry = registry.require(query["sort"]["field"])
     source = entry.get("source")
-    if isinstance(source, list) and len(source) >= 2 and source[0] == "metrics":
-        field = source[1]
-    else:
-        # Derived metrics are ranked locally after aggregation; overall cost is a stable gateway fallback.
-        field = "stat_cost_for_overall_roi2"
-    return [{"field": field, "type": 2 if query["sort"]["direction"] == "desc" else 1}]
+    if not isinstance(source, list) or len(source) < 2 or source[0] != "metrics":
+        raise MetaSkillError("sort field must map to a direct report metric")
+    return [{"field": source[1], "type": 2 if query["sort"]["direction"] == "desc" else 1}]
 
 
 def collect_report_records(query, output_dir, registry):

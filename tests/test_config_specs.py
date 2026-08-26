@@ -28,10 +28,10 @@ def query_spec(**overrides):
         "scope": {"shopId": "shop-1", "advertiserId": "1770096415226951"},
         "period": {"startDate": "2026-08-01", "endDate": "2026-08-07"},
         "filters": {
-            "dimensionFilters": [{"field": "material_type", "operator": "eq", "value": "直播素材"}],
-            "metricFilters": [{"field": "net_settlement_roi", "operator": "gte", "value": 1.5}],
+            "dimensionFilters": [{"field": "roi2_material_type_v3", "operator": "eq", "value": "直播素材"}],
+            "metricFilters": [{"field": "total_prepay_and_pay_settle_roi2_1h", "operator": "gte", "value": 1.5}],
         },
-        "ranking": {"field": "overall_cost", "direction": "desc"},
+        "ranking": {"field": "stat_cost_for_overall_roi2", "direction": "desc"},
         "collection": {"targetTopN": 9},
     }
     spec.update(overrides)
@@ -60,10 +60,10 @@ class ConfigSpecTests(unittest.TestCase):
         resolved = resolve_query_spec(query_spec(), self.registry)
         query = query_spec_to_query_config(resolved)
 
-        self.assertEqual(resolved["filters"]["dimensionFilters"][0]["field"], "material_type")
+        self.assertEqual(resolved["filters"]["dimensionFilters"][0]["field"], "roi2_material_type_v3")
         self.assertEqual(query["shopId"], "shop-1")
         self.assertEqual(query["topN"], 9)
-        self.assertEqual(query["sort"], {"field": "overall_cost", "direction": "desc"})
+        self.assertEqual(query["sort"], {"field": "stat_cost_for_overall_roi2", "direction": "desc"})
         self.assertEqual(query["metricFilters"][0]["value"], "1.5")
 
     def test_query_spec_defaults_candidate_pool_to_target_and_accepts_larger_pool(self):

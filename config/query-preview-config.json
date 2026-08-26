@@ -12,7 +12,7 @@
     "dimensionFilters": [],
     "metricFilters": [],
     "sort": {
-      "field": "overall_cost",
+      "field": "stat_cost_for_overall_roi2",
       "direction": "desc"
     }
   },

@@ -29,20 +29,20 @@ def origin_row(material_id, cost, amount):
 
 
 class MetaSkillCliTests(unittest.TestCase):
-    def test_connector_order_by_maps_atomic_and_derived_rankings(self):
+    def test_connector_order_by_uses_direct_api_metric_rankings(self):
         registry = load_field_registry(run_meta_skill.REGISTRY_PATH)
 
         self.assertEqual(
             run_meta_skill._connector_order_by(
-                {"sort": {"field": "net_settlement_amount", "direction": "asc"}}, registry
+                {"sort": {"field": "total_order_settle_amount_for_roi2_1h", "direction": "asc"}}, registry
             ),
             [{"field": "total_order_settle_amount_for_roi2_1h", "type": 1}],
         )
         self.assertEqual(
             run_meta_skill._connector_order_by(
-                {"sort": {"field": "net_settlement_roi", "direction": "desc"}}, registry
+                {"sort": {"field": "total_prepay_and_pay_settle_roi2_1h", "direction": "desc"}}, registry
             ),
-            [{"field": "stat_cost_for_overall_roi2", "type": 2}],
+            [{"field": "total_prepay_and_pay_settle_roi2_1h", "type": 2}],
         )
 
     def write_config(self, directory):
@@ -59,7 +59,7 @@ class MetaSkillCliTests(unittest.TestCase):
                         "topN": 1,
                         "dimensionFilters": [],
                         "metricFilters": [],
-                        "sort": {"field": "overall_cost", "direction": "desc"},
+                        "sort": {"field": "stat_cost_for_overall_roi2", "direction": "desc"},
                     },
                     "highlightPolicy": {
                         "schemaVersion": 1,
@@ -84,7 +84,7 @@ class MetaSkillCliTests(unittest.TestCase):
                     "scope": {"shopId": "shop-1", "advertiserId": "1770096415226951"},
                     "period": {"startDate": "2026-08-01", "endDate": "2026-08-07"},
                     "filters": {"dimensionFilters": [], "metricFilters": []},
-                    "ranking": {"field": "overall_cost", "direction": "desc"},
+                    "ranking": {"field": "stat_cost_for_overall_roi2", "direction": "desc"},
                     "collection": {"targetTopN": 1},
                 },
                 ensure_ascii=False,
@@ -201,7 +201,7 @@ class MetaSkillCliTests(unittest.TestCase):
             config_path = self.write_config(Path(temp_dir))
             payload = json.loads(config_path.read_text(encoding="utf-8"))
             payload["query"]["metricFilters"] = [
-                {"field": "net_settlement_roi", "operator": "gte", "value": 1.2}
+                {"field": "total_prepay_and_pay_settle_roi2_1h", "operator": "gte", "value": 1.2}
             ]
             config_path.write_text(json.dumps(payload), encoding="utf-8")
             with patch("builtins.print") as output:

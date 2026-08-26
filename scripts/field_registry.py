@@ -21,7 +21,7 @@ class FieldRegistry:
             field_id = str(entry.get("id") or "").strip()
             if not field_id or field_id in self._entries:
                 raise FieldRegistryError("field registry has an invalid or duplicate id")
-            if entry.get("kind") not in {"dimension", "atomic_metric", "derived_metric"}:
+            if entry.get("kind") not in {"dimension", "metric"}:
                 raise FieldRegistryError("field registry has an invalid field kind")
             operators = entry.get("operators")
             if not isinstance(operators, list) or not all(isinstance(item, str) for item in operators):

@@ -10,7 +10,7 @@ from field_registry import load_field_registry  # noqa: E402
 from material_query import MaterialQueryError, execute_material_query, parse_query_config  # noqa: E402
 
 
-def origin_row(material_id, name, material_type, cost, net_settlement):
+def origin_row(material_id, name, material_type, cost, net_settlement, roi):
     return {
         "dimensions": {
             "material_id": {"Value": material_id},
@@ -21,6 +21,7 @@ def origin_row(material_id, name, material_type, cost, net_settlement):
         "metrics": {
             "stat_cost_for_overall_roi2": {"Value": str(cost)},
             "total_order_settle_amount_for_roi2_1h": {"Value": str(net_settlement)},
+            "total_prepay_and_pay_settle_roi2_1h": {"Value": str(roi)},
         },
     }
 
@@ -35,70 +36,68 @@ class MaterialQueryTests(unittest.TestCase):
                 "shopId": "shop-1",
                 "advertiserId": "1770096415226951",
                 "topN": 2,
-                "dimensionFilters": [{"field": "material_type", "operator": "eq", "value": "直播素材"}],
-                "metricFilters": [{"field": "net_settlement_roi", "operator": "gte", "value": 1.5}],
-                "sort": {"field": "net_settlement_roi", "direction": "desc"},
+                "dimensionFilters": [{"field": "roi2_material_type_v3", "operator": "eq", "value": "直播素材"}],
+                "metricFilters": [{"field": "total_prepay_and_pay_settle_roi2_1h", "operator": "gte", "value": 1.5}],
+                "sort": {"field": "total_prepay_and_pay_settle_roi2_1h", "direction": "desc"},
             },
             self.registry,
         )
 
-    def test_filters_after_period_aggregation_and_sorts_by_derived_roi(self):
+    def test_filters_and_sorts_direct_api_values_without_deriving_metrics(self):
         result = execute_material_query(
             [
-                origin_row("m-1", "素材一", "直播素材", 10, 10),
-                origin_row("m-1", "素材一", "直播素材", 10, 30),
-                origin_row("m-2", "素材二", "直播素材", 10, 40),
-                origin_row("m-3", "素材三", "图文", 10, 100),
+                origin_row("m-1", "素材一", "直播素材", 10, 10, 1.5),
+                origin_row("m-2", "素材二", "直播素材", 10, 40, 2),
+                origin_row("m-3", "素材三", "图文", 10, 100, 10),
             ],
             self.query,
             self.registry,
         )
 
         self.assertEqual([item["materialId"] for item in result["materials"]], ["m-2", "m-1"])
-        self.assertEqual(result["receipt"]["sort"]["field"], "net_settlement_roi")
-        self.assertEqual(result["materials"][0]["sortValue"], "4")
-        self.assertEqual(result["materials"][0]["metrics"]["overall_cost"], "10")
+        self.assertEqual(result["receipt"]["sort"]["field"], "total_prepay_and_pay_settle_roi2_1h")
+        self.assertEqual(result["materials"][0]["sortValue"], "2")
+        self.assertEqual(result["materials"][0]["metrics"]["total_prepay_and_pay_settle_roi2_1h"], "2")
         self.assertEqual(result["receipt"]["excluded"][0]["materialId"], "m-3")
 
-    def test_rejects_unknown_fields_and_excludes_zero_denominator(self):
+    def test_rejects_business_aliases_and_uses_direct_zero_values(self):
         invalid = dict(self.query)
-        invalid["sort"] = {"field": "arbitrary_sql", "direction": "desc"}
+        invalid["sort"] = {"field": "net_settlement_roi", "direction": "desc"}
         with self.assertRaisesRegex(MaterialQueryError, "unknown field"):
             execute_material_query([], invalid, self.registry)
 
+        query = dict(self.query)
+        query["metricFilters"] = [{"field": "total_prepay_and_pay_settle_roi2_1h", "operator": "eq", "value": 0}]
+        query["sort"] = {"field": "stat_cost_for_overall_roi2", "direction": "desc"}
         result = execute_material_query(
-            [origin_row("m-1", "素材一", "直播素材", 0, 30)], self.query, self.registry
+            [origin_row("m-1", "素材一", "直播素材", 0, 30, 0)], query, self.registry
         )
-        self.assertEqual(result["materials"], [])
-        self.assertEqual(result["receipt"]["excluded"][0]["reason"], "unavailable_metric_value")
+        self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1"])
 
-    def test_excludes_aigc_dynamic_creative_collection_before_aggregation(self):
+    def test_excludes_aigc_dynamic_creative_collection_before_duplicate_validation(self):
         query = dict(self.query)
         query["dimensionFilters"] = []
         query["metricFilters"] = []
-        query["sort"] = {"field": "overall_cost", "direction": "desc"}
+        query["sort"] = {"field": "stat_cost_for_overall_roi2", "direction": "desc"}
         result = execute_material_query(
             [
-                origin_row("-2", "AIGC 动态创意", "直播素材", 100, 100),
-                origin_row("-2", "AIGC 动态创意", "直播素材", 200, 200),
-                origin_row("m-1", "可映射素材", "直播素材", 10, 10),
+                origin_row("-2", "AIGC 动态创意", "直播素材", 100, 100, 1),
+                origin_row("-2", "AIGC 动态创意", "直播素材", 200, 200, 1),
+                origin_row("m-1", "可映射素材", "直播素材", 10, 10, 1),
             ],
             query,
             self.registry,
         )
 
         self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1"])
-        aigc_exclusions = [
-            item for item in result["receipt"]["excluded"]
-            if item["reason"] == "aigc_dynamic_creative_collection_not_single_material"
-        ]
-        self.assertEqual(aigc_exclusions, [
+        self.assertIn(
             {
                 "materialId": "-2",
                 "reason": "aigc_dynamic_creative_collection_not_single_material",
                 "sourceRowCount": 2,
-            }
-        ])
+            },
+            result["receipt"]["excluded"],
+        )
 
     def test_requires_shop_id_and_accepts_direct_report_records(self):
         raw_query = {
@@ -108,26 +107,24 @@ class MaterialQueryTests(unittest.TestCase):
             "topN": 1,
             "dimensionFilters": [],
             "metricFilters": [],
-            "sort": {"field": "overall_cost", "direction": "desc"},
+            "sort": {"field": "stat_cost_for_overall_roi2", "direction": "desc"},
         }
         with self.assertRaisesRegex(MaterialQueryError, "shopId"):
             parse_query_config(raw_query, self.registry)
 
         raw_query["shopId"] = "shop-1"
         result = execute_material_query(
-            [origin_row("m-1", "素材一", "直播素材", 10, 20)],
-            raw_query,
-            self.registry,
+            [origin_row("m-1", "素材一", "直播素材", 10, 20, 2)], raw_query, self.registry
         )
 
         self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1"])
         self.assertEqual(result["receipt"]["query"]["shopId"], "shop-1")
 
     def test_skips_missing_material_id_without_aborting_other_candidates(self):
-        broken = origin_row("m-broken", "缺失ID", "直播素材", 99, 99)
+        broken = origin_row("m-broken", "缺失ID", "直播素材", 99, 99, 2)
         del broken["dimensions"]["material_id"]
         result = execute_material_query(
-            [broken, origin_row("m-1", "可用素材", "直播素材", 10, 20)],
+            [broken, origin_row("m-1", "可用素材", "直播素材", 10, 20, 2)],
             self.query,
             self.registry,
         )
@@ -135,36 +132,60 @@ class MaterialQueryTests(unittest.TestCase):
         self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1"])
         self.assertEqual(result["receipt"]["sourceRecordCount"], 2)
         self.assertEqual(result["receipt"]["skippedSourceRecordCount"], 1)
-        self.assertIn(
-            {"sourceRowIndex": 1, "reason": "missing_material_id"},
-            result["receipt"]["excluded"],
-        )
+        self.assertIn({"sourceRowIndex": 1, "reason": "missing_material_id"}, result["receipt"]["excluded"])
 
     def test_excludes_missing_active_dimension_with_a_data_quality_reason(self):
-        broken = origin_row("m-broken", "缺少类型", "直播素材", 10, 20)
+        broken = origin_row("m-broken", "缺少类型", "直播素材", 10, 20, 2)
         del broken["dimensions"]["roi2_material_type_v3"]
         result = execute_material_query(
-            [broken, origin_row("m-1", "可用素材", "直播素材", 10, 20)],
+            [broken, origin_row("m-1", "可用素材", "直播素材", 10, 20, 2)],
             self.query,
             self.registry,
         )
 
         self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1"])
         self.assertIn(
-            {"materialId": "m-broken", "reason": "unavailable_dimension_value", "field": "material_type"},
+            {"materialId": "m-broken", "reason": "unavailable_dimension_value", "field": "roi2_material_type_v3"},
             result["receipt"]["excluded"],
         )
 
-    def test_does_not_sum_partial_metric_rows_as_complete_material(self):
-        first = origin_row("m-1", "素材一", "直播素材", 10, 20)
-        second = origin_row("m-1", "素材一", "直播素材", 10, 20)
-        del second["metrics"]["stat_cost_for_overall_roi2"]
+    def test_excludes_missing_active_metric_with_a_data_quality_reason(self):
+        broken = origin_row("m-broken", "缺少ROI", "直播素材", 10, 20, 2)
+        del broken["metrics"]["total_prepay_and_pay_settle_roi2_1h"]
+        result = execute_material_query(
+            [broken, origin_row("m-1", "可用素材", "直播素材", 10, 20, 2)],
+            self.query,
+            self.registry,
+        )
+
+        self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1"])
+        self.assertIn(
+            {"materialId": "m-broken", "reason": "unavailable_metric_value"}, result["receipt"]["excluded"]
+        )
+
+    def test_rejects_duplicate_non_aigc_material_ids(self):
+        with self.assertRaisesRegex(MaterialQueryError, "duplicate material_id"):
+            execute_material_query(
+                [
+                    origin_row("m-1", "素材一", "直播素材", 10, 20, 2),
+                    origin_row("m-1", "素材一", "直播素材", 20, 40, 2),
+                ],
+                self.query,
+                self.registry,
+            )
+
+    def test_accepts_a_newly_exposed_metric_for_filtering_and_ranking(self):
+        first = origin_row("m-1", "素材一", "直播素材", 10, 20, 2)
+        second = origin_row("m-2", "素材二", "直播素材", 20, 30, 3)
+        first["metrics"]["video_play_finish_rate_for_roi2_v2"] = {"Value": "10"}
+        second["metrics"]["video_play_finish_rate_for_roi2_v2"] = {"Value": "30"}
         query = dict(self.query)
-        query["dimensionFilters"] = []
-        query["metricFilters"] = []
-        query["sort"] = {"field": "overall_cost", "direction": "desc"}
+        query["metricFilters"] = [
+            {"field": "video_play_finish_rate_for_roi2_v2", "operator": "gte", "value": 20}
+        ]
+        query["sort"] = {"field": "video_play_finish_rate_for_roi2_v2", "direction": "desc"}
 
         result = execute_material_query([first, second], query, self.registry)
 
-        self.assertEqual(result["materials"], [])
-        self.assertEqual(result["receipt"]["excluded"][0]["reason"], "unavailable_sort_value")
+        self.assertEqual([item["materialId"] for item in result["materials"]], ["m-2"])
+        self.assertEqual(result["materials"][0]["rankingMetric"], "video_play_finish_rate_for_roi2_v2")
