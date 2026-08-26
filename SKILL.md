@@ -37,6 +37,12 @@ description: 将千川素材分析的自然语言意图转为 QuerySpec 与 High
 
 排序字段必须是注册表中 `sortable` 的原子或派生指标；方向只能是 `asc` 或 `desc`。已支持的素材维度是 `material_id`、`material_name`、`material_type`、`video_type`、`anchor_id`；支持的投放指标及其派生指标以注册表为准。
 
+### 原始采集字段
+
+每次日期范围素材汇总查询固定请求 8 个非时间维度和 102 个已验证原始指标，并在 `source-data/field-manifest.json` 写入本次请求的脱敏字段清单。原始字段用于完整落盘与审计；它们不会自动成为 QuerySpec 字段。
+
+QuerySpec 仍只能使用 `config/asset-field-registry-v1.json` 的 18 个受控业务字段：5 个素材维度、8 个原子指标、5 个派生指标。未注册的原始指标不得用于筛选或排序。
+
 ### HighlightSpec
 
 ```json
