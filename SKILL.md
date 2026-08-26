@@ -1,22 +1,26 @@
 ---
 name: qianchuan-meta-skill
-description: 将千川素材分析的自然语言意图转为 QuerySpec 与 HighlightSpec，再由直接报表连接器和受控 RPA 流程确定性筛选候选素材、获取诊断数据并选择本地高光帧；不执行 AI 商业分析、报告生成或用户专属技能生成。
+description: 适用于按店铺、广告主和日期范围筛选千川素材，按投放指标排序取 Top N，并执行受控 RPA 诊断和本地高光帧提取的场景。
+argument_hint: 依次输入查询范围、指标筛选和高光帧规则；指标可用中文表达，系统会生成使用 API 原始字段名的 QuerySpec 和 HighlightSpec。
+metadata:
+  pre_input: 请按以下三组提供千川素材采集条件。查询范围：授权店铺 ID 是 ____（必填）；广告主 ID 是 ____（必填）；日期范围是 ____ 至 ____（必填，YYYY-MM-DD）。指标筛选：筛选条件是 ____（可选，例如综合消耗 >= 1000、净成交 ROI >= 1.2、视频完播率 >= 20）；排序指标是 ____（必填，例如综合消耗、净成交金额、净成交 ROI、净成交订单成本）；排序方向是 ____（升序或降序，必填）；目标 Top N 是 ____（正整数，必填）。高光帧规则：是否保留第 0 秒帧（是/否）；点击、流失、点赞、评论、分享、新增粉丝分别是否启用；每项启用指标按波峰（local_peaks）或全局最大值（global_maximum）选帧，并指定帧数。（例如：保留第 0 秒帧，点赞按波峰取 2 帧，分享取全局最大值 1 帧。）
 ---
 
 # 千川素材分析元技能
 
-当前能力覆盖受控素材查询、RPA 诊断、视频临时下载和高光帧策略配置。它采用“模型理解需求，脚本确定性执行”的分层：模型不得直接调用接口或自由生成字段，只能将意图转化为下述两份 JSON；当请求所需信息完整时，CLI 可直接严格校验、取数、筛选、RPA 执行和审计落盘。
+该技能只负责受控素材查询、RPA 诊断、临时视频下载和高光帧资产；不生成 AI 商业分析、报告或用户专属技能。模型将自然语言解析为 Spec，脚本负责校验、取数、筛选、RPA、抽帧与审计落盘。
 
-## 自然语言到 Spec
+## 输入
 
-面对用户的自然语言需求，先提取以下信息并生成两份 JSON：
+自然语言入口从同一请求解析 `QuerySpec` 和 `HighlightSpec`；文件入口直接读取已保存的两份 JSON。解析成功后立即落盘并执行，缺少必填项或字段不合法时反馈具体错误。除用户明确要求预览、草稿或人工确认外，不等待二次确认。
 
-- `QuerySpec`：店铺/广告主作用域、日期范围、素材维度筛选、投放指标筛选、排序指标和升降序、目标 Top N。
-- `HighlightSpec`：是否保留第 0 秒封面帧，以及六项互动指标各自启用/禁用、选帧策略和帧数。
+### 查询范围
 
-缺少店铺、广告主、日期、排序、Top N 或任一互动指标的规则时，必须向用户追问，或将未使用指标显式写为 `enabled: false`。信息完整时直接执行查询；仅当用户明确要求预览、草稿或人工确认时，才在执行前回显 Spec 等待确认。
+`shopId` 与 `advertiserId` 都必填且属于不同 ID 域：前者只用于报表连接器授权，后者只用于报表业务筛选。日期范围为闭区间，起止日期均使用 `YYYY-MM-DD`。字段和操作符只能来自 `config/asset-field-registry-v1.json`；维度和指标条件按 `AND` 处理。
 
-`shopId` 与 `advertiserId` 都必填且属于不同 ID 域：前者只用于报表连接器授权，后者只用于报表业务筛选。字段和操作符只能来自 `config/asset-field-registry-v1.json`；维度和指标条件按 `AND` 处理。
+### 指标筛选
+
+客户以中文指标名表达阈值、排序和目标 Top N，例如“净成交 ROI >= 1.2，按净成交金额降序取 Top 5”。未给出阈值时 `metricFilters` 为空；客户不需要输入候选补位数。
 
 ### QuerySpec
 
@@ -27,23 +31,23 @@ description: 将千川素材分析的自然语言意图转为 QuerySpec 与 High
   "scope": {"shopId": "授权店铺 ID", "advertiserId": "广告主 ID"},
   "period": {"startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD"},
   "filters": {
-    "dimensionFilters": [{"field": "roi2_material_type_v3", "operator": "eq", "value": "直播素材"}],
+    "dimensionFilters": [],
     "metricFilters": [{"field": "total_prepay_and_pay_settle_roi2_1h", "operator": "gte", "value": 1.2}]
   },
-  "ranking": {"field": "stat_cost_for_overall_roi2", "direction": "desc"},
-  "collection": {"candidateTopN": 27, "targetTopN": 9}
+  "ranking": {"field": "total_order_settle_amount_for_roi2_1h", "direction": "desc"},
+  "collection": {"targetTopN": 5}
 }
 ```
 
-用户以中文业务名表达筛选意图；模型查阅注册表的中文 `label` 后，必须在 QuerySpec 的 `field` 中写入对应 API 原始字段名。排序字段必须是注册表中 `sortable` 的直出指标，方向只能是 `asc` 或 `desc`。已支持的字段全集为固定报表契约中的 8 个素材维度和 102 个指标，完整清单以 `scripts/qianchuan_report_client.py` 的 `DEFAULT_DIMENSIONS` 和 `DEFAULT_METRICS` 为准。API 百分比字段使用其原始百分点，例如 `66.67` 表示 66.67%，而非 0.6667。
+用户以中文业务名表达筛选意图；模型查阅注册表的中文 `label` 后，必须在 QuerySpec 的 `field` 中写入对应 API 原始字段名。固定报表契约的 102 个指标均可用于 `metricFilters` 和 `ranking.field`，方向只能是 `asc` 或 `desc`。API 百分比字段使用其原始百分点，例如 `66.67` 表示 66.67%，而非 0.6667。
 
 ### 原始采集字段
 
 每次日期范围素材汇总查询固定请求 8 个非时间维度和 102 个已验证原始指标，并在 `source-data/field-manifest.json` 写入本次请求的脱敏字段清单。每个已请求字段也已注册为 QuerySpec 字段：维度可用于筛选，102 个指标均可用于筛选和排序。
 
-QuerySpec 的 `field` 必须来自 `config/asset-field-registry-v1.json`。注册表的 `label` 仅用于将中文意图映射到 API 字段；已确认的前端中文名称会被保留，其他新开放字段暂使用 API 原始名作为技术标签。后续可通过 `metadata.pre_input` 提供客户可选指标的中文引导，不改变此处的 API 字段契约。候选从单条素材汇总结果直接读取，不做本地累加或派生计算；非 AIGC 素材 ID 重复时查询失败。
+QuerySpec 的 `field` 必须来自 `config/asset-field-registry-v1.json`。注册表的 `label` 仅用于将中文意图映射到 API 字段；已确认的前端中文名称会被保留，其他新开放字段暂使用 API 原始名作为技术标签。候选从单条素材汇总结果直接读取，不做本地累加或派生计算；`material_id = -2` 的 AIGC 动态创意集合会排除，其他重复素材 ID 会作为数据质量错误拒绝查询。
 
-### HighlightSpec
+### 高光帧规则
 
 ```json
 {
@@ -86,9 +90,7 @@ python scripts/run_meta_skill.py verify-run \
   --output-dir /path/to/completed-run
 ```
 
-`query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认同样只查询或复用候选工件，并写入 `run-receipt.json`；只有显式传入 `--execute-rpa` 才会解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复，临时下载视频并按 `HighlightSpec` 抽帧。长期工件只保留脱敏回执、诊断 CSV、records、JPEG 和 `top_materials_rpa_ready.json`。`verify-run` 完全离线，不读取凭据或调用外部服务，可校验已完成运行目录的相对路径、哈希、JSON 与 JPEG 工件。
-
-## 高光帧策略
+`query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认同样只查询或复用候选工件，并写入 `run-receipt.json`；只有显式传入 `--execute-rpa` 才会解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复，临时下载视频并按 `HighlightSpec` 抽帧。
 
 独立抽帧仅在已有本地视频与互动曲线时执行，不会发起报表查询；`run` 内部会自动准备这些输入：
 
@@ -102,4 +104,8 @@ python scripts/run_meta_skill.py select-frames \
 
 过渡期仍可用旧合并式 `--config` 入口，但新请求必须优先使用独立的 `--query-spec` 和 `--highlight-spec`。
 
-阶段三的 AI 商业分析 Prompt 标准化、报告生成和阶段四的独立技能生成尚未实现。
+## 产物与恢复
+
+运行目录保存解析后的配置、`source-data/`、候选素材、脱敏查询回执和 `run-receipt.json`；RPA 运行另保存诊断 CSV、records、JPEG 和 `top_materials_rpa_ready.json`。配置、查询范围或高光帧规则变化时必须使用新的输出目录。
+
+`query` 成功不代表 RPA 已完成。RPA 仅在目标数量的素材均成功处理后才完整；失败素材会按保存的排名顺序由后续候选补位，仍不会超过 `targetTopN`。临时视频在高光帧验证后删除，长期工件不保存凭证。`verify-run` 完全离线，可校验已完成目录的相对路径、哈希、JSON 与 JPEG 工件，不读取凭证也不调用外部服务。
