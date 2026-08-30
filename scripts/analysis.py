@@ -6,10 +6,12 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
+import tempfile
 from typing import Any
 
-from fact_pack import verify_fact_pack
+from fact_pack import file_hash_and_size, verify_fact_pack
 
 
 class AnalysisError(ValueError):
@@ -351,8 +353,7 @@ _MODEL_RESULT_SCHEMA_SUMMARY = {
 
 
 def _json_write(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_json(path, payload)
 
 
 def _path_value(value: Any, path: str) -> Any:
@@ -366,12 +367,40 @@ def _path_value(value: Any, path: str) -> Any:
 
 
 def _source_key(ref: dict[str, Any]) -> tuple[Any, ...]:
-    return (ref.get("path"), ref.get("recordIndex"))
+    indexes = ref.get("recordIndexes")
+    if indexes is None and "recordIndex" in ref:
+        indexes = [ref["recordIndex"]]
+    return (ref.get("path"), ref.get("sha256"), ref.get("sizeBytes"), tuple(indexes or []))
 
 
 def _append_ref(refs: list[dict[str, Any]], ref: Any) -> None:
-    if isinstance(ref, dict) and isinstance(ref.get("path"), str) and _source_key(ref) not in {_source_key(item) for item in refs}:
-        refs.append(deepcopy(ref))
+    if not isinstance(ref, dict) or not isinstance(ref.get("path"), str):
+        return
+    indexes = ref.get("recordIndexes")
+    if indexes is None and "recordIndex" in ref:
+        indexes = [ref["recordIndex"]]
+    indexes = sorted({index for index in indexes or [] if type(index) is int and index >= 0})
+    for existing in refs:
+        if (
+            existing.get("path") == ref.get("path")
+            and existing.get("sha256") == ref.get("sha256")
+            and existing.get("sizeBytes") == ref.get("sizeBytes")
+        ):
+            existing_indexes = existing.get("recordIndexes")
+            if existing_indexes is None and "recordIndex" in existing:
+                existing_indexes = [existing["recordIndex"]]
+            merged = sorted({index for index in (existing_indexes or []) + indexes if type(index) is int and index >= 0})
+            if merged:
+                existing["recordIndexes"] = merged
+            existing.pop("recordIndex", None)
+            return
+    normalized = deepcopy(ref)
+    normalized.pop("recordIndex", None)
+    if indexes:
+        normalized["recordIndexes"] = indexes
+    else:
+        normalized.pop("recordIndexes", None)
+    refs.append(normalized)
 
 
 def _collect_refs(value: Any, refs: list[dict[str, Any]]) -> None:
@@ -598,8 +627,30 @@ def compile_model_input(
 
 
 def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(temporary, target)
+    except Exception:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def _write_text(path: Path, content: str) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(temporary, target)
+    except Exception:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def _safe_request(value: Any) -> Any:
@@ -622,9 +673,9 @@ def _fact_pack_payload(fact_pack_dir: Path) -> dict[str, Any]:
 
 def _manifest_ref(run_dir: Path, fact_pack_dir: Path) -> dict[str, Any]:
     path = fact_pack_dir / "manifest.json"
-    data = path.read_bytes()
     relative = path.resolve().relative_to(Path(run_dir).resolve()).as_posix()
-    return {"path": relative, "sha256": hashlib.sha256(data).hexdigest(), "sizeBytes": len(data)}
+    digest, size = file_hash_and_size(path)
+    return {"path": relative, "sha256": digest, "sizeBytes": size}
 
 
 def _request_spec(request: dict[str, Any]) -> dict[str, Any]:
@@ -748,6 +799,25 @@ def _available_input_refs(model_input: dict[str, Any]) -> dict[tuple[Any, ...], 
     return refs
 
 
+def _ref_is_present(ref: dict[str, Any], available: dict[tuple[Any, ...], dict[str, Any]]) -> bool:
+    indexes = ref.get("recordIndexes")
+    if indexes is None and "recordIndex" in ref:
+        indexes = [ref["recordIndex"]]
+    requested = set(indexes or [])
+    for candidate in available.values():
+        if (
+            candidate.get("path") == ref.get("path")
+            and candidate.get("sha256") == ref.get("sha256")
+            and candidate.get("sizeBytes") == ref.get("sizeBytes")
+        ):
+            candidate_indexes = candidate.get("recordIndexes")
+            if candidate_indexes is None and "recordIndex" in candidate:
+                candidate_indexes = [candidate["recordIndex"]]
+            if requested.issubset(set(candidate_indexes or [])):
+                return True
+    return False
+
+
 def _source_path(run_dir: Path, ref: dict[str, Any], label: str) -> Path:
     if not isinstance(ref, dict) or not isinstance(ref.get("path"), str):
         raise AnalysisError(f"{label} must contain a relative source ref")
@@ -764,7 +834,10 @@ def _source_path(run_dir: Path, ref: dict[str, Any], label: str) -> Path:
 
 def _verify_source_ref(run_dir: Path, ref: dict[str, Any], label: str) -> None:
     path = _source_path(run_dir, ref, label)
-    if not path.is_file() or path.stat().st_size != ref.get("sizeBytes") or hashlib.sha256(path.read_bytes()).hexdigest() != ref.get("sha256"):
+    if not path.is_file():
+        raise AnalysisError(f"{label} hash does not match source")
+    digest, size = file_hash_and_size(path)
+    if size != ref.get("sizeBytes") or digest != ref.get("sha256"):
         raise AnalysisError(f"{label} hash does not match source")
 
 
@@ -800,7 +873,7 @@ def validate_analysis_result(result: dict[str, Any], model_input: dict[str, Any]
         if not isinstance(evidence_refs, list) or not evidence_refs:
             raise AnalysisError(f"{label} evidenceRefs must be a nonempty list")
         for ref in evidence_refs:
-            if not isinstance(ref, dict) or _source_key(ref) not in refs or refs[_source_key(ref)] != ref:
+            if not isinstance(ref, dict) or not _ref_is_present(ref, refs):
                 raise AnalysisError(f"{label} evidence ref is not present in model input")
             _verify_source_ref(run_dir, ref, f"{label} evidence ref")
         if claim["claimType"] == "calculation":
@@ -861,7 +934,27 @@ def receive_analysis_result(run_dir: Path, result_path: Path, analysis_dir: Path
     if not isinstance(result, dict):
         return _mark_model_awaiting(analysis_dir, "analysis result must be a JSON object; model handoff is incomplete")
 
+    result_hash, result_size = file_hash_and_size(result_path)
+    receipt_path = analysis_dir / "analysis-receipt.json"
+    if receipt_path.is_file():
+        existing_receipt = _read_json(receipt_path, "analysis receipt")
+        if (
+            existing_receipt.get("status") == "succeeded"
+            and existing_receipt.get("resultSha256") == result_hash
+            and (analysis_dir / "analysis-result.json").is_file()
+            and (analysis_dir / "report.json").is_file()
+            and (analysis_dir / "report.md").is_file()
+        ):
+            return {
+                "status": "succeeded",
+                "errors": [],
+                "report": str(analysis_dir / "report.json"),
+                "reused": True,
+            }
     _write_json(analysis_dir / "analysis-result.json", result)
+    receipt = _read_json(receipt_path, "analysis receipt")
+    receipt.update({"resultSha256": result_hash, "resultSizeBytes": result_size})
+    _write_json(receipt_path, receipt)
     verification = verify_analysis(run_dir, analysis_dir)
     if verification.get("status") != "succeeded":
         for report_name in ("report.json", "report.md"):
@@ -874,33 +967,70 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
     claims_by_type = {claim_type: [] for claim_type in ("fact", "calculation", "inference", "recommendation")}
     for claim in result.get("claims", []):
         claims_by_type.setdefault(claim["claimType"], []).append(deepcopy(claim))
+    chapters = [
+        {"order": 1, "id": "executive_summary", "title": "执行摘要"},
+        {"order": 2, "id": "scope_quality", "title": "范围与质量"},
+        {"order": 3, "id": "material_leaderboard", "title": "素材榜单"},
+        {"order": 4, "id": "audience", "title": "人群分区"},
+        {"order": 5, "id": "scripts", "title": "脚本分区"},
+        {"order": 6, "id": "highlight_frames", "title": "高光帧分区"},
+        {"order": 7, "id": "synthesis", "title": "综合洞察"},
+        {"order": 8, "id": "recommendations", "title": "建议"},
+        {"order": 9, "id": "evidence_limitations", "title": "证据与限制"},
+    ]
     report = {
         "schemaVersion": 1,
         "status": receipt.get("status"),
-        "resultStatus": result.get("status", "unknown"),
+        "resultStatus": result.get("status") or receipt.get("resultStatus") or "verified",
         "completionType": "contract_verified" if result.get("status") == "fixture_only" else "model_result_verified",
         "runId": model_input.get("runId"),
         "promptVersion": model_input.get("promptVersion"),
         "analysisSpec": deepcopy(model_input.get("analysisSpec")),
         "analysisSpecFingerprint": model_input.get("analysisSpecFingerprint"),
         "claimsByType": claims_by_type,
+        "chapters": chapters,
         "missingItems": deepcopy(receipt.get("missingItems", [])),
         "sourceRefs": deepcopy(model_input.get("sourceRefs", [])),
     }
     _write_json(output_dir / "report.json", report)
-    lines = ["# 千川商业分析报告", "", f"- 校验状态：{report['status']}", f"- 结果状态：{report['resultStatus']}", f"- 分析指纹：{report['analysisSpecFingerprint']}", ""]
-    for claim_type, label in (("fact", "事实"), ("calculation", "计算"), ("inference", "AI 推断"), ("recommendation", "建议")):
-        lines.extend([f"## {label}", ""])
-        claims = claims_by_type[claim_type]
-        if not claims:
-            lines.append("（无）")
+    all_claims = [claim for claims in claims_by_type.values() for claim in claims]
+
+    def claim_lines(claims):
+        lines = []
         for claim in claims:
             refs = ", ".join(ref.get("path", "") for ref in claim.get("evidenceRefs", []))
             lines.append(f"- {claim['statement']}（confidence={claim['confidence']}；evidence={refs}）")
-        lines.append("")
+        return lines or ["（无）"]
+
+    selected_sections = set((model_input.get("analysisSpec") or {}).get("sections", []))
+    lines = ["# 千川商业分析报告", "", f"- 校验状态：{report['status']}", f"- 结果状态：{report['resultStatus']}", f"- 分析指纹：{report['analysisSpecFingerprint']}", ""]
+    for chapter in chapters:
+        lines.extend([f"## {chapter['title']}", ""])
+        if chapter["id"] == "executive_summary":
+            lines.extend([f"本报告校验了 {len(all_claims)} 条模型结论，覆盖 {len(selected_sections)} 个选定分区。", ""])
+        elif chapter["id"] == "scope_quality":
+            lines.extend([
+                f"- runId：{model_input.get('runId', '')}",
+                f"- 素材范围：{', '.join(model_input.get('analysisSpec', {}).get('selectedMaterialIds', []))}",
+                f"- 缺失项：{len(report['missingItems'])}", "",
+            ])
+        elif chapter["id"] in {"material_leaderboard", "audience", "scripts", "highlight_frames"}:
+            chapter_claims = [claim for claim in all_claims if claim.get("section") == chapter["id"]]
+            if not chapter_claims and len(selected_sections) == 1 and chapter["id"] in selected_sections:
+                chapter_claims = all_claims
+            lines.extend(claim_lines(chapter_claims) + [""])
+        elif chapter["id"] == "synthesis":
+            lines.extend(claim_lines(claims_by_type["inference"]) + [""])
+        elif chapter["id"] == "recommendations":
+            lines.extend(claim_lines(claims_by_type["recommendation"]) + [""])
+        else:
+            lines.extend([f"- 来源引用数：{len(report['sourceRefs'])}", f"- 缺失项：{len(report['missingItems'])}", ""])
+    for claim_type, label in (("fact", "事实"), ("calculation", "计算"), ("inference", "AI 推断"), ("recommendation", "建议")):
+        lines.extend([f"## {label}", ""])
+        lines.extend(claim_lines(claims_by_type[claim_type]) + [""])
     if report["missingItems"]:
         lines.extend(["## 缺失项", "", *[f"- {item}" for item in report["missingItems"]], ""])
-    (output_dir / "report.md").write_text("\n".join(lines), encoding="utf-8")
+    _write_text(output_dir / "report.md", "\n".join(lines))
 
 
 def verify_analysis(run_dir: Path, analysis_dir: Path | None = None) -> dict[str, Any]:
@@ -958,7 +1088,7 @@ def verify_analysis(run_dir: Path, analysis_dir: Path | None = None) -> dict[str
             receipt.update({"status": status, "validation": {"factPack": fact_result, "errors": errors}})
             _write_json(receipt_path, receipt)
             return {"status": status, "errors": errors}
-        receipt.update({"status": "succeeded", "resultStatus": result.get("status", "unknown"), "errors": [], "validation": {"factPack": fact_result, "result": "succeeded"}, "missingItems": model_input.get("missingItems", [])})
+        receipt.update({"status": "succeeded", "resultStatus": result.get("status") or "verified", "errors": [], "validation": {"factPack": fact_result, "result": "succeeded"}, "missingItems": model_input.get("missingItems", [])})
         _write_json(receipt_path, receipt)
         render_reports(analysis_dir, model_input, result, receipt)
         return {"status": "succeeded", "errors": [], "report": str(analysis_dir / "report.json")}

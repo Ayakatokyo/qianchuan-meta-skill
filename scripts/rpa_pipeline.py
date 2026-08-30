@@ -351,7 +351,7 @@ def _verify(paths, entries, fingerprint, target_top_n):
     return payload
 
 
-def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint, period, options=None, account=None, fetch_diagnosis, postprocess):
+def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint, period, options=None, account=None, fetch_diagnosis, postprocess, progress_callback=None):
     """Execute candidate RPA waves and return a persisted batch outcome.
 
     ``fetch_diagnosis`` and ``postprocess`` isolate external effects for deterministic
@@ -418,6 +418,12 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
         next_index += wave_size
         if not wave:
             continue
+        if progress_callback:
+            for item in wave:
+                try:
+                    progress_callback("rpa_processing", {"completed": sum(_completed(entry) for entry in entries), "total": target_top_n}, item["materialId"])
+                except Exception:
+                    pass
         with ThreadPoolExecutor(max_workers=len(wave)) as executor:
             futures = [executor.submit(process_rpa, entry) for entry in wave]
             wave_results = [future.result() for future in as_completed(futures)]
@@ -436,6 +442,11 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
             except Exception as exc:
                 entry.update({"postprocessStatus": "failed", "status": "failed", "failureReason": getattr(exc, "error_type", "frame_extraction_failed"), "errorType": type(exc).__name__, "errorMessage": str(exc)})
             _persist(paths, entries, configuration_fingerprint, period, options, account)
+            if progress_callback:
+                try:
+                    progress_callback("rpa_processing", {"completed": sum(_completed(item) for item in entries), "total": target_top_n}, entry["materialId"])
+                except Exception:
+                    pass
         _persist(paths, entries, configuration_fingerprint, period, options, account)
 
     verification = _verify(paths, entries, configuration_fingerprint, target_top_n)

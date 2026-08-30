@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 
 from config_specs import (
     ConfigSpecError, highlight_spec_to_policy, legacy_config_to_specs, query_spec_to_query_config,
@@ -34,11 +35,22 @@ class MetaSkillError(RuntimeError):
 
 
 PHASES = (
-    "awaiting_query_input", "querying", "rpa_processing", "fact_pack_ready",
-    "awaiting_analysis_input", "analysis_prepared", "analysis_verified", "report_ready",
+    "awaiting_query_input", "querying", "rpa_processing", "fact_pack_building", "fact_pack_verifying", "fact_pack_ready",
+    "awaiting_analysis_input", "analysis_preparing", "analysis_prepared", "awaiting_model", "analysis_verifying", "analysis_verified", "report_ready",
     "query_failed", "fact_pack_failed", "analysis_failed",
 )
 PHASE_STATES = PHASES
+
+
+_SUCCESSFUL_PHASES = {
+    "querying", "rpa_processing", "fact_pack_building", "fact_pack_verifying", "fact_pack_ready",
+    "awaiting_analysis_input", "analysis_preparing", "analysis_prepared", "awaiting_model",
+    "analysis_verifying", "analysis_verified", "report_ready",
+}
+_TERMINAL_PHASES = {
+    "fact_pack_ready", "awaiting_analysis_input", "analysis_prepared", "awaiting_model",
+    "analysis_verified", "report_ready",
+}
 
 
 def _read_json(path, label, expected_type=dict):
@@ -134,8 +146,46 @@ def _set_run_phase(run_dir, phase, **details):
     if not receipt_path.is_file():
         return
     receipt = _read_json(receipt_path, "run receipt")
+    now = time.time()
+    phase_states = receipt.setdefault("phaseStates", {})
+    previous_phase = receipt.get("phase")
+    if previous_phase and previous_phase != phase:
+        previous = phase_states.setdefault(previous_phase, {"status": "running", "startedAtEpochSec": now})
+        if previous.get("status") == "running":
+            previous["status"] = "succeeded" if phase in _SUCCESSFUL_PHASES else "failed"
+            previous["finishedAtEpochSec"] = now
+            previous["durationSec"] = max(0, now - (previous.get("startedAtEpochSec") or now))
+            if phase in _SUCCESSFUL_PHASES:
+                receipt["lastSuccessfulPhase"] = previous_phase
+    state = phase_states.setdefault(phase, {
+        "status": "running", "startedAtEpochSec": now, "finishedAtEpochSec": None,
+        "durationSec": None, "progress": None, "currentObject": None, "error": None,
+    })
+    state.setdefault("startedAtEpochSec", now)
+    state.setdefault("progress", None)
+    state.setdefault("currentObject", None)
+    state.setdefault("error", None)
+    state["status"] = "failed" if phase.endswith("failed") else "running"
+    if "progress" in details:
+        state["progress"] = details["progress"]
+    if "currentObject" in details:
+        state["currentObject"] = details["currentObject"]
+    if "error" in details and details["error"] is not None:
+        state["error"] = str(details["error"])
+    if details.get("phaseComplete"):
+        state["status"] = "succeeded"
+        state["finishedAtEpochSec"] = now
+        state["durationSec"] = max(0, now - (state.get("startedAtEpochSec") or now))
+    if phase in _TERMINAL_PHASES or details.get("phaseComplete"):
+        state["status"] = "succeeded"
+        state["finishedAtEpochSec"] = now
+        state["durationSec"] = max(0, now - (state.get("startedAtEpochSec") or now))
     receipt["phase"] = phase
-    receipt.update(details)
+    for key, value in details.items():
+        if value is not None:
+            receipt[key] = value
+    if phase in _SUCCESSFUL_PHASES and (phase in _TERMINAL_PHASES or details.get("phaseComplete")):
+        receipt["lastSuccessfulPhase"] = details.get("lastSuccessfulPhase", phase)
     _write_json(receipt_path, receipt)
 
 
@@ -333,6 +383,7 @@ def main(argv=None):
             print(json.dumps(result, ensure_ascii=False))
             return 0
         if args.command == "receive-analysis-result":
+            _set_run_phase(Path(args.run_dir), "analysis_verifying", progress={"completed": 0, "total": 1}, currentObject="analysis-result.json")
             try:
                 result = receive_analysis_result(
                     Path(args.run_dir),
@@ -343,6 +394,8 @@ def main(argv=None):
                 _set_run_phase(Path(args.run_dir), "analysis_failed", error=str(exc))
                 raise
             if result.get("status") == "succeeded":
+                _set_run_phase(Path(args.run_dir), "analysis_verifying", progress={"completed": 1, "total": 1}, currentObject="analysis-result.json", phaseComplete=True)
+                _set_run_phase(Path(args.run_dir), "analysis_verified", lastSuccessfulPhase="analysis_verified")
                 _set_run_phase(
                     Path(args.run_dir),
                     "report_ready",
@@ -350,6 +403,7 @@ def main(argv=None):
                     report=str(result.get("report", "")),
                 )
             elif result.get("status") == "awaiting_model":
+                _set_run_phase(Path(args.run_dir), "awaiting_model", analysisStatus="awaiting_model")
                 _set_run_phase(
                     Path(args.run_dir),
                     "analysis_prepared",
@@ -365,12 +419,15 @@ def main(argv=None):
             print(json.dumps(result, ensure_ascii=False))
             return 0 if result.get("status") in {"succeeded", "awaiting_model"} else 1
         if args.command == "prepare-analysis":
+            _set_run_phase(Path(args.run_dir), "analysis_preparing", progress={"completed": 0, "total": 1}, currentObject="analysis-input.json")
             try:
                 result = prepare_analysis(Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
             except (MetaSkillError, AnalysisError) as exc:
                 _set_run_phase(Path(args.run_dir), "analysis_failed", error=str(exc))
                 raise
             if result.get("status", "").startswith("awaiting_model"):
+                _set_run_phase(Path(args.run_dir), "analysis_preparing", progress={"completed": 1, "total": 1}, currentObject="analysis-input.json", phaseComplete=True)
+                _set_run_phase(Path(args.run_dir), "awaiting_model", lastSuccessfulPhase="awaiting_model")
                 _set_run_phase(
                     Path(args.run_dir),
                     "analysis_prepared",
@@ -379,8 +436,11 @@ def main(argv=None):
             print(json.dumps(result, ensure_ascii=False))
             return 0
         if args.command == "verify-analysis":
+            _set_run_phase(Path(args.run_dir), "analysis_verifying", progress={"completed": 0, "total": 1}, currentObject="analysis-result.json")
             result = verify_analysis(Path(args.run_dir), Path(args.analysis_dir) if args.analysis_dir else None)
             if result.get("status") == "succeeded":
+                _set_run_phase(Path(args.run_dir), "analysis_verifying", progress={"completed": 1, "total": 1}, currentObject="analysis-result.json", phaseComplete=True)
+                _set_run_phase(Path(args.run_dir), "analysis_verified", lastSuccessfulPhase="analysis_verified")
                 _set_run_phase(Path(args.run_dir), "report_ready", lastSuccessfulPhase="analysis_verified", report=str(result.get("report", "")))
             elif result.get("status") in {"failed", "incomplete"}:
                 _set_run_phase(Path(args.run_dir), "analysis_failed", analysisErrors=result.get("errors", []))
@@ -437,6 +497,7 @@ def main(argv=None):
             receipt.finish_stage("query", reused=True)
         if not args.execute_rpa:
             receipt.finish(True)
+            _set_run_phase(output_dir, "querying", progress={"completed": 1, "total": 1}, phaseComplete=True)
             spec_args = "--config %s" % args.config if args.config else "--query-spec %s --highlight-spec %s" % (args.query_spec, args.highlight_spec)
             print("top_materials_json=%s" % (output_dir / "top_materials.json"))
             print("query_receipt=%s" % (output_dir / "query-receipt.json"))
@@ -474,6 +535,9 @@ def main(argv=None):
             account={"accountId": account["accountId"], "platform": account["platform"]},
             fetch_diagnosis=fetch,
             postprocess=build_postprocessor(policy, options),
+            progress_callback=lambda phase, progress, current: _set_run_phase(
+                output_dir, phase, progress=progress, currentObject=current
+            ),
         )
         receipt.finish_stage("rpa")
         receipt.start_stage("batchVerification")
@@ -490,7 +554,9 @@ def main(argv=None):
             return 2
         receipt.finish_stage("batchVerification", verificationPath=outcome["verificationPath"])
         receipt.start_stage("factPack")
+        _set_run_phase(output_dir, "fact_pack_building", progress={"completed": 0, "total": 1}, currentObject="fact-pack")
         manifest = build_fact_pack(output_dir)
+        _set_run_phase(output_dir, "fact_pack_building", progress={"completed": 1, "total": 1}, currentObject="fact-pack", phaseComplete=True)
         receipt.finish_stage(
             "factPack",
             manifestPath=str(output_dir / "fact-pack" / "manifest.json"),
@@ -498,6 +564,7 @@ def main(argv=None):
             counts=manifest["counts"],
         )
         fact_pack_dir = output_dir / "fact-pack"
+        _set_run_phase(output_dir, "fact_pack_verifying", progress={"completed": 0, "total": 1}, currentObject="fact-pack")
         if (fact_pack_dir / "manifest.json").is_file():
             fact_pack_validation = verify_fact_pack(output_dir, fact_pack_dir)
             if fact_pack_validation.get("status") != "succeeded":
@@ -507,6 +574,7 @@ def main(argv=None):
                 _set_run_phase(output_dir, "fact_pack_failed", lastSuccessfulPhase="rpa_processing", factPackValidation=fact_pack_validation)
                 print("fact pack validation failed", file=sys.stderr)
                 return 2
+            _set_run_phase(output_dir, "fact_pack_verifying", progress={"completed": 1, "total": 1}, currentObject="fact-pack", phaseComplete=True)
             handoff = build_fact_pack_handoff(output_dir)
             _write_json(output_dir / "analysis-handoff.json", handoff)
         receipt.finish(True)

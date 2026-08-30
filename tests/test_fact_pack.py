@@ -3,12 +3,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from fact_pack import FactPackError, build_fact_pack, verify_fact_pack  # noqa: E402
+import fact_pack  # noqa: E402
 from run_meta_skill import main as run_meta_skill_main  # noqa: E402
 
 
@@ -104,6 +106,46 @@ def make_run(root, target_top_n, *, no_highlight=False, script_modes=None):
 
 
 class FactPackTests(unittest.TestCase):
+    def test_reuses_one_file_hash_and_aggregates_record_indexes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            make_run(run_dir, 1)
+            records_path = run_dir / "rpa" / "diagnosis-records" / "m-1.json"
+            with patch.object(fact_pack, "_sha256", wraps=fact_pack._sha256) as sha256:
+                manifest = build_fact_pack(run_dir, run_dir / "fact-pack")
+
+            record_hash_calls = [
+                call.args[0].resolve()
+                for call in sha256.call_args_list
+                if call.args[0].resolve() == records_path.resolve()
+            ]
+            record_refs = [
+                ref for ref in manifest["sourceFiles"]
+                if ref["path"] == "rpa/diagnosis-records/m-1.json"
+            ]
+            daily_details = json.loads(
+                (run_dir / "fact-pack" / "material-leaderboard.json").read_text(encoding="utf-8")
+            )["materials"][0]["dailyDetails"]
+
+        self.assertEqual(len(record_hash_calls), 1)
+        self.assertEqual(len(record_refs), 1)
+        self.assertEqual(record_refs[0]["recordIndexes"], [1, 2, 3])
+        self.assertEqual([item["sourceRef"]["recordIndexes"] for item in daily_details], [[1]])
+
+    def test_reads_legacy_single_record_index_refs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.json"
+            source.write_text("{}", encoding="utf-8")
+            legacy = {
+                "path": "source.json",
+                "recordIndex": 7,
+                "sha256": fact_pack._sha256(source),
+                "sizeBytes": source.stat().st_size,
+            }
+
+            fact_pack._verify_file_ref(root, legacy, "legacy source")
+
     def test_builds_top3_top6_and_arbitrary_n_from_successful_target(self):
         for target_top_n in (3, 6, 8):
             with self.subTest(target_top_n=target_top_n), tempfile.TemporaryDirectory() as temp_dir:

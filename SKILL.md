@@ -112,11 +112,11 @@ python scripts/run_meta_skill.py verify-analysis \
 
 事实包按 `targetTopN` 生成以下文件：`material-leaderboard.json`（素材榜单与平台维度字段）、`audience.json`（人群事实）、`scripts.json`（脚本事实）、`highlight-frames.json`（高光帧事实）以及 `manifest.json`/`README.md`。候选池大于目标时，只纳入 RPA 成功选中的目标素材；`scripts.json` 使用 `parseStatus=parsed|missing|failed` 和对应错误码，`highlight-frames.json` 在没有选中帧时使用 `status=no_highlight_frames`，不会把缺失推断为事实。
 
-事实包只保留可追溯事实，不生成商业结论。所有 `sourceRef`/`artifact` 都是运行目录内的相对 POSIX 路径并带 SHA-256 与大小；签名媒体 URL、绝对路径、账号、会话和凭证字段会被移除。`verify-fact-pack` 完全离线校验 TopN、分类计数、来源哈希、JPEG 及敏感字段。
+事实包只保留可追溯事实，不生成商业结论。所有 `sourceRef`/`artifact` 都是运行目录内的相对 POSIX 路径并带 SHA-256 与大小；同一文件的来源引用按文件聚合，记录定位使用 `recordIndexes`，读取时兼容旧版单 `recordIndex`。文件哈希在一次进程运行内按规范化绝对路径缓存，避免对大 records 文件重复计算。签名媒体 URL、绝对路径、账号、会话和凭证字段会被移除。`verify-fact-pack` 完全离线校验 TopN、分类计数、来源哈希、JPEG 及敏感字段。
 
 ## 商业分析交接
 
-采集与商业分析分为两个阶段。阶段一完成查询、RPA、四类事实包和离线校验后，运行状态为 `fact_pack_ready`，阶段一成功后必须停止并提示用户进入阶段二；随后状态为 `awaiting_analysis_input`，不自动生成商业结论。状态链路为：`awaiting_query_input → querying → rpa_processing → fact_pack_ready → awaiting_analysis_input → analysis_prepared → analysis_verified → report_ready`；失败时保留 `query_failed`、`fact_pack_failed` 或 `analysis_failed` 及可重试原因。
+采集与商业分析分为两个阶段。阶段一完成查询、RPA、四类事实包和离线校验后，运行状态为 `fact_pack_ready`，阶段一成功后必须停止并提示用户进入阶段二；随后状态为 `awaiting_analysis_input`，不自动生成商业结论。状态链路为：`awaiting_query_input → querying → rpa_processing → fact_pack_building → fact_pack_verifying → fact_pack_ready → awaiting_analysis_input → analysis_preparing → awaiting_model → analysis_verifying → analysis_verified → report_ready`；长阶段回执持续记录开始/结束时间、进度和当前素材，失败时保留 `query_failed`、`fact_pack_failed` 或 `analysis_failed` 及可重试原因。
 
 阶段一的交接文件为 `analysis-handoff.json`，至少包含 `runId`、`factPackPath`、`factPackManifestSha256`、四类计数、`missingItems` 和 `sourceRefs`。阶段二由用户选择一个或多个 `material_leaderboard`、`audience`、`scripts`、`highlight_frames` 分区，指定全部、TopN 或素材 ID 范围，并用自然语言描述分析目标、关注指标、比较维度、输出形式和深度。
 
@@ -159,7 +159,7 @@ python scripts/run_meta_skill.py receive-analysis-result \
 
 `prepare-analysis` 只允许读取已通过 `verify-fact-pack` 的完整事实包，并写入 `analysis-request.json`、`analysis-spec.json`、`analysis-input.json`、`analysis-receipt.json`。输入只包含声明字段和选择范围的切片；每个来源保留 manifest/sourceRef/哈希。`analysis-input.json` 是模型交接边界，模型应返回 `analysis-result.json`；每条 claim 必须带 `claimType`、`evidenceRefs`、`confidence`，计算另带 formula/inputs。事实、计算、AI 推断、建议在报告中分层；人群结论只能表达相关性，脚本必须引用逐字稿原文，高光帧视觉观察必须标记为 AI 推断并引用 JPEG artifact。
 
-`verify-analysis` 完全离线校验结果契约、事实包、证据路径与哈希，并生成 `report.json`、`report.md`。缺少模型结果、query-only、事实包不完整、请求字段未知、素材越权、缺失类别或未声明计算时，只能保持 `blocked`/`awaiting_model`/`failed`/`incomplete`，禁止声称商业分析完成。任何证据缺失、脚本 `missing|failed` 或无高光帧都不会被推断为零或成功事实。
+`verify-analysis` 完全离线校验结果契约、事实包、证据路径与哈希，并生成 `report.json`、`report.md`。报告固定包含执行摘要、范围与质量、素材榜单/人群/脚本/高光帧四类分区、综合洞察、建议、证据与限制，并保留 `claimsByType` 分层。缺少模型结果、query-only、事实包不完整、请求字段未知、素材越权、缺失类别或未声明计算时，只能保持 `blocked`/`awaiting_model`/`failed`/`incomplete`，禁止声称商业分析完成。任何证据缺失、脚本 `missing|failed` 或无高光帧都不会被推断为零或成功事实。当前 Markdown 为无外部依赖的唯一渲染格式；HTML/PDF 导出属于后续可选扩展，本次链路不依赖也不声称已生成。
 
 独立抽帧仅在已有本地视频与互动曲线时执行，不会发起报表查询；`run` 内部会自动准备这些输入：
 

@@ -552,6 +552,33 @@ class AnalysisResultTests(unittest.TestCase):
         self.assertTrue(report_exists)
         self.assertEqual(receipt["status"], "succeeded")
 
+    def test_reuses_verified_result_when_result_hash_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            model_input = self._prepared_analysis(root)
+            result_path = root / "model-result.json"
+            result_path.write_text(json.dumps({
+                "schemaVersion": 1,
+                "analysisSpecFingerprint": model_input["analysisSpecFingerprint"],
+                "claims": [{
+                    "claimType": "fact",
+                    "statement": "素材一的消耗为 100",
+                    "evidenceRefs": [model_input["sections"]["material_leaderboard"]["evidence"]["rows"][0]["sourceRef"]],
+                    "confidence": 1,
+                }],
+            }, ensure_ascii=False), encoding="utf-8")
+
+            with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}), patch(
+                "analysis.verify_analysis", wraps=verify_analysis
+            ) as verify:
+                first = receive_analysis_result(root, result_path)
+                second = receive_analysis_result(root, result_path)
+
+        self.assertEqual(first["status"], "succeeded")
+        self.assertEqual(second["status"], "succeeded")
+        self.assertTrue(second["reused"])
+        self.assertEqual(verify.call_count, 1)
+
     def test_missing_or_invalid_model_result_stays_awaiting_model_without_report(self):
         for invalid_payload in (None, "not-json"):
             with self.subTest(invalid_payload=invalid_payload), tempfile.TemporaryDirectory() as temp_dir:
@@ -665,8 +692,37 @@ class AnalysisResultTests(unittest.TestCase):
 
         self.assertEqual(report["claimsByType"]["fact"][0]["id"], "f1")
         self.assertEqual(report["claimsByType"]["recommendation"][0]["id"], "i1")
-        self.assertEqual(report["resultStatus"], "unknown")
+        self.assertEqual(report["resultStatus"], "verified")
         self.assertIn("source/facts.json", markdown)
+
+    def test_renders_fixed_business_chapters_in_markdown_order(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            model_input, source_ref = self.model_input(root)
+            result = {
+                "schemaVersion": 1,
+                "analysisSpecFingerprint": "a" * 64,
+                "claims": [{
+                    "id": "f1",
+                    "statement": "事实",
+                    "claimType": "fact",
+                    "evidenceRefs": [source_ref],
+                    "confidence": 1,
+                    "section": "material_leaderboard",
+                }],
+            }
+            render_reports(root / "analysis", model_input, result, {"status": "succeeded", "missingItems": []})
+            report = json.loads((root / "analysis" / "report.json").read_text(encoding="utf-8"))
+            markdown = (root / "analysis" / "report.md").read_text(encoding="utf-8")
+
+        chapter_ids = [chapter["id"] for chapter in report["chapters"]]
+        expected = [
+            "executive_summary", "scope_quality", "material_leaderboard", "audience",
+            "scripts", "highlight_frames", "synthesis", "recommendations", "evidence_limitations",
+        ]
+        self.assertEqual(chapter_ids, expected)
+        positions = [markdown.index("## " + chapter["title"]) for chapter in report["chapters"]]
+        self.assertEqual(positions, sorted(positions))
 
     def test_prepare_real_top6_offline_writes_model_input_and_waits_for_model(self):
         run_dir = ROOT / "runs" / "run-20260810-20260820"

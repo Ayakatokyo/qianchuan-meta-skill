@@ -32,6 +32,30 @@ def origin_row(material_id, cost, amount):
 
 
 class MetaSkillCliTests(unittest.TestCase):
+    def test_phase_receipt_records_progress_and_last_successful_phase(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "run-receipt.json").write_text(json.dumps({"schemaVersion": 1}), encoding="utf-8")
+
+            run_meta_skill._set_run_phase(
+                root,
+                "fact_pack_building",
+                progress={"completed": 1, "total": 3},
+                currentObject="m-1",
+            )
+            run_meta_skill._set_run_phase(
+                root,
+                "fact_pack_ready",
+                lastSuccessfulPhase="fact_pack_ready",
+            )
+            receipt = json.loads((root / "run-receipt.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(receipt["phase"], "fact_pack_ready")
+        self.assertEqual(receipt["phaseStates"]["fact_pack_building"]["progress"], {"completed": 1, "total": 3})
+        self.assertEqual(receipt["phaseStates"]["fact_pack_building"]["currentObject"], "m-1")
+        self.assertEqual(receipt["phaseStates"]["fact_pack_building"]["status"], "succeeded")
+        self.assertEqual(receipt["lastSuccessfulPhase"], "fact_pack_ready")
+
     def test_fact_pack_handoff_summary_contains_phase_counts_and_manifest_hash(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -149,6 +173,8 @@ class MetaSkillCliTests(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertEqual(receipt["phase"], "analysis_prepared")
+        self.assertEqual(receipt["phaseStates"]["analysis_preparing"]["status"], "succeeded")
+        self.assertEqual(receipt["phaseStates"]["awaiting_model"]["status"], "succeeded")
 
     def test_verify_analysis_moves_successful_run_to_report_ready(self):
         with tempfile.TemporaryDirectory() as temp_dir:

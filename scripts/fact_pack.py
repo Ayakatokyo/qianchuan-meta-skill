@@ -31,12 +31,37 @@ class FactPackError(ValueError):
     """Raised when a run cannot be converted into a safe fact pack."""
 
 
+_FILE_HASH_CACHE: dict[str, tuple[str, int, int]] = {}
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def clear_file_hash_cache() -> None:
+    """Clear the process-local file hash cache (primarily useful for tests)."""
+    _FILE_HASH_CACHE.clear()
+
+
+def _cached_file_hash(path: Path) -> tuple[str, int]:
+    path = Path(path).resolve()
+    stat = path.stat()
+    key = os.path.normcase(str(path))
+    cached = _FILE_HASH_CACHE.get(key)
+    if cached and cached[1] == stat.st_size and cached[2] == stat.st_mtime_ns:
+        return cached[0], cached[1]
+    digest = _sha256(path)
+    _FILE_HASH_CACHE[key] = (digest, stat.st_size, stat.st_mtime_ns)
+    return digest, stat.st_size
+
+
+def file_hash_and_size(path: Path) -> tuple[str, int]:
+    """Return a cached SHA-256 and byte size for a regular file."""
+    return _cached_file_hash(path)
 
 
 def _relative_path(run_dir: Path, path: Path) -> str:
@@ -49,14 +74,49 @@ def _relative_path(run_dir: Path, path: Path) -> str:
 def _file_ref(run_dir: Path, path: Path) -> dict[str, Any]:
     if not path.is_file() or path.stat().st_size <= 0:
         raise FactPackError(f"missing or empty source artifact: {path}")
-    return {"path": _relative_path(run_dir, path), "sha256": _sha256(path), "sizeBytes": path.stat().st_size}
+    digest, size = _cached_file_hash(path)
+    return {"path": _relative_path(run_dir, path), "sha256": digest, "sizeBytes": size}
 
 
 def _source_ref(run_dir: Path, path: Path, record_index: int | None = None) -> dict[str, Any]:
     ref = _file_ref(run_dir, path)
     if record_index is not None:
-        ref["recordIndex"] = record_index
+        ref["recordIndexes"] = [record_index]
     return ref
+
+
+def _record_indexes(ref: dict[str, Any]) -> list[int]:
+    indexes = ref.get("recordIndexes")
+    if indexes is None and "recordIndex" in ref:
+        indexes = [ref["recordIndex"]]
+    if not isinstance(indexes, list):
+        return []
+    return sorted({index for index in indexes if type(index) is int and index >= 0})
+
+
+def _aggregate_refs(refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    aggregated: dict[tuple[str, str, int], dict[str, Any]] = {}
+    for ref in refs:
+        if not isinstance(ref, dict) or not isinstance(ref.get("path"), str):
+            continue
+        key = (ref["path"], ref.get("sha256"), ref.get("sizeBytes"))
+        target = aggregated.setdefault(key, {key_name: ref[key_name] for key_name in ("path", "sha256", "sizeBytes")})
+        indexes = sorted(set(target.get("recordIndexes", [])) | set(_record_indexes(ref)))
+        if indexes:
+            target["recordIndexes"] = indexes
+        target.pop("recordIndex", None)
+    return list(aggregated.values())
+
+
+def _collect_source_refs(value: Any, refs: list[dict[str, Any]]) -> None:
+    if isinstance(value, dict):
+        if {"path", "sha256", "sizeBytes"}.issubset(value):
+            refs.append(value)
+        for item in value.values():
+            _collect_source_refs(item, refs)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_source_refs(item, refs)
 
 
 def _load_json(path: Path) -> Any:
@@ -235,7 +295,7 @@ def _build_materials(run_dir: Path, materials_in: list[dict[str, Any]], diagnosi
         for index, detail in detail_rows:
             material["dailyDetails"].append({"record": _sanitize(detail), "sourceRef": _source_ref(run_dir, records_path, index)})
         materials.append(material)
-    return {"schemaVersion": SCHEMA_VERSION, "materials": materials, "sourceRefs": refs}, refs
+    return {"schemaVersion": SCHEMA_VERSION, "materials": materials, "sourceRefs": _aggregate_refs(refs)}, refs
 
 
 def _build_audience(run_dir: Path, material_ids: list[str], diagnosis: dict[str, tuple[Path, list[dict[str, Any]]]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -268,7 +328,7 @@ def _build_audience(run_dir: Path, material_ids: list[str], diagnosis: dict[str,
                 "sourceRef": _source_ref(run_dir, records_path, index),
             })
     status = "available" if facts else "no_audience_facts"
-    return {"schemaVersion": SCHEMA_VERSION, "status": status, "audience": facts, "sourceRefs": refs}, refs
+    return {"schemaVersion": SCHEMA_VERSION, "status": status, "audience": facts, "sourceRefs": _aggregate_refs(refs)}, refs
 
 
 def _build_scripts(run_dir: Path, material_ids: list[str], diagnosis: dict[str, tuple[Path, list[dict[str, Any]]]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -299,7 +359,7 @@ def _build_scripts(run_dir: Path, material_ids: list[str], diagnosis: dict[str, 
             if status == "failed":
                 fact["rawScriptInfo"] = parsed
         facts.append(fact)
-    return {"schemaVersion": SCHEMA_VERSION, "status": "available", "scripts": facts, "sourceRefs": refs}, refs
+    return {"schemaVersion": SCHEMA_VERSION, "status": "available", "scripts": facts, "sourceRefs": _aggregate_refs(refs)}, refs
 
 
 def _build_highlights(run_dir: Path, material_ids: list[str], diagnosis: dict[str, tuple[Path, list[dict[str, Any]]]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -329,7 +389,7 @@ def _build_highlights(run_dir: Path, material_ids: list[str], diagnosis: dict[st
                 "interactionSeries": {"recordCount": interaction_count, "sourceRef": record_ref},
             })
     status = "available" if frames else "no_highlight_frames"
-    return {"schemaVersion": SCHEMA_VERSION, "status": status, "highlightFrames": frames, "sourceRefs": refs}, refs
+    return {"schemaVersion": SCHEMA_VERSION, "status": status, "highlightFrames": frames, "sourceRefs": _aggregate_refs(refs)}, refs
 
 
 def _assert_no_sensitive(value: Any, location: str = "root") -> None:
@@ -385,8 +445,9 @@ def build_fact_pack(run_dir: Path, output_dir: Path | None = None) -> dict[str, 
         errors.append(_category_error("highlightFrames", "no_highlight_frames", "RPA completed but no frame was selected"))
     source_manifest_paths = [run_dir / "query-receipt.json", run_dir / "resolved-query-spec.json", run_dir / "source-data" / "field-manifest.json"]
     source_files = [_file_ref(run_dir, path) for path in source_manifest_paths if path.is_file()]
-    source_files.extend(material_refs + audience_refs + script_refs + highlight_refs)
-    unique_sources = {(item["path"], item.get("recordIndex")): item for item in source_files}
+    for payload in (materials, audience, scripts, highlights):
+        _collect_source_refs(payload, source_files)
+    unique_sources = _aggregate_refs(source_files)
     manifest = {
         "schemaVersion": SCHEMA_VERSION,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -398,7 +459,7 @@ def build_fact_pack(run_dir: Path, output_dir: Path | None = None) -> dict[str, 
             "scriptFacts": len(scripts["scripts"]), "highlightFrames": len(highlights["highlightFrames"]),
         },
         "files": ["manifest.json", "material-leaderboard.json", "audience.json", "scripts.json", "highlight-frames.json", "README.md"],
-        "sourceFiles": list(unique_sources.values()),
+        "sourceFiles": unique_sources,
         "redactions": ["signed media URLs", "absolute paths", "RPA account and credential fields"],
         "quality": {
             "status": "built_with_warnings" if errors or any(item["parseStatus"] != "parsed" for item in scripts["scripts"]) else "built",

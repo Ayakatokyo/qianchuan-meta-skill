@@ -16,6 +16,24 @@ def candidate(material_id, rank):
 
 
 class RpaPipelineTests(unittest.TestCase):
+    def test_reports_material_progress_for_long_rpa_stage(self):
+        events = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_rpa_pipeline(
+                root,
+                {"materials": [candidate("m-1", 1)], "collection": {"candidateTopN": 1, "targetTopN": 1}},
+                configuration_fingerprint="fingerprint",
+                period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
+                options={"rpaConcurrency": 1},
+                fetch_diagnosis=lambda entry, _paths: {"records": [{"materialId": entry["materialId"]}], "csvPath": self._csv(root)},
+                postprocess=lambda _entry, _records, _paths: {"frames": []},
+                progress_callback=lambda phase, progress, current: events.append((phase, progress, current)),
+            )
+
+        self.assertEqual(events[0], ("rpa_processing", {"completed": 0, "total": 1}, "m-1"))
+        self.assertEqual(events[-1], ("rpa_processing", {"completed": 1, "total": 1}, "m-1"))
+
     def test_backfills_in_ranking_order_when_rpa_request_fails(self):
         calls = []
         with tempfile.TemporaryDirectory() as directory:
