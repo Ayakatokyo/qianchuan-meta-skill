@@ -30,7 +30,7 @@ def _write_json(path, payload):
 
 
 class RunReceipt:
-    STAGES = ("query", "rpa", "batchVerification")
+    STAGES = ("query", "rpa", "batchVerification", "factPack")
 
     def __init__(self, output_dir, configuration_fingerprint, command, execution_authorized):
         started = time.time()
@@ -48,6 +48,7 @@ class RunReceipt:
                 "query": self._stage("not_started"),
                 "rpa": self._stage(rpa_status),
                 "batchVerification": self._stage(rpa_status),
+                "factPack": self._stage(rpa_status),
             },
         }
         self.active_stage = None

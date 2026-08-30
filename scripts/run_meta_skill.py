@@ -12,6 +12,7 @@ from config_specs import (
     resolve_highlight_spec, resolve_query_spec, spec_fingerprint, write_resolved_specs,
 )
 from frame_extractor import FrameExtractionError, extract_highlight_frames
+from fact_pack import FactPackError, build_fact_pack, verify_fact_pack
 from field_registry import FieldRegistryError, load_field_registry
 from material_query import MaterialQueryError, execute_material_query
 from qianchuan_report_client import ReportClientError, fetch_material_report
@@ -170,7 +171,7 @@ def _rpa_options_from_args(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="Query confirmed Qianchuan asset fields and prepare custom highlight policy.")
+    parser = argparse.ArgumentParser(description="Query Qianchuan assets, run authorized diagnosis, and build a redacted fact pack.")
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate")
     for command in (validate,):
@@ -204,6 +205,12 @@ def build_parser():
     frames.add_argument("--output-dir", required=True)
     verify_run = commands.add_parser("verify-run")
     verify_run.add_argument("--output-dir", required=True)
+    build_fact = commands.add_parser("build-fact-pack", help="build categorized facts from a completed RPA run")
+    build_fact.add_argument("--run-dir", required=True)
+    build_fact.add_argument("--output-dir")
+    verify_fact = commands.add_parser("verify-fact-pack", help="verify a fact pack offline without external services")
+    verify_fact.add_argument("--run-dir", required=True)
+    verify_fact.add_argument("--fact-pack-dir")
     return parser
 
 
@@ -214,6 +221,16 @@ def main(argv=None):
         if args.command == "verify-run":
             print(json.dumps(verify_completed_run(args.output_dir), ensure_ascii=False))
             return 0
+        if args.command == "build-fact-pack":
+            output_dir = args.output_dir or str(Path(args.run_dir) / "fact-pack")
+            manifest = build_fact_pack(args.run_dir, output_dir)
+            print(json.dumps({"status": "succeeded", "manifest": str(Path(output_dir) / "manifest.json"), "targetTopN": manifest["targetTopN"], "counts": manifest["counts"]}, ensure_ascii=False))
+            return 0
+        if args.command == "verify-fact-pack":
+            fact_pack_dir = args.fact_pack_dir or str(Path(args.run_dir) / "fact-pack")
+            result = verify_fact_pack(args.run_dir, fact_pack_dir)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0 if result["status"] == "succeeded" else 1
         registry = load_field_registry(REGISTRY_PATH)
         query_spec, highlight_spec, query, policy = _load_specs(
             args, registry, require_query=args.command in {"validate", "query", "run"}
@@ -296,12 +313,21 @@ def main(argv=None):
             print("rpa batch partial failure; verification=%s" % outcome["verificationPath"], file=sys.stderr)
             return 2
         receipt.finish_stage("batchVerification", verificationPath=outcome["verificationPath"])
+        receipt.start_stage("factPack")
+        manifest = build_fact_pack(output_dir)
+        receipt.finish_stage(
+            "factPack",
+            manifestPath=str(output_dir / "fact-pack" / "manifest.json"),
+            targetTopN=manifest["targetTopN"],
+            counts=manifest["counts"],
+        )
         receipt.finish(True)
         print("top_materials_json=%s" % (output_dir / "top_materials.json"))
         print("query_receipt=%s" % (output_dir / "query-receipt.json"))
         print("top_materials_rpa_ready=%s" % outcome["readyPath"])
+        print("fact_pack_manifest=%s" % (output_dir / "fact-pack" / "manifest.json"))
         return 0
-    except (MetaSkillError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError, RunVerificationError) as exc:
+    except (MetaSkillError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError, RunVerificationError, FactPackError) as exc:
         if receipt is not None:
             receipt.fail_active_stage(exc)
             receipt.finish(False)

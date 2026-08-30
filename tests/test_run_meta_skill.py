@@ -328,6 +328,7 @@ class MetaSkillCliTests(unittest.TestCase):
         self.assertEqual(receipt["stages"]["query"]["status"], "succeeded")
         self.assertEqual(receipt["stages"]["rpa"]["status"], "not_requested")
         self.assertEqual(receipt["stages"]["batchVerification"]["status"], "not_requested")
+        self.assertEqual(receipt["stages"]["factPack"]["status"], "not_requested")
 
     def test_run_executes_rpa_only_with_explicit_authorization(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -338,6 +339,8 @@ class MetaSkillCliTests(unittest.TestCase):
                 run_meta_skill, "list_rpa_accounts", return_value={"accountId": "rpa-1", "platform": "RPA_JULIANG_QC_ACCOUNT_PASSWORD"}
             ) as accounts, patch.object(
                 run_meta_skill, "run_rpa_pipeline", return_value={"succeeded": True, "readyPath": str(output_dir / "rpa" / "top_materials_rpa_ready.json"), "verificationPath": str(output_dir / "rpa" / "batch-verification.json")}
+            ), patch.object(
+                run_meta_skill, "build_fact_pack", return_value={"targetTopN": 1, "counts": {"materials": 1}}
             ) as pipeline:
                 status = run_meta_skill.main(
                     ["run", "--execute-rpa", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir)]
@@ -378,6 +381,8 @@ class MetaSkillCliTests(unittest.TestCase):
                 run_meta_skill, "list_rpa_accounts", return_value={"accountId": "rpa-1", "platform": "RPA"}
             ), patch.object(run_meta_skill, "run_isolated", side_effect=isolated_side_effect), patch.object(
                 run_meta_skill, "run_rpa_pipeline", side_effect=pipeline_side_effect
+            ), patch.object(
+                run_meta_skill, "build_fact_pack", return_value={"targetTopN": 1, "counts": {"materials": 1}}
             ):
                 status = run_meta_skill.main(
                     [
@@ -419,3 +424,78 @@ class MetaSkillCliTests(unittest.TestCase):
                 )
 
         self.assertEqual(status, 2)
+
+    def test_successful_rpa_run_builds_fact_pack_and_records_its_stage(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            query_path, highlight_path = self.write_specs(root)
+            output_dir = root / "run"
+            with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]), patch.object(
+                run_meta_skill, "list_rpa_accounts", return_value={"accountId": "rpa-1", "platform": "RPA"}
+            ), patch.object(
+                run_meta_skill, "run_rpa_pipeline", return_value={
+                    "succeeded": True,
+                    "readyPath": str(output_dir / "rpa" / "top_materials_rpa_ready.json"),
+                    "verificationPath": str(output_dir / "rpa" / "batch-verification.json"),
+                }
+            ), patch.object(
+                run_meta_skill, "build_fact_pack", return_value={"targetTopN": 1, "counts": {"materials": 1}}
+            ) as build_pack:
+                status = run_meta_skill.main(
+                    [
+                        "run", "--execute-rpa", "--query-spec", str(query_path),
+                        "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir),
+                    ]
+                )
+
+            receipt = json.loads((output_dir / "run-receipt.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        build_pack.assert_called_once_with(output_dir)
+        self.assertEqual(receipt["stages"]["factPack"]["status"], "succeeded")
+
+    def test_run_fails_and_marks_fact_pack_stage_when_build_cannot_complete(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            query_path, highlight_path = self.write_specs(root)
+            output_dir = root / "run"
+            with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]), patch.object(
+                run_meta_skill, "list_rpa_accounts", return_value={"accountId": "rpa-1", "platform": "RPA"}
+            ), patch.object(
+                run_meta_skill, "run_rpa_pipeline", return_value={"succeeded": True, "readyPath": "ready.json", "verificationPath": "verify.json"}
+            ), patch.object(
+                run_meta_skill, "build_fact_pack", side_effect=run_meta_skill.FactPackError("fact pack requires completed RPA artifacts")
+            ):
+                status = run_meta_skill.main([
+                    "run", "--execute-rpa", "--query-spec", str(query_path),
+                    "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir),
+                ])
+
+            receipt = json.loads((output_dir / "run-receipt.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 2)
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["stages"]["factPack"]["status"], "failed")
+
+    def test_fact_pack_commands_are_explicit_and_offline(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            fact_dir = run_dir / "fact-pack"
+            with patch.object(
+                run_meta_skill, "build_fact_pack", return_value={"targetTopN": 6, "counts": {"materials": 6}}
+            ) as build_pack, patch("builtins.print") as output:
+                build_status = run_meta_skill.main([
+                    "build-fact-pack", "--run-dir", str(run_dir), "--output-dir", str(fact_dir)
+                ])
+            with patch.object(
+                run_meta_skill, "verify_fact_pack", return_value={"status": "succeeded", "errors": []}
+            ) as verify_pack:
+                verify_status = run_meta_skill.main([
+                    "verify-fact-pack", "--run-dir", str(run_dir), "--fact-pack-dir", str(fact_dir)
+                ])
+
+        self.assertEqual(build_status, 0)
+        self.assertEqual(verify_status, 0)
+        build_pack.assert_called_once_with(str(run_dir), str(fact_dir))
+        verify_pack.assert_called_once_with(str(run_dir), str(fact_dir))
+        self.assertIn('"targetTopN": 6', output.call_args.args[0])
