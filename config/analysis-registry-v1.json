@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "registryVersion": "2026-08-30-analysis-v1",
+  "claimTypes": ["fact", "calculation", "inference", "recommendation"],
+  "missingDataSemantics": {
+    "missing": "record missing or field absent; do not infer zero",
+    "failed": "upstream parser failed; do not use content as fact",
+    "unavailable": "requested category or metric is unavailable; analysis is incomplete",
+    "zero": "explicit numeric zero is a fact and is distinct from missing"
+  },
+  "calculations": {
+    "ratio": {"inputs": 2, "resultType": "number", "zeroDenominator": "missing"},
+    "difference": {"inputs": 2, "resultType": "number"},
+    "percentage_difference": {"inputs": 2, "resultType": "number", "zeroDenominator": "missing"},
+    "percentage_point_difference": {"inputs": 2, "resultType": "number"}
+  },
+  "sections": {
+    "material_leaderboard": {
+      "file": "material-leaderboard.json",
+      "collection": "materials",
+      "groupableFields": ["materialType", "videoType", "rankingMetric"],
+      "fields": ["rank", "materialId", "materialName", "materialType", "videoType", "rankingMetric", "sortValue", "metrics.stat_cost_for_overall_roi2", "metrics.basic_stat_cost_for_roi2_v2", "metrics.total_order_settle_amount_for_roi2_1h", "metrics.total_prepay_and_pay_settle_roi2_1h", "metrics.total_prepay_and_pay_order_roi2", "metrics.total_order_settle_count_for_roi2_1h", "metrics.total_pay_order_count_for_roi2", "metrics.video_like_count_for_roi2", "metrics.video_comment_count_for_roi2_v2", "metrics.video_follow_count_for_roi2", "metrics.video_play_count_for_roi2_v2", "metrics.video_play_finish_rate_for_roi2_v2", "metrics.video_avg_watch_duration_for_roi2", "metrics.total_cpc_for_roi2", "metrics.total_ecpm_for_roi2", "metrics.total_cost_per_pay_order_settle_for_roi2_1h", "metrics.total_refund_order_count_for_roi2_1h", "metrics.total_refund_order_gmv_for_roi2_1h", "metrics.total_unfinished_estimate_order_gmv_for_roi2"],
+      "metricPrefix": "metrics.",
+      "aggregations": ["value", "count", "sum", "avg", "min", "max"]
+    },
+    "audience": {
+      "file": "audience.json",
+      "collection": "audience",
+      "groupableFields": ["dimensionName", "audienceValue", "displayMetric", "displayMetricName"],
+      "fields": ["materialId", "actualStartDate", "actualEndDate", "dimensionKey", "dimensionName", "audienceValue", "displayMetric", "displayMetricName", "metricValue", "metricPercentage", "dimensionTotal", "Dimensions.user_group_label_name", "Metrics.live_show_count_for_roi2_v2"],
+      "aggregations": ["value", "count", "sum", "avg", "min", "max"]
+    },
+    "scripts": {
+      "file": "scripts.json",
+      "collection": "scripts",
+      "groupableFields": ["parseStatus"],
+      "fields": ["materialId", "parseStatus", "text", "formula", "detail", "data", "completeness"],
+      "aggregations": ["value", "count"]
+    },
+    "highlight_frames": {
+      "file": "highlight-frames.json",
+      "collection": "highlightFrames",
+      "groupableFields": ["frameSequence"],
+      "fields": ["materialId", "frameSequence", "durationSec", "artifact", "selectionEvidence", "highlightPolicy", "unavailableMetrics", "interactionSeries.recordCount"],
+      "aggregations": ["value", "count", "sum", "avg", "min", "max"],
+      "allowVisualObservation": true
+    }
+  }
+}

@@ -29,6 +29,28 @@ def origin_row(material_id, cost, amount):
 
 
 class MetaSkillCliTests(unittest.TestCase):
+    def test_prepare_analysis_command_dispatches_to_offline_preparer(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            request = root / "analysis-request.json"
+            request.write_text("{}", encoding="utf-8")
+            with patch.object(run_meta_skill, "prepare_analysis", return_value={"status": "awaiting_model"}) as prepare:
+                status = run_meta_skill.main([
+                    "prepare-analysis", "--run-dir", str(root), "--analysis-request", str(request),
+                    "--output-dir", str(root / "analysis"),
+                ])
+
+        self.assertEqual(status, 0)
+        prepare.assert_called_once_with(root, request, root / "analysis")
+
+    def test_verify_analysis_command_returns_nonzero_when_contract_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with patch.object(run_meta_skill, "verify_analysis", return_value={"status": "failed", "errors": ["bad result"]}):
+                status = run_meta_skill.main(["verify-analysis", "--run-dir", str(root), "--analysis-dir", str(root / "analysis")])
+
+        self.assertEqual(status, 1)
+
     def test_connector_order_by_uses_direct_api_metric_rankings(self):
         registry = load_field_registry(run_meta_skill.REGISTRY_PATH)
 

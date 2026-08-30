@@ -11,6 +11,7 @@ from config_specs import (
     ConfigSpecError, highlight_spec_to_policy, legacy_config_to_specs, query_spec_to_query_config,
     resolve_highlight_spec, resolve_query_spec, spec_fingerprint, write_resolved_specs,
 )
+from analysis import AnalysisError, prepare_analysis, verify_analysis
 from frame_extractor import FrameExtractionError, extract_highlight_frames
 from fact_pack import FactPackError, build_fact_pack, verify_fact_pack
 from field_registry import FieldRegistryError, load_field_registry
@@ -211,6 +212,13 @@ def build_parser():
     verify_fact = commands.add_parser("verify-fact-pack", help="verify a fact pack offline without external services")
     verify_fact.add_argument("--run-dir", required=True)
     verify_fact.add_argument("--fact-pack-dir")
+    prepare_analysis_parser = commands.add_parser("prepare-analysis", help="prepare a source-linked model input from a completed fact pack")
+    prepare_analysis_parser.add_argument("--run-dir", required=True)
+    prepare_analysis_parser.add_argument("--analysis-request", required=True)
+    prepare_analysis_parser.add_argument("--output-dir")
+    verify_analysis_parser = commands.add_parser("verify-analysis", help="verify a model result and render the standard analysis report offline")
+    verify_analysis_parser.add_argument("--run-dir", required=True)
+    verify_analysis_parser.add_argument("--analysis-dir")
     return parser
 
 
@@ -218,6 +226,14 @@ def main(argv=None):
     receipt = None
     try:
         args = build_parser().parse_args(argv)
+        if args.command == "prepare-analysis":
+            result = prepare_analysis(Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
+        if args.command == "verify-analysis":
+            result = verify_analysis(Path(args.run_dir), Path(args.analysis_dir) if args.analysis_dir else None)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0 if result["status"] == "succeeded" else 1
         if args.command == "verify-run":
             print(json.dumps(verify_completed_run(args.output_dir), ensure_ascii=False))
             return 0
@@ -327,7 +343,7 @@ def main(argv=None):
         print("top_materials_rpa_ready=%s" % outcome["readyPath"])
         print("fact_pack_manifest=%s" % (output_dir / "fact-pack" / "manifest.json"))
         return 0
-    except (MetaSkillError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError, RunVerificationError, FactPackError) as exc:
+    except (MetaSkillError, AnalysisError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError, RunVerificationError, FactPackError) as exc:
         if receipt is not None:
             receipt.fail_active_stage(exc)
             receipt.finish(False)

@@ -8,7 +8,7 @@ metadata:
 
 # 千川素材分析元技能
 
-该技能只负责受控素材查询、RPA 诊断、临时视频下载和高光帧资产；不生成 AI 商业分析、报告或用户专属技能。模型将自然语言解析为 Spec，脚本负责校验、取数、筛选、RPA、抽帧与审计落盘。
+该技能负责受控素材查询、RPA 诊断、临时视频下载、高光帧资产，以及在完整事实包上的可审计商业分析准备与验收。模型将自然语言解析为 AnalysisSpec，脚本负责确定性校验、事实切片、脱敏、category-specific prompt 编译、结果验收与报告落盘；当前项目没有外部模型调用通道，不会擅自增加凭证或网络依赖。
 
 ## 输入
 
@@ -95,6 +95,15 @@ python scripts/run_meta_skill.py build-fact-pack \
 python scripts/run_meta_skill.py verify-fact-pack \
   --run-dir /path/to/completed-run \
   --fact-pack-dir /path/to/completed-run/fact-pack
+
+python scripts/run_meta_skill.py prepare-analysis \
+  --run-dir /path/to/completed-run \
+  --analysis-request /path/to/analysis-request.json \
+  --output-dir /path/to/completed-run/analysis
+
+python scripts/run_meta_skill.py verify-analysis \
+  --run-dir /path/to/completed-run \
+  --analysis-dir /path/to/completed-run/analysis
 ```
 
 `query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认同样只查询或复用候选工件，并写入 `run-receipt.json`；只有显式传入 `--execute-rpa` 才会解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复，临时下载视频并按 `HighlightSpec` 抽帧。
@@ -104,6 +113,14 @@ python scripts/run_meta_skill.py verify-fact-pack \
 事实包按 `targetTopN` 生成以下文件：`material-leaderboard.json`（素材榜单与平台维度字段）、`audience.json`（人群事实）、`scripts.json`（脚本事实）、`highlight-frames.json`（高光帧事实）以及 `manifest.json`/`README.md`。候选池大于目标时，只纳入 RPA 成功选中的目标素材；`scripts.json` 使用 `parseStatus=parsed|missing|failed` 和对应错误码，`highlight-frames.json` 在没有选中帧时使用 `status=no_highlight_frames`，不会把缺失推断为事实。
 
 事实包只保留可追溯事实，不生成商业结论。所有 `sourceRef`/`artifact` 都是运行目录内的相对 POSIX 路径并带 SHA-256 与大小；签名媒体 URL、绝对路径、账号、会话和凭证字段会被移除。`verify-fact-pack` 完全离线校验 TopN、分类计数、来源哈希、JPEG 及敏感字段。
+
+## 商业分析交接
+
+分析请求文件使用 `{\"schemaVersion\": 1, \"requestText\": \"...\", \"analysisSpec\": {...}}`；自然语言解析由模型或上游调用方完成，本地脚本只接受并校验结构化 AnalysisSpec。AnalysisSpec 必须声明一个或多个 `sections`（`material_leaderboard`、`audience`、`scripts`、`highlight_frames`）、素材 ID/rank 选择、目标/问题、字段与聚合、分组比较、显式派生计算、证据策略和输出格式。
+
+`prepare-analysis` 只允许读取已通过 `verify-fact-pack` 的完整事实包，并写入 `analysis-request.json`、`analysis-spec.json`、`analysis-input.json`、`analysis-receipt.json`。输入只包含声明字段和选择范围的切片；每个来源保留 manifest/sourceRef/哈希。`analysis-input.json` 是模型交接边界，模型应返回 `analysis-result.json`；每条 claim 必须带 `claimType`、`evidenceRefs`、`confidence`，计算另带 formula/inputs。事实、计算、AI 推断、建议在报告中分层；人群结论只能表达相关性，脚本必须引用逐字稿原文，高光帧视觉观察必须标记为 AI 推断并引用 JPEG artifact。
+
+`verify-analysis` 完全离线校验结果契约、事实包、证据路径与哈希，并生成 `report.json`、`report.md`。缺少模型结果、query-only、事实包不完整、请求字段未知、素材越权、缺失类别或未声明计算时，只能保持 `blocked`/`awaiting_model`/`failed`/`incomplete`，禁止声称商业分析完成。任何证据缺失、脚本 `missing|failed` 或无高光帧都不会被推断为零或成功事实。
 
 独立抽帧仅在已有本地视频与互动曲线时执行，不会发起报表查询；`run` 内部会自动准备这些输入：
 

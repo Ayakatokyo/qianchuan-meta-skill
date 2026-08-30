@@ -46,3 +46,13 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("102 个指标", body)
         self.assertIn("metricFilters", body)
         self.assertIn("ranking.field", body)
+
+    def test_skill_body_describes_analysis_handoff_and_completion_gate(self):
+        _, body = load_skill_document()
+
+        self.assertIn("prepare-analysis", body)
+        self.assertIn("verify-analysis", body)
+        self.assertIn("analysis-input.json", body)
+        self.assertIn("analysis-result.json", body)
+        self.assertIn("query-only", body)
+        self.assertIn("不完整", body)

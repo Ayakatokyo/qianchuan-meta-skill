@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Versioned compact contracts for the three real Top6 offline analysis scenarios.",
+  "scenarios": [
+    {
+      "id": "leaderboard-only",
+      "sections": ["material_leaderboard"],
+      "resultStatus": "fixture_only",
+      "requiredClaimTypes": ["fact"]
+    },
+    {
+      "id": "audience-and-leaderboard",
+      "sections": ["material_leaderboard", "audience"],
+      "resultStatus": "fixture_only",
+      "requiredClaimTypes": ["fact"],
+      "audienceCausalityGuard": "association_only"
+    },
+    {
+      "id": "all-sections",
+      "sections": ["material_leaderboard", "audience", "scripts", "highlight_frames"],
+      "resultStatus": "fixture_only",
+      "requiredClaimTypes": ["fact", "calculation", "inference"],
+      "requiresTranscriptEvidence": true,
+      "requiresJpegArtifactEvidence": true
+    }
+  ]
+}
