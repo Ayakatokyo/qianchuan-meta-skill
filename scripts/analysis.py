@@ -16,6 +16,10 @@ class AnalysisError(ValueError):
     """Raised when an analysis request or result violates the contract."""
 
 
+_HANDOFF_SECTIONS = ("material_leaderboard", "audience", "scripts", "highlight_frames")
+_SECTION_ALIASES = {"script": "scripts"}
+
+
 def _read_json(path: Path, label: str) -> Any:
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -51,6 +55,136 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise AnalysisError(f"{label} must be an object")
     return value
+
+
+def _manifest_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _normalize_handoff_sections(value: Any) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise AnalysisError("analysis handoff sections must be a nonempty list")
+    sections = [_SECTION_ALIASES.get(item, item) if isinstance(item, str) else item for item in value]
+    if any(section not in _HANDOFF_SECTIONS for section in sections):
+        unknown = [str(section) for section in sections if section not in _HANDOFF_SECTIONS]
+        raise AnalysisError(f"unknown analysis handoff section: {', '.join(unknown)}")
+    if len(set(sections)) != len(sections):
+        raise AnalysisError("analysis handoff sections must not contain duplicates")
+    return sections
+
+
+def _normalize_material_scope(scope: Any, material_ids: list[str], target_top_n: Any) -> dict[str, Any]:
+    scope = _require_object(scope, "analysis handoff materialScope")
+    _keys(scope, {"type", "value"}, "analysis handoff materialScope")
+    scope_type = scope.get("type")
+    if scope_type == "all":
+        if "value" in scope and scope["value"] is not None:
+            raise AnalysisError("analysis handoff all materialScope cannot contain a value")
+        return {"rankRange": {"start": 1, "end": target_top_n}}
+    if scope_type == "top_n":
+        value = scope.get("value")
+        if type(value) is not int or value <= 0 or value > target_top_n:
+            raise AnalysisError("analysis handoff top_n materialScope is outside fact pack")
+        return {"rankRange": {"start": 1, "end": value}}
+    if scope_type in {"material_ids", "material_id_range"}:
+        value = scope.get("value")
+        if scope_type == "material_ids":
+            if not isinstance(value, list) or not value:
+                raise AnalysisError("analysis handoff material_ids scope must be a nonempty list")
+            selected = [str(item) for item in value]
+        else:
+            if isinstance(value, dict):
+                _keys(value, {"start", "end"}, "analysis handoff material_id_range")
+                start, end = value.get("start"), value.get("end")
+            elif isinstance(value, list) and len(value) == 2:
+                start, end = value
+            else:
+                raise AnalysisError("analysis handoff material_id_range must contain start and end")
+            if type(start) is not int or type(end) is not int or start <= 0 or end < start:
+                raise AnalysisError("analysis handoff material_id_range is invalid")
+            selected = material_ids[start - 1:end]
+            if len(selected) != end - start + 1:
+                raise AnalysisError("analysis handoff material_id_range is outside fact pack")
+        unknown = [item for item in selected if item not in material_ids]
+        if unknown:
+            raise AnalysisError(f"analysis handoff material IDs outside fact pack: {', '.join(unknown)}")
+        return {"materialIds": selected}
+    raise AnalysisError("analysis handoff materialScope.type is unsupported")
+
+
+def validate_analysis_handoff(request: dict[str, Any], fact_pack_dir: Path) -> dict[str, Any]:
+    """Validate and normalize the stage-two request against an immutable fact pack."""
+    request = _require_object(request, "analysis handoff request")
+    _keys(
+        request,
+        {
+            "stage", "runId", "factPackManifestSha256", "sections", "materialScope", "requestText", "analysisSpec",
+            "selection", "factPackPath", "manifestSummary", "sourceRefs",
+        },
+        "analysis handoff request",
+    )
+    if request.get("stage") != "analysis":
+        raise AnalysisError("analysis handoff stage must be analysis")
+    fact_pack_dir = Path(fact_pack_dir).resolve()
+    manifest_path = fact_pack_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise AnalysisError("fact pack manifest is missing")
+    manifest = _read_json(manifest_path, "fact-pack manifest")
+    if not isinstance(manifest, dict):
+        raise AnalysisError("fact-pack manifest must be an object")
+    run_id = request.get("runId")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise AnalysisError("analysis handoff runId must be nonempty")
+    if run_id != fact_pack_dir.parent.name:
+        raise AnalysisError("analysis handoff runId does not match fact pack")
+    expected_hash = request.get("factPackManifestSha256")
+    actual_hash = _manifest_sha256(manifest_path)
+    if expected_hash != actual_hash:
+        raise AnalysisError("analysis handoff manifest hash mismatch")
+    material_ids = [str(item) for item in manifest.get("materialIds", [])]
+    target_top_n = manifest.get("targetTopN")
+    if type(target_top_n) is not int or target_top_n <= 0 or len(material_ids) != target_top_n:
+        raise AnalysisError("fact-pack manifest material scope is invalid")
+    sections = _normalize_handoff_sections(request.get("sections"))
+    category_statuses = ((manifest.get("quality") or {}).get("categoryStatuses") or {})
+    status_keys = {
+        "material_leaderboard": "materialLeaderboard",
+        "audience": "audience",
+        "scripts": "scripts",
+        "highlight_frames": "highlightFrames",
+    }
+    for section in sections:
+        section_path = fact_pack_dir / {
+            "material_leaderboard": "material-leaderboard.json",
+            "audience": "audience.json",
+            "scripts": "scripts.json",
+            "highlight_frames": "highlight-frames.json",
+        }[section]
+        status = category_statuses.get(status_keys[section])
+        if not section_path.is_file() or (status is not None and status not in {"available", "built"}):
+            raise AnalysisError(f"analysis section {section} is unavailable")
+    request_text = request.get("requestText")
+    if not isinstance(request_text, str) or not request_text.strip():
+        raise AnalysisError("analysis handoff requestText must be nonempty")
+    analysis_spec = request.get("analysisSpec")
+    if analysis_spec is not None and not isinstance(analysis_spec, dict):
+        raise AnalysisError("analysis handoff analysisSpec must be an object or null")
+    selection = _normalize_material_scope(request.get("materialScope"), material_ids, target_top_n)
+    normalized = deepcopy(request)
+    normalized.update({
+        "sections": sections,
+        "selection": selection,
+        "factPackPath": "fact-pack",
+        "manifestSummary": {
+            "schemaVersion": manifest.get("schemaVersion"),
+            "targetTopN": target_top_n,
+            "materialIds": material_ids,
+            "counts": deepcopy(manifest.get("counts", {})),
+            "qualityStatus": (manifest.get("quality") or {}).get("status"),
+        },
+        "sourceRefs": deepcopy(manifest.get("sourceFiles", [])),
+    })
+    return normalized
 
 
 def _fact_materials(fact_pack: dict[str, Any]) -> list[dict[str, Any]]:
@@ -467,13 +601,43 @@ def _manifest_ref(run_dir: Path, fact_pack_dir: Path) -> dict[str, Any]:
 def _request_spec(request: dict[str, Any]) -> dict[str, Any]:
     if "analysisSpec" in request:
         spec = request["analysisSpec"]
+    elif request.get("stage") == "analysis":
+        spec = None
     elif "sections" in request:
         spec = request
     else:
         raise AnalysisError("analysis request requires structured analysisSpec; model parsing is not configured")
+    if spec is None:
+        return None
     if not isinstance(spec, dict):
         raise AnalysisError("analysisSpec must be an object")
     return spec
+
+
+def _default_analysis_spec(request: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any]:
+    default_fields = {
+        "material_leaderboard": ("metrics.stat_cost_for_overall_roi2", "value"),
+        "audience": ("metricPercentage", "value"),
+        "scripts": ("text", "value"),
+        "highlight_frames": ("durationSec", "value"),
+    }
+    metrics = []
+    for section in request["sections"]:
+        field, aggregation = default_fields[section]
+        _field_entry(registry, section, field)
+        metrics.append({"section": section, "field": field, "aggregation": aggregation})
+    return {
+        "schemaVersion": 1,
+        "sections": request["sections"],
+        "selection": deepcopy(request["selection"]),
+        "objective": request["requestText"].strip(),
+        "questions": [request["requestText"].strip()],
+        "metrics": metrics,
+        "groupComparisons": [],
+        "calculations": [],
+        "evidenceStrategy": {"mode": "source_linked", "includeArtifacts": False},
+        "output": {"format": "json+markdown"},
+    }
 
 
 def _fact_pack_fingerprint(run_dir: Path, fact_pack_dir: Path) -> str:
@@ -488,6 +652,10 @@ def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None 
     request = _read_json(Path(request_path), "analysis request")
     if not isinstance(request, dict):
         raise AnalysisError("analysis request must be an object")
+    if request.get("stage") == "analysis" or any(
+        key in request for key in ("runId", "factPackManifestSha256", "materialScope")
+    ):
+        request = validate_analysis_handoff(request, fact_pack_dir)
     _write_json(output_dir / "analysis-request.json", _safe_request(request))
     fact_result = verify_fact_pack(run_dir, fact_pack_dir)
     if fact_result.get("status") != "succeeded":
@@ -503,7 +671,14 @@ def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None 
         raise AnalysisError("fact pack is incomplete; commercial analysis is blocked")
     registry = load_analysis_registry(Path(__file__).resolve().parents[1] / "config" / "analysis-registry-v1.json")
     fact_pack = _fact_pack_payload(fact_pack_dir)
-    spec = resolve_analysis_spec(_request_spec(request), registry, fact_pack)
+    request_spec = _request_spec(request)
+    if request.get("stage") == "analysis" and request_spec is None:
+        request_spec = _default_analysis_spec(request, registry)
+    if request.get("stage") == "analysis":
+        request_spec = deepcopy(request_spec)
+        request_spec["sections"] = deepcopy(request["sections"])
+        request_spec["selection"] = deepcopy(request["selection"])
+    spec = resolve_analysis_spec(request_spec, registry, fact_pack)
     evidence = slice_fact_pack(run_dir, fact_pack_dir, spec, registry)
     model_input = compile_model_input(run_dir, spec, evidence, registry)
     model_input["requestText"] = request.get("requestText", "") if isinstance(request.get("requestText", ""), str) else ""
@@ -513,7 +688,9 @@ def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None 
     receipt = {
         "schemaVersion": 1,
         "runId": run_dir.name,
+        "stage": "analysis_prepared",
         "factPackFingerprint": _fact_pack_fingerprint(run_dir, fact_pack_dir),
+        "factPackManifestSha256": _fact_pack_fingerprint(run_dir, fact_pack_dir),
         "analysisSpec": deepcopy(spec),
         "analysisSpecFingerprint": analysis_fingerprint(spec),
         "promptVersion": PROMPT_VERSION,

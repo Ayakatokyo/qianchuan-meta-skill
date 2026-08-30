@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from decimal import Decimal
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -30,6 +31,14 @@ REGISTRY_PATH = ROOT / "config" / "asset-field-registry-v1.json"
 
 class MetaSkillError(RuntimeError):
     pass
+
+
+PHASES = (
+    "awaiting_query_input", "querying", "rpa_processing", "fact_pack_ready",
+    "awaiting_analysis_input", "analysis_prepared", "analysis_verified", "report_ready",
+    "query_failed", "fact_pack_failed", "analysis_failed",
+)
+PHASE_STATES = PHASES
 
 
 def _read_json(path, label, expected_type=dict):
@@ -88,6 +97,87 @@ def _write_json(path, payload):
         except FileNotFoundError:
             pass
         raise
+
+
+def build_fact_pack_handoff(run_dir):
+    """Build the durable, user-facing handoff from a verified fact-pack manifest."""
+    run_dir = Path(run_dir).resolve()
+    fact_pack_dir = run_dir / "fact-pack"
+    manifest_path = fact_pack_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise MetaSkillError("fact pack manifest is missing")
+    manifest = _read_json(manifest_path, "fact-pack manifest")
+    quality = manifest.get("quality") if isinstance(manifest.get("quality"), dict) else {}
+    return {
+        "stage": "fact_pack_ready",
+        "runId": run_dir.name,
+        "factPackPath": "fact-pack",
+        "factPackManifestSha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "manifestSummary": {
+            "schemaVersion": manifest.get("schemaVersion"),
+            "targetTopN": manifest.get("targetTopN"),
+            "materialIds": manifest.get("materialIds", []),
+            "counts": manifest.get("counts", {}),
+            "qualityStatus": quality.get("status"),
+            "categoryStatuses": quality.get("categoryStatuses", {}),
+        },
+        "counts": manifest.get("counts", {}),
+        "missingItems": quality.get("errors", []),
+        "sourceRefs": manifest.get("sourceFiles", []),
+    }
+
+
+def _set_run_phase(run_dir, phase, **details):
+    if phase not in PHASES:
+        raise MetaSkillError("unknown run phase: %s" % phase)
+    receipt_path = Path(run_dir) / "run-receipt.json"
+    if not receipt_path.is_file():
+        return
+    receipt = _read_json(receipt_path, "run receipt")
+    receipt["phase"] = phase
+    receipt.update(details)
+    _write_json(receipt_path, receipt)
+
+
+def _load_handoff(run_dir):
+    run_dir = Path(run_dir).resolve()
+    handoff_path = run_dir / "analysis-handoff.json"
+    if handoff_path.is_file():
+        handoff = _read_json(handoff_path, "analysis handoff")
+    else:
+        receipt = _read_json(run_dir / "run-receipt.json", "run receipt")
+        handoff = receipt.get("handoff")
+    if not isinstance(handoff, dict):
+        raise MetaSkillError("run is not awaiting analysis input")
+    return handoff
+
+
+def continue_analysis(run_dir, analysis_request, output_dir=None):
+    """Resume stage two without invoking query, RPA, or fact-pack collection."""
+    from analysis import validate_analysis_handoff
+
+    run_dir = Path(run_dir).resolve()
+    handoff = _load_handoff(run_dir)
+    request = _read_json(analysis_request, "analysis request")
+    if not isinstance(request, dict):
+        raise MetaSkillError("analysis request must be an object")
+    if request.get("stage") != "analysis":
+        request = {**request, "stage": "analysis"}
+    for key in ("runId", "factPackManifestSha256"):
+        if key not in request and key in handoff:
+            request[key] = handoff[key]
+    if "sections" not in request and "sections" in handoff:
+        request["sections"] = handoff["sections"]
+    if "materialScope" not in request:
+        request["materialScope"] = {"type": "all"}
+    validated = validate_analysis_handoff(request, run_dir / "fact-pack")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        normalized_request = Path(temp_dir) / "analysis-request.json"
+        _write_json(normalized_request, validated)
+        result = prepare_analysis(run_dir, normalized_request, Path(output_dir) if output_dir else None)
+    phase = "analysis_prepared" if result.get("status", "").startswith("awaiting_model") else "analysis_failed"
+    _set_run_phase(run_dir, phase, analysisReceipt=str((Path(output_dir) if output_dir else run_dir / "analysis") / "analysis-receipt.json"))
+    return result
 
 
 def _connector_order_by(query, registry):
@@ -219,6 +309,10 @@ def build_parser():
     verify_analysis_parser = commands.add_parser("verify-analysis", help="verify a model result and render the standard analysis report offline")
     verify_analysis_parser.add_argument("--run-dir", required=True)
     verify_analysis_parser.add_argument("--analysis-dir")
+    continue_analysis_parser = commands.add_parser("continue-analysis", help="resume commercial analysis from a fact-pack handoff")
+    continue_analysis_parser.add_argument("--run-dir", required=True)
+    continue_analysis_parser.add_argument("--analysis-request", required=True)
+    continue_analysis_parser.add_argument("--output-dir")
     return parser
 
 
@@ -226,12 +320,34 @@ def main(argv=None):
     receipt = None
     try:
         args = build_parser().parse_args(argv)
+        if args.command == "continue-analysis":
+            try:
+                result = continue_analysis(Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
+            except (MetaSkillError, AnalysisError) as exc:
+                _set_run_phase(Path(args.run_dir), "analysis_failed", error=str(exc))
+                raise
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
         if args.command == "prepare-analysis":
-            result = prepare_analysis(Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
+            try:
+                result = prepare_analysis(Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
+            except (MetaSkillError, AnalysisError) as exc:
+                _set_run_phase(Path(args.run_dir), "analysis_failed", error=str(exc))
+                raise
+            if result.get("status", "").startswith("awaiting_model"):
+                _set_run_phase(
+                    Path(args.run_dir),
+                    "analysis_prepared",
+                    analysisReceipt=str((Path(args.output_dir) if args.output_dir else Path(args.run_dir) / "analysis") / "analysis-receipt.json"),
+                )
             print(json.dumps(result, ensure_ascii=False))
             return 0
         if args.command == "verify-analysis":
             result = verify_analysis(Path(args.run_dir), Path(args.analysis_dir) if args.analysis_dir else None)
+            if result.get("status") == "succeeded":
+                _set_run_phase(Path(args.run_dir), "report_ready", lastSuccessfulPhase="analysis_verified", report=str(result.get("report", "")))
+            elif result.get("status") in {"failed", "incomplete"}:
+                _set_run_phase(Path(args.run_dir), "analysis_failed", analysisErrors=result.get("errors", []))
             print(json.dumps(result, ensure_ascii=False))
             return 0 if result["status"] == "succeeded" else 1
         if args.command == "verify-run":
@@ -275,6 +391,7 @@ def main(argv=None):
             print("query_receipt=%s" % (output_dir / "query-receipt.json"))
             return 0
         receipt = RunReceipt(output_dir, fingerprint, "run", args.execute_rpa)
+        _set_run_phase(output_dir, "querying")
         receipt.start_stage("query")
         top_materials = _reusable_top_materials(output_dir, fingerprint)
         if top_materials is None:
@@ -291,6 +408,7 @@ def main(argv=None):
             return 0
         options = _rpa_options_from_args(args)
         _write_json(output_dir / "resolved-rpa-options.json", options)
+        _set_run_phase(output_dir, "rpa_processing")
         receipt.start_stage("rpa")
         account = list_rpa_accounts()
 
@@ -326,6 +444,12 @@ def main(argv=None):
         if not outcome["succeeded"]:
             receipt.fail_stage("batchVerification", RpaPipelineError("RPA batch partial failure"))
             receipt.finish(False)
+            _set_run_phase(
+                output_dir,
+                "fact_pack_failed",
+                lastSuccessfulPhase="rpa_processing",
+                error="RPA batch partial failure",
+            )
             print("rpa batch partial failure; verification=%s" % outcome["verificationPath"], file=sys.stderr)
             return 2
         receipt.finish_stage("batchVerification", verificationPath=outcome["verificationPath"])
@@ -337,16 +461,47 @@ def main(argv=None):
             targetTopN=manifest["targetTopN"],
             counts=manifest["counts"],
         )
+        fact_pack_dir = output_dir / "fact-pack"
+        if (fact_pack_dir / "manifest.json").is_file():
+            fact_pack_validation = verify_fact_pack(output_dir, fact_pack_dir)
+            if fact_pack_validation.get("status") != "succeeded":
+                error = FactPackError("fact pack validation failed: %s" % "; ".join(fact_pack_validation.get("errors", [])))
+                receipt.fail_stage("factPack", error)
+                receipt.finish(False)
+                _set_run_phase(output_dir, "fact_pack_failed", lastSuccessfulPhase="rpa_processing", factPackValidation=fact_pack_validation)
+                print("fact pack validation failed", file=sys.stderr)
+                return 2
+            handoff = build_fact_pack_handoff(output_dir)
+            _write_json(output_dir / "analysis-handoff.json", handoff)
         receipt.finish(True)
+        if (output_dir / "analysis-handoff.json").is_file():
+            _set_run_phase(
+                output_dir,
+                "awaiting_analysis_input",
+                lastSuccessfulPhase="fact_pack_ready",
+                handoff=handoff,
+                factPackValidation=fact_pack_validation,
+            )
         print("top_materials_json=%s" % (output_dir / "top_materials.json"))
         print("query_receipt=%s" % (output_dir / "query-receipt.json"))
         print("top_materials_rpa_ready=%s" % outcome["readyPath"])
         print("fact_pack_manifest=%s" % (output_dir / "fact-pack" / "manifest.json"))
+        if (output_dir / "analysis-handoff.json").is_file():
+            print("phase=awaiting_analysis_input")
+            print("analysis_handoff=%s" % (output_dir / "analysis-handoff.json"))
         return 0
     except (MetaSkillError, AnalysisError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError, RunVerificationError, FactPackError) as exc:
         if receipt is not None:
+            failed_stage = receipt.active_stage
             receipt.fail_active_stage(exc)
             receipt.finish(False)
+            failed_phase = "query_failed" if failed_stage == "query" else "fact_pack_failed"
+            _set_run_phase(
+                Path(receipt.path).parent,
+                failed_phase,
+                lastSuccessfulPhase="querying" if failed_stage and failed_stage != "query" else None,
+                error=str(exc),
+            )
         print("meta skill failed: %s" % exc, file=sys.stderr)
         return 2
 

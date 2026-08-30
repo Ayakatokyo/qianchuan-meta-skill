@@ -56,3 +56,12 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("analysis-result.json", body)
         self.assertIn("query-only", body)
         self.assertIn("不完整", body)
+
+    def test_skill_body_describes_two_stage_analysis_handoff(self):
+        _, body = load_skill_document()
+
+        self.assertIn("awaiting_analysis_input", body)
+        self.assertIn("factPackManifestSha256", body)
+        self.assertIn("materialScope", body)
+        self.assertIn("continue-analysis", body)
+        self.assertIn("不自动生成商业结论", body)

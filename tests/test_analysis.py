@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,7 @@ from analysis import (  # noqa: E402
     render_reports,
     resolve_analysis_spec,
     slice_fact_pack,
+    validate_analysis_handoff,
     validate_analysis_result,
     verify_analysis,
 )
@@ -128,6 +130,111 @@ def analysis_fact_pack(root):
 
 
 class AnalysisSpecTests(unittest.TestCase):
+    def test_validates_single_section_analysis_handoff_and_normalizes_scope(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            manifest = json.loads((fact_dir / "manifest.json").read_text(encoding="utf-8"))
+            manifest_hash = hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest()
+            request = {
+                "stage": "analysis",
+                "runId": root.name,
+                "factPackManifestSha256": manifest_hash,
+                "sections": ["material_leaderboard"],
+                "materialScope": {"type": "top_n", "value": 1},
+                "requestText": "分析高消耗素材",
+                "analysisSpec": spec("material_leaderboard", selection={"rankRange": {"start": 1, "end": 1}}),
+            }
+
+            normalized = validate_analysis_handoff(request, fact_dir)
+
+        self.assertEqual(normalized["stage"], "analysis")
+        self.assertEqual(normalized["runId"], root.name)
+        self.assertEqual(normalized["factPackManifestSha256"], manifest_hash)
+        self.assertEqual(normalized["sections"], ["material_leaderboard"])
+        self.assertEqual(normalized["selection"], {"rankRange": {"start": 1, "end": 1}})
+        self.assertEqual(normalized["manifestSummary"]["counts"], manifest.get("counts", {}))
+
+    def test_prepare_analysis_accepts_bound_handoff_and_marks_analysis_prepared(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            request = {
+                "stage": "analysis",
+                "runId": root.name,
+                "factPackManifestSha256": hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest(),
+                "sections": ["material_leaderboard"],
+                "materialScope": {"type": "top_n", "value": 1},
+                "requestText": "分析高消耗素材",
+                "analysisSpec": spec("material_leaderboard", selection={"rankRange": {"start": 1, "end": 1}}),
+            }
+            request_path = root / "analysis-request.json"
+            request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+
+            with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}):
+                receipt = prepare_analysis(root, request_path, root / "analysis")
+
+        self.assertEqual(receipt["stage"], "analysis_prepared")
+        self.assertEqual(receipt["factPackManifestSha256"], request["factPackManifestSha256"])
+        self.assertEqual(receipt["status"], "awaiting_model")
+
+    def test_validates_multi_section_analysis_handoff(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            request = {
+                "stage": "analysis",
+                "runId": root.name,
+                "factPackManifestSha256": hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest(),
+                "sections": ["material_leaderboard", "audience"],
+                "materialScope": {"type": "all"},
+                "requestText": "比较榜单与人群",
+                "analysisSpec": spec("material_leaderboard", "audience"),
+            }
+
+            normalized = validate_analysis_handoff(request, fact_dir)
+
+        self.assertEqual(normalized["sections"], ["material_leaderboard", "audience"])
+        self.assertEqual(normalized["selection"], {"rankRange": {"start": 1, "end": 2}})
+
+    def test_rejects_analysis_handoff_for_missing_section(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            (fact_dir / "audience.json").unlink()
+            request = {
+                "stage": "analysis",
+                "runId": root.name,
+                "factPackManifestSha256": hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest(),
+                "sections": ["audience"],
+                "materialScope": {"type": "all"},
+                "requestText": "分析人群",
+                "analysisSpec": spec("audience"),
+            }
+
+            with self.assertRaisesRegex(AnalysisError, "section.*unavailable|missing"):
+                validate_analysis_handoff(request, fact_dir)
+
+    def test_rejects_analysis_handoff_when_manifest_hash_changes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            manifest_path = fact_dir / "manifest.json"
+            original_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+            request = {
+                "stage": "analysis",
+                "runId": root.name,
+                "factPackManifestSha256": original_hash,
+                "sections": ["material_leaderboard"],
+                "materialScope": {"type": "all"},
+                "requestText": "分析榜单",
+                "analysisSpec": spec("material_leaderboard"),
+            }
+            manifest_path.write_text(manifest_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(AnalysisError, "manifest.*mismatch|hash"):
+                validate_analysis_handoff(request, fact_dir)
+
     def test_versioned_fixture_covers_three_requested_offline_scenarios(self):
         fixture = json.loads((ROOT / "tests" / "fixtures" / "analysis" / "scenario-contracts.json").read_text(encoding="utf-8"))
         self.assertEqual([item["id"] for item in fixture["scenarios"]], ["leaderboard-only", "audience-and-leaderboard", "all-sections"])

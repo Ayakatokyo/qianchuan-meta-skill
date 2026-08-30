@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 import tempfile
@@ -29,6 +30,92 @@ def origin_row(material_id, cost, amount):
 
 
 class MetaSkillCliTests(unittest.TestCase):
+    def test_fact_pack_handoff_summary_contains_phase_counts_and_manifest_hash(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = root / "fact-pack"
+            fact_dir.mkdir()
+            manifest = {
+                "schemaVersion": 1,
+                "targetTopN": 2,
+                "materialIds": ["m-1", "m-2"],
+                "counts": {"materials": 2, "audienceFacts": 1, "scriptFacts": 2, "highlightFrames": 3},
+                "quality": {
+                    "status": "built_with_warnings",
+                    "errors": [{"category": "scripts", "code": "script_missing"}],
+                },
+                "sourceFiles": [{"path": "source-data/field-manifest.json", "sha256": "a" * 64, "sizeBytes": 10}],
+            }
+            (fact_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            manifest_hash = hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest()
+
+            handoff = run_meta_skill.build_fact_pack_handoff(root)
+
+        self.assertEqual(handoff["stage"], "fact_pack_ready")
+        self.assertEqual(handoff["runId"], root.name)
+        self.assertEqual(handoff["factPackPath"], "fact-pack")
+        self.assertEqual(handoff["factPackManifestSha256"], manifest_hash)
+        self.assertEqual(handoff["counts"], manifest["counts"])
+        self.assertEqual(handoff["missingItems"], manifest["quality"]["errors"])
+        self.assertEqual(handoff["sourceRefs"], manifest["sourceFiles"])
+
+    def test_continue_analysis_command_dispatches_without_starting_collection(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            request = root / "analysis-request.json"
+            request.write_text("{}", encoding="utf-8")
+            with patch.object(run_meta_skill, "continue_analysis", return_value={"status": "awaiting_model"}) as continue_analysis, patch.object(
+                run_meta_skill, "fetch_material_report", side_effect=AssertionError("collection must not restart")
+            ), patch.object(run_meta_skill, "run_rpa_pipeline", side_effect=AssertionError("RPA must not restart")):
+                status = run_meta_skill.main([
+                    "continue-analysis", "--run-dir", str(root), "--analysis-request", str(request),
+                ])
+
+        self.assertEqual(status, 0)
+        continue_analysis.assert_called_once_with(root, request, None)
+
+    def test_successful_collection_stops_at_awaiting_analysis_input_with_handoff(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            query_path, highlight_path = self.write_specs(root)
+            output_dir = root / "run"
+            handoff = {
+                "stage": "fact_pack_ready",
+                "runId": output_dir.name,
+                "factPackPath": "fact-pack",
+                "factPackManifestSha256": "a" * 64,
+                "counts": {"materials": 1, "audienceFacts": 0, "scriptFacts": 1, "highlightFrames": 0},
+                "missingItems": [],
+                "sourceRefs": [],
+            }
+            def build_pack(_run_dir):
+                fact_dir = output_dir / "fact-pack"
+                fact_dir.mkdir(parents=True)
+                (fact_dir / "manifest.json").write_text("{}", encoding="utf-8")
+                return {"targetTopN": 1, "counts": handoff["counts"]}
+
+            with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]), patch.object(
+                run_meta_skill, "list_rpa_accounts", return_value={"accountId": "rpa-1", "platform": "RPA"}
+            ), patch.object(
+                run_meta_skill, "run_rpa_pipeline", return_value={"succeeded": True, "readyPath": "ready.json", "verificationPath": "verify.json"}
+            ), patch.object(
+                run_meta_skill, "build_fact_pack", side_effect=build_pack
+            ), patch.object(
+                run_meta_skill, "verify_fact_pack", return_value={"status": "succeeded", "errors": []}
+            ), patch.object(run_meta_skill, "build_fact_pack_handoff", return_value=handoff):
+                status = run_meta_skill.main([
+                    "run", "--execute-rpa", "--query-spec", str(query_path),
+                    "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir),
+                ])
+            receipt = json.loads((output_dir / "run-receipt.json").read_text(encoding="utf-8"))
+            persisted_handoff = json.loads((output_dir / "analysis-handoff.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(receipt["phase"], "awaiting_analysis_input")
+        self.assertEqual(receipt["lastSuccessfulPhase"], "fact_pack_ready")
+        self.assertEqual(receipt["handoff"]["stage"], "fact_pack_ready")
+        self.assertEqual(persisted_handoff, handoff)
+
     def test_prepare_analysis_command_dispatches_to_offline_preparer(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -42,6 +129,33 @@ class MetaSkillCliTests(unittest.TestCase):
 
         self.assertEqual(status, 0)
         prepare.assert_called_once_with(root, request, root / "analysis")
+
+    def test_prepare_analysis_moves_existing_run_to_analysis_prepared(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            request = root / "analysis-request.json"
+            request.write_text("{}", encoding="utf-8")
+            (root / "run-receipt.json").write_text(json.dumps({"status": "succeeded"}), encoding="utf-8")
+            with patch.object(run_meta_skill, "prepare_analysis", return_value={"status": "awaiting_model"}):
+                status = run_meta_skill.main([
+                    "prepare-analysis", "--run-dir", str(root), "--analysis-request", str(request),
+                ])
+            receipt = json.loads((root / "run-receipt.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(receipt["phase"], "analysis_prepared")
+
+    def test_verify_analysis_moves_successful_run_to_report_ready(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "run-receipt.json").write_text(json.dumps({"status": "succeeded"}), encoding="utf-8")
+            with patch.object(run_meta_skill, "verify_analysis", return_value={"status": "succeeded", "report": "report.json"}):
+                status = run_meta_skill.main(["verify-analysis", "--run-dir", str(root)])
+            receipt = json.loads((root / "run-receipt.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(receipt["phase"], "report_ready")
+        self.assertEqual(receipt["lastSuccessfulPhase"], "analysis_verified")
 
     def test_verify_analysis_command_returns_nonzero_when_contract_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -441,11 +555,14 @@ class MetaSkillCliTests(unittest.TestCase):
             with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]), patch.object(
                 run_meta_skill, "list_rpa_accounts", return_value={"accountId": "rpa-1", "platform": "RPA_JULIANG_QC_ACCOUNT_PASSWORD"}
             ), patch.object(run_meta_skill, "run_rpa_pipeline", return_value={"succeeded": False, "verificationPath": "batch-verification.json"}):
+                output_dir = root / "run"
                 status = run_meta_skill.main(
                     ["run", "--execute-rpa", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path), "--output-dir", str(root / "run")]
                 )
+            receipt = json.loads((output_dir / "run-receipt.json").read_text(encoding="utf-8"))
 
         self.assertEqual(status, 2)
+        self.assertEqual(receipt["phase"], "fact_pack_failed")
 
     def test_successful_rpa_run_builds_fact_pack_and_records_its_stage(self):
         with tempfile.TemporaryDirectory() as temp_dir:

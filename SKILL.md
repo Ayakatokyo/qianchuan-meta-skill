@@ -116,6 +116,32 @@ python scripts/run_meta_skill.py verify-analysis \
 
 ## 商业分析交接
 
+采集与商业分析分为两个阶段。阶段一完成查询、RPA、四类事实包和离线校验后，运行状态为 `fact_pack_ready`，随后停在 `awaiting_analysis_input`，不自动生成商业结论。状态链路为：`awaiting_query_input → querying → rpa_processing → fact_pack_ready → awaiting_analysis_input → analysis_prepared → analysis_verified → report_ready`；失败时保留 `query_failed`、`fact_pack_failed` 或 `analysis_failed` 及可重试原因。
+
+阶段一的交接文件为 `analysis-handoff.json`，至少包含 `runId`、`factPackPath`、`factPackManifestSha256`、四类计数、`missingItems` 和 `sourceRefs`。阶段二由用户选择一个或多个 `material_leaderboard`、`audience`、`scripts`、`highlight_frames` 分区，指定全部、TopN 或素材 ID 范围，并用自然语言描述分析目标、关注指标、比较维度、输出形式和深度。
+
+阶段二请求契约如下；`analysisSpec` 可先为 `null`，本地恢复入口会根据交接内容生成最小合法规范，或直接使用上游解析出的 AnalysisSpec：
+
+```json
+{
+  "stage": "analysis",
+  "runId": "run-20260810-20260820",
+  "factPackManifestSha256": "...",
+  "sections": ["material_leaderboard", "audience"],
+  "materialScope": {"type": "top_n", "value": 3},
+  "requestText": "分析高消耗素材的共同卖点，并给出创作建议",
+  "analysisSpec": null
+}
+```
+
+继续分析时必须绑定同一 `runId` 和 manifest SHA-256；事实包变化、分区文件缺失/不可用、素材范围越界或请求文本为空都会被阻断，缺失数据不会被当作零：
+
+```bash
+python scripts/run_meta_skill.py continue-analysis \
+  --run-dir /path/to/completed-run \
+  --analysis-request /path/to/analysis-request.json
+```
+
 分析请求文件使用 `{\"schemaVersion\": 1, \"requestText\": \"...\", \"analysisSpec\": {...}}`；自然语言解析由模型或上游调用方完成，本地脚本只接受并校验结构化 AnalysisSpec。AnalysisSpec 必须声明一个或多个 `sections`（`material_leaderboard`、`audience`、`scripts`、`highlight_frames`）、素材 ID/rank 选择、目标/问题、字段与聚合、分组比较、显式派生计算、证据策略和输出格式。
 
 `prepare-analysis` 只允许读取已通过 `verify-fact-pack` 的完整事实包，并写入 `analysis-request.json`、`analysis-spec.json`、`analysis-input.json`、`analysis-receipt.json`。输入只包含声明字段和选择范围的切片；每个来源保留 manifest/sourceRef/哈希。`analysis-input.json` 是模型交接边界，模型应返回 `analysis-result.json`；每条 claim 必须带 `claimType`、`evidenceRefs`、`confidence`，计算另带 formula/inputs。事实、计算、AI 推断、建议在报告中分层；人群结论只能表达相关性，脚本必须引用逐字稿原文，高光帧视觉观察必须标记为 AI 推断并引用 JPEG artifact。
