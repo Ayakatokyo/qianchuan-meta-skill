@@ -16,6 +16,7 @@ from analysis import (  # noqa: E402
     compile_model_input,
     load_analysis_registry,
     prepare_analysis,
+    receive_analysis_result,
     render_reports,
     resolve_analysis_spec,
     slice_fact_pack,
@@ -173,10 +174,12 @@ class AnalysisSpecTests(unittest.TestCase):
 
             with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}):
                 receipt = prepare_analysis(root, request_path, root / "analysis")
+            model_input = json.loads((root / "analysis" / "analysis-input.json").read_text(encoding="utf-8"))
 
         self.assertEqual(receipt["stage"], "analysis_prepared")
         self.assertEqual(receipt["factPackManifestSha256"], request["factPackManifestSha256"])
         self.assertEqual(receipt["status"], "awaiting_model")
+        self.assertEqual(receipt["sourceRefs"], model_input["sourceRefs"])
 
     def test_validates_multi_section_analysis_handoff(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -319,6 +322,30 @@ class AnalysisSpecTests(unittest.TestCase):
 
 
 class AnalysisInputTests(unittest.TestCase):
+    def test_compiles_complete_model_handoff_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            registry = load_analysis_registry(REGISTRY_PATH)
+            payload = spec("material_leaderboard", selection={"rankRange": {"start": 1, "end": 1}})
+            materials = json.loads((fact_dir / "material-leaderboard.json").read_text())["materials"]
+            resolved = resolve_analysis_spec(payload, registry, {"materialLeaderboard": {"materials": materials}})
+            evidence = slice_fact_pack(root, fact_dir, resolved, registry)
+            model_input = compile_model_input(root, resolved, evidence, registry, request_text="分析高消耗素材并给出建议")
+            manifest_hash = hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest()
+
+        self.assertEqual(model_input["requestText"], "分析高消耗素材并给出建议")
+        self.assertEqual(model_input["factPackManifestSha256"], manifest_hash)
+        self.assertEqual(model_input["factPack"]["manifestSha256"], manifest_hash)
+        self.assertEqual(model_input["modelConstraints"]["allowedMaterialIds"], ["m-1"])
+        self.assertTrue(model_input["modelConstraints"]["doNotUseExternalData"])
+        self.assertTrue(model_input["modelConstraints"]["doNotFillMissingData"])
+        self.assertEqual(model_input["resultSchema"]["required"], ["schemaVersion", "analysisSpecFingerprint", "claims"])
+        self.assertEqual(
+            model_input["resultSchema"]["claimRequired"],
+            ["claimType", "statement", "evidenceRefs", "confidence"],
+        )
+
     def test_slices_only_requested_leaderboard_fields_and_selected_rank(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -481,6 +508,107 @@ class AnalysisResultTests(unittest.TestCase):
             }
             with self.assertRaisesRegex(AnalysisError, "not declared"):
                 validate_analysis_result(undeclared, model_input, {"sections": ["material_leaderboard"], "calculations": []}, Path(temp_dir))
+
+    def _prepared_analysis(self, root):
+        fact_dir = analysis_fact_pack(root)
+        request = {
+            "stage": "analysis",
+            "runId": root.name,
+            "factPackManifestSha256": hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest(),
+            "sections": ["material_leaderboard"],
+            "materialScope": {"type": "top_n", "value": 1},
+            "requestText": "分析高消耗素材",
+            "analysisSpec": spec("material_leaderboard", selection={"rankRange": {"start": 1, "end": 1}}),
+        }
+        request_path = root / "request.json"
+        request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+        with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}):
+            prepare_analysis(root, request_path, root / "analysis")
+        return json.loads((root / "analysis" / "analysis-input.json").read_text(encoding="utf-8"))
+
+    def test_receives_valid_model_result_and_verifies_before_rendering_report(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            model_input = self._prepared_analysis(root)
+            result_path = root / "model-result.json"
+            result_path.write_text(json.dumps({
+                "schemaVersion": 1,
+                "analysisSpecFingerprint": model_input["analysisSpecFingerprint"],
+                "claims": [{
+                    "claimType": "fact",
+                    "statement": "素材一的消耗为 100",
+                    "evidenceRefs": [model_input["sections"]["material_leaderboard"]["evidence"]["rows"][0]["sourceRef"]],
+                    "confidence": 1,
+                }],
+            }, ensure_ascii=False), encoding="utf-8")
+
+            with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}):
+                outcome = receive_analysis_result(root, result_path)
+
+            receipt = json.loads((root / "analysis" / "analysis-receipt.json").read_text(encoding="utf-8"))
+            report_exists = (root / "analysis" / "report.json").is_file()
+
+        self.assertEqual(outcome["status"], "succeeded")
+        self.assertTrue(report_exists)
+        self.assertEqual(receipt["status"], "succeeded")
+
+    def test_missing_or_invalid_model_result_stays_awaiting_model_without_report(self):
+        for invalid_payload in (None, "not-json"):
+            with self.subTest(invalid_payload=invalid_payload), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                self._prepared_analysis(root)
+                result_path = root / "model-result.json"
+                if invalid_payload is not None:
+                    result_path.write_text(invalid_payload, encoding="utf-8")
+
+                outcome = receive_analysis_result(root, result_path)
+                receipt = json.loads((root / "analysis" / "analysis-receipt.json").read_text(encoding="utf-8"))
+
+                self.assertEqual(outcome["status"], "awaiting_model")
+                self.assertEqual(receipt["status"], "awaiting_model")
+                self.assertFalse((root / "analysis" / "analysis-result.json").exists())
+                self.assertFalse((root / "analysis" / "report.json").exists())
+
+    def test_rejects_model_result_with_evidence_not_in_input_without_report(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            model_input = self._prepared_analysis(root)
+            result_path = root / "model-result.json"
+            result_path.write_text(json.dumps({
+                "schemaVersion": 1,
+                "analysisSpecFingerprint": model_input["analysisSpecFingerprint"],
+                "claims": [{
+                    "claimType": "fact",
+                    "statement": "越权事实",
+                    "evidenceRefs": [{"path": "source/unknown.json", "sha256": "a" * 64, "sizeBytes": 1}],
+                    "confidence": 1,
+                }],
+            }, ensure_ascii=False), encoding="utf-8")
+
+            with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}):
+                outcome = receive_analysis_result(root, result_path)
+
+            receipt = json.loads((root / "analysis" / "analysis-receipt.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(outcome["status"], "failed")
+        self.assertIn("not present in model input", " ".join(outcome["errors"]))
+        self.assertEqual(receipt["status"], "failed")
+        self.assertFalse((root / "analysis" / "report.json").exists())
+
+    def test_verify_analysis_keeps_missing_model_result_awaiting_model(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._prepared_analysis(root)
+
+            with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}):
+                outcome = verify_analysis(root)
+
+            receipt = json.loads((root / "analysis" / "analysis-receipt.json").read_text(encoding="utf-8"))
+            report_exists = (root / "analysis" / "report.json").exists()
+
+        self.assertEqual(outcome["status"], "awaiting_model")
+        self.assertEqual(receipt["status"], "awaiting_model")
+        self.assertFalse(report_exists)
 
     def test_verify_rejects_tampered_analysis_input(self):
         with tempfile.TemporaryDirectory() as temp_dir:

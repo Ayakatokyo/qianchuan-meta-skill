@@ -340,6 +340,15 @@ def analysis_fingerprint(spec: dict[str, Any]) -> str:
 
 PROMPT_VERSION = "qianchuan-analysis-prompt-v1"
 
+_MODEL_RESULT_SCHEMA_SUMMARY = {
+    "schemaVersion": 1,
+    "type": "object",
+    "required": ["schemaVersion", "analysisSpecFingerprint", "claims"],
+    "claimRequired": ["claimType", "statement", "evidenceRefs", "confidence"],
+    "claimTypes": ["fact", "calculation", "inference", "recommendation"],
+    "calculationRequired": ["calculationId", "formula", "inputs"],
+}
+
 
 def _json_write(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -537,7 +546,13 @@ _PROMPT_INSTRUCTIONS = {
 }
 
 
-def compile_model_input(run_dir: Path, spec: dict[str, Any], evidence: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any]:
+def compile_model_input(
+    run_dir: Path,
+    spec: dict[str, Any],
+    evidence: dict[str, Any],
+    registry: dict[str, Any],
+    request_text: str | None = None,
+) -> dict[str, Any]:
     sections = {}
     for section in spec["sections"]:
         sections[section] = {
@@ -548,17 +563,28 @@ def compile_model_input(run_dir: Path, spec: dict[str, Any], evidence: dict[str,
             "groupComparisons": [item for item in spec["groupComparisons"] if item["section"] == section],
             "evidence": evidence["sections"].get(section, {"rows": [], "sourceRefs": []}),
         }
-    return {
+    manifest_ref = next((ref for ref in evidence["sourceRefs"] if ref["path"] == "fact-pack/manifest.json"), None)
+    model_input = {
         "schemaVersion": 1,
         "inputType": "qianchuan_analysis_model_input",
         "promptVersion": PROMPT_VERSION,
         "runId": Path(run_dir).name,
         "analysisSpec": deepcopy(spec),
         "analysisSpecFingerprint": analysis_fingerprint(spec),
-        "factPack": {"manifestRef": next((ref for ref in evidence["sourceRefs"] if ref["path"] == "fact-pack/manifest.json"), None)},
+        "factPackManifestSha256": manifest_ref.get("sha256") if manifest_ref else None,
+        "factPack": {"manifestRef": manifest_ref, "manifestSha256": manifest_ref.get("sha256") if manifest_ref else None},
         "sections": sections,
         "calculations": deepcopy(evidence.get("calculations", [])),
         "sourceRefs": deepcopy(evidence["sourceRefs"]),
+        "modelConstraints": {
+            "allowedSections": list(spec["sections"]),
+            "allowedMaterialIds": list(spec["selectedMaterialIds"]),
+            "onlyUseProvidedEvidence": True,
+            "doNotUseExternalData": True,
+            "doNotFillMissingData": True,
+            "allClaimsRequireEvidenceRefs": True,
+        },
+        "resultSchema": deepcopy(_MODEL_RESULT_SCHEMA_SUMMARY),
         "missingItems": deepcopy(evidence["missingItems"]),
         "handoff": {
             "modelMustReturn": "analysis-result.json",
@@ -566,6 +592,9 @@ def compile_model_input(run_dir: Path, spec: dict[str, Any], evidence: dict[str,
             "allClaimsRequire": ["claimType", "evidenceRefs", "confidence"],
         },
     }
+    if request_text is not None:
+        model_input["requestText"] = request_text
+    return model_input
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -680,8 +709,13 @@ def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None 
         request_spec["selection"] = deepcopy(request["selection"])
     spec = resolve_analysis_spec(request_spec, registry, fact_pack)
     evidence = slice_fact_pack(run_dir, fact_pack_dir, spec, registry)
-    model_input = compile_model_input(run_dir, spec, evidence, registry)
-    model_input["requestText"] = request.get("requestText", "") if isinstance(request.get("requestText", ""), str) else ""
+    model_input = compile_model_input(
+        run_dir,
+        spec,
+        evidence,
+        registry,
+        request_text=request.get("requestText", "") if isinstance(request.get("requestText", ""), str) else "",
+    )
     _write_json(output_dir / "analysis-spec.json", spec)
     _write_json(output_dir / "analysis-input.json", model_input)
     status = "awaiting_model_with_missing_data" if evidence["missingItems"] else "awaiting_model"
@@ -695,6 +729,9 @@ def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None 
         "analysisSpecFingerprint": analysis_fingerprint(spec),
         "promptVersion": PROMPT_VERSION,
         "status": status,
+        "sections": deepcopy(spec["sections"]),
+        "selectedMaterialIds": deepcopy(spec["selectedMaterialIds"]),
+        "sourceRefs": deepcopy(model_input["sourceRefs"]),
         "missingItems": deepcopy(evidence["missingItems"]),
         "validation": {"factPack": fact_result, "analysisInput": "succeeded"},
         "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -783,11 +820,53 @@ def validate_analysis_result(result: dict[str, Any], model_input: dict[str, Any]
 
 def validate_analysis_input(run_dir: Path, fact_pack_dir: Path, model_input: dict[str, Any], spec: dict[str, Any], registry: dict[str, Any]) -> None:
     expected_evidence = slice_fact_pack(run_dir, fact_pack_dir, spec, registry)
-    expected = compile_model_input(run_dir, spec, expected_evidence, registry)
-    if "requestText" in model_input:
-        expected["requestText"] = model_input["requestText"]
+    expected = compile_model_input(
+        run_dir,
+        spec,
+        expected_evidence,
+        registry,
+        request_text=model_input.get("requestText") if "requestText" in model_input else None,
+    )
     if json.dumps(expected, ensure_ascii=False, sort_keys=True, separators=(",", ":")) != json.dumps(model_input, ensure_ascii=False, sort_keys=True, separators=(",", ":")):
         raise AnalysisError("analysis input does not match fact slice")
+
+
+def _mark_model_awaiting(analysis_dir: Path, error: str) -> dict[str, Any]:
+    receipt_path = Path(analysis_dir) / "analysis-receipt.json"
+    receipt = _read_json(receipt_path, "analysis receipt")
+    errors = list(receipt.get("errors", []))
+    errors.append(error)
+    receipt.update({
+        "status": "awaiting_model",
+        "errors": errors,
+        "validation": {**(receipt.get("validation") or {}), "result": "awaiting_model", "errors": errors},
+    })
+    _write_json(receipt_path, receipt)
+    for report_name in ("report.json", "report.md"):
+        (Path(analysis_dir) / report_name).unlink(missing_ok=True)
+    return {"status": "awaiting_model", "errors": errors}
+
+
+def receive_analysis_result(run_dir: Path, result_path: Path, analysis_dir: Path | None = None) -> dict[str, Any]:
+    """Receive a model-produced JSON result, then run the offline verifier."""
+    run_dir = Path(run_dir).resolve()
+    analysis_dir = Path(analysis_dir).resolve() if analysis_dir else run_dir / "analysis"
+    result_path = Path(result_path)
+    if not result_path.is_file():
+        return _mark_model_awaiting(analysis_dir, "analysis result is missing; model handoff is incomplete")
+    try:
+        result = _read_json(result_path, "analysis result")
+    except AnalysisError:
+        return _mark_model_awaiting(analysis_dir, "analysis result is not valid JSON; model handoff is incomplete")
+    if not isinstance(result, dict):
+        return _mark_model_awaiting(analysis_dir, "analysis result must be a JSON object; model handoff is incomplete")
+
+    _write_json(analysis_dir / "analysis-result.json", result)
+    verification = verify_analysis(run_dir, analysis_dir)
+    if verification.get("status") != "succeeded":
+        for report_name in ("report.json", "report.md"):
+            (analysis_dir / report_name).unlink(missing_ok=True)
+    return verification
 
 
 def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[str, Any], receipt: dict[str, Any]) -> None:
@@ -854,21 +933,32 @@ def verify_analysis(run_dir: Path, analysis_dir: Path | None = None) -> dict[str
             errors.append(str(exc))
         if model_input.get("missingItems"):
             errors.append("analysis input has missing items; commercial analysis is incomplete")
+        base_errors = list(errors)
         result_path = analysis_dir / "analysis-result.json"
+        model_waiting = False
         if not result_path.is_file():
             errors.append("analysis-result.json is missing; model handoff is incomplete")
+            model_waiting = True
         else:
-            result = _read_json(result_path, "analysis result")
             try:
-                result = validate_analysis_result(result, model_input, spec, run_dir)
+                result = _read_json(result_path, "analysis result")
             except AnalysisError as exc:
                 errors.append(str(exc))
+                model_waiting = True
+            else:
+                try:
+                    result = validate_analysis_result(result, model_input, spec, run_dir)
+                except AnalysisError as exc:
+                    errors.append(str(exc))
         if errors:
-            status = "incomplete" if model_input.get("missingItems") and len(errors) == 1 else "failed"
+            if model_waiting and not base_errors:
+                status = "awaiting_model"
+            else:
+                status = "incomplete" if model_input.get("missingItems") and len(errors) == 1 else "failed"
             receipt.update({"status": status, "validation": {"factPack": fact_result, "errors": errors}})
             _write_json(receipt_path, receipt)
             return {"status": status, "errors": errors}
-        receipt.update({"status": "succeeded", "resultStatus": result.get("status", "unknown"), "validation": {"factPack": fact_result, "result": "succeeded"}, "missingItems": model_input.get("missingItems", [])})
+        receipt.update({"status": "succeeded", "resultStatus": result.get("status", "unknown"), "errors": [], "validation": {"factPack": fact_result, "result": "succeeded"}, "missingItems": model_input.get("missingItems", [])})
         _write_json(receipt_path, receipt)
         render_reports(analysis_dir, model_input, result, receipt)
         return {"status": "succeeded", "errors": [], "report": str(analysis_dir / "report.json")}

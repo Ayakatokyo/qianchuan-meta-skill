@@ -12,7 +12,7 @@ from config_specs import (
     ConfigSpecError, highlight_spec_to_policy, legacy_config_to_specs, query_spec_to_query_config,
     resolve_highlight_spec, resolve_query_spec, spec_fingerprint, write_resolved_specs,
 )
-from analysis import AnalysisError, prepare_analysis, verify_analysis
+from analysis import AnalysisError, prepare_analysis, receive_analysis_result, verify_analysis
 from frame_extractor import FrameExtractionError, extract_highlight_frames
 from fact_pack import FactPackError, build_fact_pack, verify_fact_pack
 from field_registry import FieldRegistryError, load_field_registry
@@ -313,6 +313,10 @@ def build_parser():
     continue_analysis_parser.add_argument("--run-dir", required=True)
     continue_analysis_parser.add_argument("--analysis-request", required=True)
     continue_analysis_parser.add_argument("--output-dir")
+    receive_analysis_parser = commands.add_parser("receive-analysis-result", help="receive and verify a model-produced analysis result")
+    receive_analysis_parser.add_argument("--run-dir", required=True)
+    receive_analysis_parser.add_argument("--analysis-result", required=True)
+    receive_analysis_parser.add_argument("--analysis-dir")
     return parser
 
 
@@ -328,6 +332,38 @@ def main(argv=None):
                 raise
             print(json.dumps(result, ensure_ascii=False))
             return 0
+        if args.command == "receive-analysis-result":
+            try:
+                result = receive_analysis_result(
+                    Path(args.run_dir),
+                    Path(args.analysis_result),
+                    Path(args.analysis_dir) if args.analysis_dir else None,
+                )
+            except (MetaSkillError, AnalysisError) as exc:
+                _set_run_phase(Path(args.run_dir), "analysis_failed", error=str(exc))
+                raise
+            if result.get("status") == "succeeded":
+                _set_run_phase(
+                    Path(args.run_dir),
+                    "report_ready",
+                    lastSuccessfulPhase="analysis_verified",
+                    report=str(result.get("report", "")),
+                )
+            elif result.get("status") == "awaiting_model":
+                _set_run_phase(
+                    Path(args.run_dir),
+                    "analysis_prepared",
+                    analysisStatus="awaiting_model",
+                    analysisErrors=result.get("errors", []),
+                )
+            else:
+                _set_run_phase(
+                    Path(args.run_dir),
+                    "analysis_failed",
+                    analysisErrors=result.get("errors", []),
+                )
+            print(json.dumps(result, ensure_ascii=False))
+            return 0 if result.get("status") in {"succeeded", "awaiting_model"} else 1
         if args.command == "prepare-analysis":
             try:
                 result = prepare_analysis(Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
@@ -489,6 +525,8 @@ def main(argv=None):
         if (output_dir / "analysis-handoff.json").is_file():
             print("phase=awaiting_analysis_input")
             print("analysis_handoff=%s" % (output_dir / "analysis-handoff.json"))
+            print("next_step=awaiting_analysis_input")
+            print("analysis_prompt=请继续输入分析目标、分区、素材范围和关注指标")
         return 0
     except (MetaSkillError, AnalysisError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError, RunVerificationError, FactPackError) as exc:
         if receipt is not None:

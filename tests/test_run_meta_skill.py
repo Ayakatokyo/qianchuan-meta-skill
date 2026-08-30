@@ -1,8 +1,10 @@
 import hashlib
+import io
 import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -103,10 +105,12 @@ class MetaSkillCliTests(unittest.TestCase):
             ), patch.object(
                 run_meta_skill, "verify_fact_pack", return_value={"status": "succeeded", "errors": []}
             ), patch.object(run_meta_skill, "build_fact_pack_handoff", return_value=handoff):
-                status = run_meta_skill.main([
-                    "run", "--execute-rpa", "--query-spec", str(query_path),
-                    "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir),
-                ])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    status = run_meta_skill.main([
+                        "run", "--execute-rpa", "--query-spec", str(query_path),
+                        "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir),
+                    ])
             receipt = json.loads((output_dir / "run-receipt.json").read_text(encoding="utf-8"))
             persisted_handoff = json.loads((output_dir / "analysis-handoff.json").read_text(encoding="utf-8"))
 
@@ -115,6 +119,7 @@ class MetaSkillCliTests(unittest.TestCase):
         self.assertEqual(receipt["lastSuccessfulPhase"], "fact_pack_ready")
         self.assertEqual(receipt["handoff"]["stage"], "fact_pack_ready")
         self.assertEqual(persisted_handoff, handoff)
+        self.assertIn("next_step=awaiting_analysis_input", output.getvalue())
 
     def test_prepare_analysis_command_dispatches_to_offline_preparer(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -164,6 +169,39 @@ class MetaSkillCliTests(unittest.TestCase):
                 status = run_meta_skill.main(["verify-analysis", "--run-dir", str(root), "--analysis-dir", str(root / "analysis")])
 
         self.assertEqual(status, 1)
+
+    def test_receive_analysis_result_command_dispatches_and_preserves_awaiting_model(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            result_path = root / "model-result.json"
+            result_path.write_text("{}", encoding="utf-8")
+            (root / "run-receipt.json").write_text(json.dumps({"phase": "analysis_prepared"}), encoding="utf-8")
+            with patch.object(run_meta_skill, "receive_analysis_result", return_value={"status": "awaiting_model", "errors": ["incomplete"]}) as receive:
+                status = run_meta_skill.main([
+                    "receive-analysis-result", "--run-dir", str(root), "--analysis-result", str(result_path),
+                ])
+            receipt = json.loads((root / "run-receipt.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        receive.assert_called_once_with(root, result_path, None)
+        self.assertEqual(receipt["phase"], "analysis_prepared")
+        self.assertEqual(receipt["analysisStatus"], "awaiting_model")
+
+    def test_receive_analysis_result_command_moves_verified_result_to_report_ready(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            result_path = root / "model-result.json"
+            result_path.write_text("{}", encoding="utf-8")
+            (root / "run-receipt.json").write_text(json.dumps({"phase": "analysis_prepared"}), encoding="utf-8")
+            with patch.object(run_meta_skill, "receive_analysis_result", return_value={"status": "succeeded", "report": "report.json"}):
+                status = run_meta_skill.main([
+                    "receive-analysis-result", "--run-dir", str(root), "--analysis-result", str(result_path),
+                ])
+            receipt = json.loads((root / "run-receipt.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(receipt["phase"], "report_ready")
+        self.assertEqual(receipt["lastSuccessfulPhase"], "analysis_verified")
 
     def test_connector_order_by_uses_direct_api_metric_rankings(self):
         registry = load_field_registry(run_meta_skill.REGISTRY_PATH)

@@ -65,3 +65,18 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("materialScope", body)
         self.assertIn("continue-analysis", body)
         self.assertIn("不自动生成商业结论", body)
+
+    def test_skill_body_specifies_model_handoff_contract_and_pause_resume_protocol(self):
+        _, body = load_skill_document()
+
+        self.assertIn("阶段一成功后必须停止", body)
+        self.assertIn("用户继续输入", body)
+        self.assertIn("AnalysisSpec", body)
+        self.assertIn("requestText", body)
+        self.assertIn("modelConstraints", body)
+        self.assertIn("doNotUseExternalData", body)
+        self.assertIn("doNotFillMissingData", body)
+        self.assertIn("resultSchema", body)
+        self.assertIn("receive-analysis-result", body)
+        self.assertIn("awaiting_model", body)
+        self.assertIn("不得伪造", body)
