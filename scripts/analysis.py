@@ -721,7 +721,19 @@ def _default_analysis_spec(request: dict[str, Any], registry: dict[str, Any]) ->
 
 
 def _fact_pack_fingerprint(run_dir: Path, fact_pack_dir: Path) -> str:
-    return _manifest_ref(run_dir, fact_pack_dir)["sha256"]
+    manifest = _read_json(fact_pack_dir / "manifest.json", "fact pack manifest")
+    paths = {"fact-pack/manifest.json"}
+    for name in ("material-leaderboard.json", "audience.json", "scripts.json", "highlight-frames.json"):
+        paths.add(f"fact-pack/{name}")
+    for ref in manifest.get("sourceFiles", []):
+        if isinstance(ref, dict) and isinstance(ref.get("path"), str):
+            paths.add(ref["path"])
+    entries = []
+    for relative in sorted(paths):
+        path = run_dir / relative
+        digest, size = file_hash_and_size(path)
+        entries.append({"path": relative, "sha256": digest, "sizeBytes": size})
+    return hashlib.sha256(json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None = None) -> dict[str, Any]:
@@ -737,7 +749,24 @@ def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None 
     ):
         request = validate_analysis_handoff(request, fact_pack_dir)
     _write_json(output_dir / "analysis-request.json", _safe_request(request))
-    fact_result = verify_fact_pack(run_dir, fact_pack_dir)
+    fact_pack_fingerprint = None
+    try:
+        fact_pack_fingerprint = _fact_pack_fingerprint(run_dir, fact_pack_dir)
+    except (AnalysisError, OSError):
+        # Let the existing verifier produce the stable incomplete-fact-pack error.
+        pass
+    existing_receipt_path = output_dir / "analysis-receipt.json"
+    existing_receipt = _read_json(existing_receipt_path, "analysis receipt") if existing_receipt_path.is_file() else None
+    cached_fact_result = (existing_receipt or {}).get("validation", {}).get("factPack")
+    if (
+        fact_pack_fingerprint is not None
+        and (existing_receipt or {}).get("factPackFingerprint") == fact_pack_fingerprint
+        and isinstance(cached_fact_result, dict)
+        and cached_fact_result.get("status") == "succeeded"
+    ):
+        fact_result = cached_fact_result
+    else:
+        fact_result = verify_fact_pack(run_dir, fact_pack_dir)
     if fact_result.get("status") != "succeeded":
         receipt = {
             "schemaVersion": 1,
@@ -774,8 +803,8 @@ def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None 
         "schemaVersion": 1,
         "runId": run_dir.name,
         "stage": "analysis_prepared",
-        "factPackFingerprint": _fact_pack_fingerprint(run_dir, fact_pack_dir),
-        "factPackManifestSha256": _fact_pack_fingerprint(run_dir, fact_pack_dir),
+        "factPackFingerprint": fact_pack_fingerprint,
+        "factPackManifestSha256": _manifest_ref(run_dir, fact_pack_dir)["sha256"],
         "analysisSpec": deepcopy(spec),
         "analysisSpecFingerprint": analysis_fingerprint(spec),
         "promptVersion": PROMPT_VERSION,

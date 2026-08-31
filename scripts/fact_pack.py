@@ -502,7 +502,8 @@ def _verify_file_ref(run_dir: Path, ref: Any, label: str) -> Path:
         raise FactPackError(f"{label} path escapes run directory") from exc
     if not path.is_file() or path.stat().st_size <= 0:
         raise FactPackError(f"{label} is missing or empty")
-    if ref.get("sizeBytes") != path.stat().st_size or ref.get("sha256") != _sha256(path):
+    digest, size = _cached_file_hash(path)
+    if ref.get("sizeBytes") != size or ref.get("sha256") != digest:
         raise FactPackError(f"{label} hash or size mismatch")
     return path
 

@@ -737,6 +737,29 @@ class AnalysisResultTests(unittest.TestCase):
             self.assertTrue((output_dir / "analysis-input.json").is_file())
             self.assertFalse((output_dir / "analysis-result.json").exists())
 
+    def test_prepare_analysis_reuses_successful_fact_pack_verification_when_unchanged(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            request = {
+                "stage": "analysis",
+                "runId": root.name,
+                "factPackManifestSha256": hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest(),
+                "sections": ["material_leaderboard"],
+                "materialScope": {"type": "top_n", "value": 1},
+                "requestText": "分析高消耗素材",
+                "analysisSpec": spec("material_leaderboard", selection={"rankRange": {"start": 1, "end": 1}}),
+            }
+            request_path = root / "request.json"
+            request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+            with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}) as verify:
+                first = prepare_analysis(root, request_path, root / "analysis")
+                second = prepare_analysis(root, request_path, root / "analysis")
+
+        self.assertEqual(first["status"], "awaiting_model")
+        self.assertEqual(second["status"], "awaiting_model")
+        self.assertEqual(verify.call_count, 1)
+
     def test_prepare_query_only_run_is_blocked_and_cannot_claim_analysis_complete(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

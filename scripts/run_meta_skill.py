@@ -34,6 +34,16 @@ class MetaSkillError(RuntimeError):
     pass
 
 
+def _ensure_analysis_assets():
+    required = (
+        ROOT / "config" / "analysis-registry-v1.json",
+        ROOT / "config" / "asset-field-registry-v1.json",
+    )
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise MetaSkillError("phase two configuration is incomplete; missing: %s" % ", ".join(missing))
+
+
 PHASES = (
     "awaiting_query_input", "querying", "rpa_processing", "fact_pack_building", "fact_pack_verifying", "fact_pack_ready",
     "awaiting_analysis_input", "analysis_preparing", "analysis_prepared", "awaiting_model", "analysis_verifying", "analysis_verified", "report_ready",
@@ -376,6 +386,7 @@ def main(argv=None):
         args = build_parser().parse_args(argv)
         if args.command == "continue-analysis":
             try:
+                _ensure_analysis_assets()
                 result = continue_analysis(Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
             except (MetaSkillError, AnalysisError) as exc:
                 _set_run_phase(Path(args.run_dir), "analysis_failed", error=str(exc))
@@ -419,6 +430,7 @@ def main(argv=None):
             print(json.dumps(result, ensure_ascii=False))
             return 0 if result.get("status") in {"succeeded", "awaiting_model"} else 1
         if args.command == "prepare-analysis":
+            _ensure_analysis_assets()
             _set_run_phase(Path(args.run_dir), "analysis_preparing", progress={"completed": 0, "total": 1}, currentObject="analysis-input.json")
             try:
                 result = prepare_analysis(Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)

@@ -32,6 +32,15 @@ def origin_row(material_id, cost, amount):
 
 
 class MetaSkillCliTests(unittest.TestCase):
+    def test_analysis_entry_fails_fast_when_required_registry_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "config").mkdir()
+            (root / "config" / "analysis-registry-v1.json").write_text("{}", encoding="utf-8")
+            with patch.object(run_meta_skill, "ROOT", root):
+                with self.assertRaisesRegex(run_meta_skill.MetaSkillError, "asset-field-registry-v1.json"):
+                    run_meta_skill._ensure_analysis_assets()
+
     def test_phase_receipt_records_progress_and_last_successful_phase(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

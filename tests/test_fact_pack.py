@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -106,6 +107,30 @@ def make_run(root, target_top_n, *, no_highlight=False, script_modes=None):
 
 
 class FactPackTests(unittest.TestCase):
+    def test_verification_reuses_file_hash_and_invalidates_after_file_change(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.json"
+            source.write_text("first", encoding="utf-8")
+            ref = {
+                "path": "source.json",
+                "sha256": fact_pack._sha256(source),
+                "sizeBytes": source.stat().st_size,
+            }
+            fact_pack.clear_file_hash_cache()
+            with patch.object(fact_pack, "_sha256", wraps=fact_pack._sha256) as sha256:
+                fact_pack._verify_file_ref(root, ref, "source")
+                fact_pack._verify_file_ref(root, ref, "source")
+                self.assertEqual(sha256.call_count, 1)
+
+                source.write_text("changed", encoding="utf-8")
+                os.utime(source, None)
+                changed_digest = fact_pack._sha256(source)
+                changed_ref = {**ref, "sha256": changed_digest, "sizeBytes": source.stat().st_size}
+                fact_pack._verify_file_ref(root, changed_ref, "source")
+
+            self.assertEqual(sha256.call_count, 3)
+
     def test_reuses_one_file_hash_and_aggregates_record_indexes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
