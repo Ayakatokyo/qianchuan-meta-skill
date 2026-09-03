@@ -340,14 +340,18 @@ def analysis_fingerprint(spec: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-PROMPT_VERSION = "qianchuan-analysis-prompt-v1"
+PROMPT_VERSION = "qianchuan-analysis-prompt-v2"
 
 _MODEL_RESULT_SCHEMA_SUMMARY = {
     "schemaVersion": 1,
+    "contractVersion": 2,
     "type": "object",
-    "required": ["schemaVersion", "analysisSpecFingerprint", "claims"],
-    "claimRequired": ["claimType", "statement", "evidenceRefs", "confidence"],
+    "required": ["schemaVersion", "contractVersion", "analysisSpecFingerprint", "claims"],
+    "claimRequired": ["claimType", "statement", "section", "priority", "evidenceRefs", "confidence"],
     "claimTypes": ["fact", "calculation", "inference", "recommendation"],
+    "sections": [*_HANDOFF_SECTIONS, "synthesis"],
+    "priorityValues": ["high", "medium", "low"],
+    "optionalClaimFields": ["businessImplication"],
     "calculationRequired": ["calculationId", "formula", "inputs"],
 }
 
@@ -612,13 +616,19 @@ def compile_model_input(
             "doNotUseExternalData": True,
             "doNotFillMissingData": True,
             "allClaimsRequireEvidenceRefs": True,
+            "claimsMustUseSelectedSectionsOrSynthesis": True,
+            "recommendationsMustReferenceEvidence": True,
+            "businessImplicationExplainsAction": True,
         },
         "resultSchema": deepcopy(_MODEL_RESULT_SCHEMA_SUMMARY),
         "missingItems": deepcopy(evidence["missingItems"]),
         "handoff": {
             "modelMustReturn": "analysis-result.json",
+            "contractVersion": 2,
             "claimTypes": ["fact", "calculation", "inference", "recommendation"],
-            "allClaimsRequire": ["claimType", "evidenceRefs", "confidence"],
+            "allClaimsRequire": ["claimType", "section", "priority", "evidenceRefs", "confidence"],
+            "sectionOrder": [*_HANDOFF_SECTIONS, "synthesis"],
+            "recommendationsRequire": ["evidenceRefs", "businessImplication"],
         },
     }
     if request_text is not None:
@@ -870,10 +880,40 @@ def _verify_source_ref(run_dir: Path, ref: dict[str, Any], label: str) -> None:
         raise AnalysisError(f"{label} hash does not match source")
 
 
+def _legacy_claim_section(claim: dict[str, Any], selected_sections: list[str]) -> tuple[str, str]:
+    """Infer a legacy claim's section from source paths without changing its evidence."""
+    matches = set()
+    for ref in claim.get("evidenceRefs", []):
+        path = str(ref.get("path", ""))
+        if "material" in path and "material_leaderboard" in selected_sections:
+            matches.add("material_leaderboard")
+        if "audience" in path and "audience" in selected_sections:
+            matches.add("audience")
+        if "script" in path and "scripts" in selected_sections:
+            matches.add("scripts")
+        if ("frame" in path or path.lower().endswith((".jpg", ".jpeg", ".png"))) and "highlight_frames" in selected_sections:
+            matches.add("highlight_frames")
+    if len(matches) == 1:
+        return matches.pop(), "legacy_inferred"
+    return "synthesis", "legacy_inferred"
+
+
+def _normalize_claim_contract(claim: dict[str, Any], selected_sections: list[str], legacy: bool) -> dict[str, Any]:
+    normalized = deepcopy(claim)
+    if legacy and ("section" not in normalized or "priority" not in normalized):
+        section, mode = _legacy_claim_section(normalized, selected_sections)
+        normalized.setdefault("section", section)
+        normalized.setdefault("priority", "medium")
+        normalized["classificationMode"] = mode
+    return normalized
+
+
 def validate_analysis_result(result: dict[str, Any], model_input: dict[str, Any], spec: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     result = _require_object(result, "analysis result")
     if result.get("schemaVersion") != 1:
         raise AnalysisError("analysis result schemaVersion must be 1")
+    if "contractVersion" in result and result["contractVersion"] != 2:
+        raise AnalysisError("analysis result contractVersion is unsupported")
     expected_fingerprint = model_input.get("analysisSpecFingerprint")
     if result.get("analysisSpecFingerprint") != expected_fingerprint:
         raise AnalysisError("analysis result fingerprint does not match model input")
@@ -885,14 +925,32 @@ def validate_analysis_result(result: dict[str, Any], model_input: dict[str, Any]
     refs = _available_input_refs(model_input)
     allowed_types = {"fact", "calculation", "inference", "recommendation"}
     normalized = deepcopy(result)
+    selected_sections = list(spec.get("sections") or model_input.get("analysisSpec", {}).get("sections") or [])
+    # Results without a contractVersion are historical artifacts; v2 results opt in explicitly.
+    legacy = result.get("contractVersion") != 2
     for index, claim in enumerate(claims):
         label = f"claim[{index}]"
         claim = _require_object(claim, label)
         for required in ("claimType", "evidenceRefs", "confidence"):
             if required not in claim:
                 raise AnalysisError(f"{label} missing {required}")
+        if not legacy and "section" not in claim:
+            raise AnalysisError(f"{label} missing section")
+        if not legacy and "priority" not in claim:
+            raise AnalysisError(f"{label} missing priority")
+        normalized_claim = _normalize_claim_contract(claim, selected_sections, legacy)
+        claim = normalized_claim
+        normalized["claims"][index] = normalized_claim
         if claim["claimType"] not in allowed_types:
             raise AnalysisError(f"{label} has unsupported claimType")
+        if claim.get("section") not in {*selected_sections, "synthesis"}:
+            raise AnalysisError(f"{label} section is not selected or synthesis")
+        if claim.get("priority") not in {"high", "medium", "low"}:
+            raise AnalysisError(f"{label} priority is unsupported")
+        if "businessImplication" in claim and not isinstance(claim["businessImplication"], str):
+            raise AnalysisError(f"{label} businessImplication must be a string")
+        if not legacy and claim["claimType"] == "recommendation" and not isinstance(claim.get("businessImplication"), str):
+            raise AnalysisError(f"{label} recommendation requires businessImplication")
         if not isinstance(claim.get("statement"), str) or not claim["statement"].strip():
             raise AnalysisError(f"{label} statement must be nonempty")
         confidence = claim["confidence"]
@@ -993,19 +1051,43 @@ def receive_analysis_result(run_dir: Path, result_path: Path, analysis_dir: Path
 
 def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[str, Any], receipt: dict[str, Any]) -> None:
     output_dir = Path(output_dir)
+    claims = [deepcopy(claim) for claim in result.get("claims", [])]
     claims_by_type = {claim_type: [] for claim_type in ("fact", "calculation", "inference", "recommendation")}
-    for claim in result.get("claims", []):
-        claims_by_type.setdefault(claim["claimType"], []).append(deepcopy(claim))
+    for claim in claims:
+        claims_by_type.setdefault(claim["claimType"], []).append(claim)
+    evidence_index = []
+    evidence_ids = {}
+    for claim in claims:
+        for ref in claim.get("evidenceRefs", []):
+            key = json.dumps(_source_key(ref), ensure_ascii=False, sort_keys=True)
+            if key not in evidence_ids:
+                evidence_ids[key] = f"E{len(evidence_index) + 1}"
+                evidence_index.append({"id": evidence_ids[key], "ref": deepcopy(ref)})
+    claim_audit = []
+    for index, claim in enumerate(claims):
+        claim_audit.append({
+            "id": claim.get("id", f"claim-{index + 1}"),
+            "claimType": claim.get("claimType"),
+            "section": claim.get("section", "synthesis"),
+            "priority": claim.get("priority", "medium"),
+            "confidence": claim.get("confidence"),
+            "businessImplication": claim.get("businessImplication"),
+            "formula": deepcopy(claim.get("formula")) if "formula" in claim else None,
+            "inputs": deepcopy(claim.get("inputs")) if "inputs" in claim else None,
+            "classificationMode": claim.get("classificationMode", "explicit"),
+            "evidenceIds": [evidence_ids[json.dumps(_source_key(ref), ensure_ascii=False, sort_keys=True)] for ref in claim.get("evidenceRefs", [])],
+        })
     chapters = [
-        {"order": 1, "id": "executive_summary", "title": "执行摘要"},
-        {"order": 2, "id": "scope_quality", "title": "范围与质量"},
-        {"order": 3, "id": "material_leaderboard", "title": "素材榜单"},
-        {"order": 4, "id": "audience", "title": "人群分区"},
-        {"order": 5, "id": "scripts", "title": "脚本分区"},
-        {"order": 6, "id": "highlight_frames", "title": "高光帧分区"},
-        {"order": 7, "id": "synthesis", "title": "综合洞察"},
-        {"order": 8, "id": "recommendations", "title": "建议"},
-        {"order": 9, "id": "evidence_limitations", "title": "证据与限制"},
+        {"order": 1, "id": "executive_summary", "title": "核心商业结论"},
+        {"order": 2, "id": "recommendations", "title": "优先行动建议"},
+        {"order": 3, "id": "material_leaderboard", "title": "素材榜单分析"},
+        {"order": 4, "id": "audience", "title": "人群分析"},
+        {"order": 5, "id": "scripts", "title": "脚本分析"},
+        {"order": 6, "id": "highlight_frames", "title": "高光帧分析"},
+        {"order": 7, "id": "synthesis", "title": "跨分区综合洞察"},
+        {"order": 8, "id": "limitations", "title": "数据限制与下一步"},
+        {"order": 9, "id": "evidence_index", "title": "附录 A：证据索引"},
+        {"order": 10, "id": "claim_audit", "title": "附录 B：结论审计"},
     ]
     report = {
         "schemaVersion": 1,
@@ -1017,48 +1099,46 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
         "analysisSpec": deepcopy(model_input.get("analysisSpec")),
         "analysisSpecFingerprint": model_input.get("analysisSpecFingerprint"),
         "claimsByType": claims_by_type,
+        "claimsBySection": {section: [claim for claim in claims if claim.get("section") == section] for section in [*_HANDOFF_SECTIONS, "synthesis"]},
+        "evidenceIndex": evidence_index,
+        "claimAudit": claim_audit,
         "chapters": chapters,
         "missingItems": deepcopy(receipt.get("missingItems", [])),
         "sourceRefs": deepcopy(model_input.get("sourceRefs", [])),
     }
     _write_json(output_dir / "report.json", report)
-    all_claims = [claim for claims in claims_by_type.values() for claim in claims]
-
-    def claim_lines(claims):
+    def claim_lines(claims, include_implication=True):
         lines = []
         for claim in claims:
-            refs = ", ".join(ref.get("path", "") for ref in claim.get("evidenceRefs", []))
-            lines.append(f"- {claim['statement']}（confidence={claim['confidence']}；evidence={refs}）")
+            ids = [evidence_ids[json.dumps(_source_key(ref), ensure_ascii=False, sort_keys=True)] for ref in claim.get("evidenceRefs", [])]
+            suffix = f"；业务含义：{claim['businessImplication']}" if include_implication and claim.get("businessImplication") else ""
+            lines.append(f"- {claim['statement']}（证据：{', '.join(f'[{item}]' for item in ids)}{suffix}）")
         return lines or ["（无）"]
 
     selected_sections = set((model_input.get("analysisSpec") or {}).get("sections", []))
-    lines = ["# 千川商业分析报告", "", f"- 校验状态：{report['status']}", f"- 结果状态：{report['resultStatus']}", f"- 分析指纹：{report['analysisSpecFingerprint']}", ""]
+    all_claims = claims
+    lines = ["# 千川商业分析报告", ""]
     for chapter in chapters:
         lines.extend([f"## {chapter['title']}", ""])
         if chapter["id"] == "executive_summary":
-            lines.extend([f"本报告校验了 {len(all_claims)} 条模型结论，覆盖 {len(selected_sections)} 个选定分区。", ""])
-        elif chapter["id"] == "scope_quality":
-            lines.extend([
-                f"- runId：{model_input.get('runId', '')}",
-                f"- 素材范围：{', '.join(model_input.get('analysisSpec', {}).get('selectedMaterialIds', []))}",
-                f"- 缺失项：{len(report['missingItems'])}", "",
-            ])
-        elif chapter["id"] in {"material_leaderboard", "audience", "scripts", "highlight_frames"}:
-            chapter_claims = [claim for claim in all_claims if claim.get("section") == chapter["id"]]
-            if not chapter_claims and len(selected_sections) == 1 and chapter["id"] in selected_sections:
-                chapter_claims = all_claims
-            lines.extend(claim_lines(chapter_claims) + [""])
-        elif chapter["id"] == "synthesis":
-            lines.extend(claim_lines(claims_by_type["inference"]) + [""])
+            lines.extend(claim_lines([claim for claim in all_claims if claim.get("section") == "synthesis" and claim.get("priority") == "high"]) + [""])
         elif chapter["id"] == "recommendations":
-            lines.extend(claim_lines(claims_by_type["recommendation"]) + [""])
+            recommendations = [claim for claim in all_claims if claim.get("claimType") == "recommendation"]
+            recommendations.sort(key=lambda claim: {"high": 0, "medium": 1, "low": 2}.get(claim.get("priority"), 3))
+            lines.extend(claim_lines(recommendations) + [""])
+        elif chapter["id"] in {"material_leaderboard", "audience", "scripts", "highlight_frames"}:
+            chapter_claims = [claim for claim in all_claims if claim.get("section") == chapter["id"] and claim.get("claimType") != "recommendation"]
+            lines.extend(["关键发现", "", *claim_lines(chapter_claims), "", "分区建议", "", *claim_lines([claim for claim in all_claims if claim.get("section") == chapter["id"] and claim.get("claimType") == "recommendation"]), ""])
+        elif chapter["id"] == "synthesis":
+            lines.extend(claim_lines([claim for claim in all_claims if claim.get("section") == "synthesis"]) + [""])
+        elif chapter["id"] == "limitations":
+            lines.extend([f"- 缺失项：{len(report['missingItems'])}", f"- 可追溯证据：{len(evidence_index)} 条", ""])
+        elif chapter["id"] == "evidence_index":
+            lines.extend([f"- [{item['id']}] {item['ref'].get('path', '')}" for item in evidence_index] or ["（无）"])
+            lines.append("")
         else:
-            lines.extend([f"- 来源引用数：{len(report['sourceRefs'])}", f"- 缺失项：{len(report['missingItems'])}", ""])
-    for claim_type, label in (("fact", "事实"), ("calculation", "计算"), ("inference", "AI 推断"), ("recommendation", "建议")):
-        lines.extend([f"## {label}", ""])
-        lines.extend(claim_lines(claims_by_type[claim_type]) + [""])
-    if report["missingItems"]:
-        lines.extend(["## 缺失项", "", *[f"- {item}" for item in report["missingItems"]], ""])
+            lines.extend([f"- {item['id']}：{item['claimType']} / {item['section']} / {item['priority']} / confidence={item['confidence']} / evidence={', '.join(item['evidenceIds'])}" for item in claim_audit] or ["（无）"])
+            lines.append("")
     _write_text(output_dir / "report.md", "\n".join(lines))
 
 

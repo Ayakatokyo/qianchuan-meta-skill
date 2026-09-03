@@ -150,7 +150,7 @@ python scripts/run_meta_skill.py continue-analysis \
 
 `analysis-input.json` 是当前对话模型的唯一事实边界，至少包含 `runId`、`factPackManifestSha256`、`factPack.manifestRef`、标准化 `analysisSpec`、用户原始 `requestText`、选定分区的事实切片和 `sourceRefs`，并包含以下约束：`modelConstraints.onlyUseProvidedEvidence=true`、`doNotUseExternalData=true`、`doNotFillMissingData=true`。模型只能使用选定分区和选定素材 ID；不得访问未选分区、补充外部事实、把缺失推断为零或伪造模型调用。
 
-模型完成二次分析后必须只返回可解析的 `analysis-result.json`，至少包含 `schemaVersion`、`analysisSpecFingerprint` 和非空 `claims`；每条 claim 必须包含 `claimType`、`statement`、`evidenceRefs`、`confidence`，计算还必须声明 `calculationId`、`formula` 和 `inputs`。结果必须符合输入中的 `resultSchema`，并通过：
+模型完成二次分析后必须只返回可解析的 `analysis-result.json`，至少包含 `schemaVersion`、`contractVersion=2`、`analysisSpecFingerprint` 和非空 `claims`；每条 claim 必须包含 `claimType`、`statement`、`section`、`priority`、`evidenceRefs`、`confidence`，其中 `section` 只能是本次选定的事实包分区或 `synthesis`，`priority` 为 `high|medium|low`，可选 `businessImplication` 用于表达业务含义。建议必须带证据引用，计算还必须声明 `calculationId`、`formula` 和 `inputs`。结果必须符合输入中的 `resultSchema`，并通过：
 
 ```bash
 python scripts/run_meta_skill.py receive-analysis-result \
@@ -159,9 +159,9 @@ python scripts/run_meta_skill.py receive-analysis-result \
 
 当前运行时没有本地模型调用通道；`receive-analysis-result` 只负责接收对话模型交回的 JSON、执行离线证据/哈希校验并在成功后落盘报告，不会伪造模型调用，模型不得伪造调用已发生。缺失或非法 JSON 保持 `awaiting_model`，不生成成功报告；校验失败保持 `analysis_failed`，也不生成成功报告。
 
-`prepare-analysis` 只允许读取已通过 `verify-fact-pack` 的完整事实包，并写入 `analysis-request.json`、`analysis-spec.json`、`analysis-input.json`、`analysis-receipt.json`。输入只包含声明字段和选择范围的切片；每个来源保留 manifest/sourceRef/哈希。`analysis-input.json` 是模型交接边界，模型应返回 `analysis-result.json`；每条 claim 必须带 `claimType`、`evidenceRefs`、`confidence`，计算另带 formula/inputs。事实、计算、AI 推断、建议在报告中分层；人群结论只能表达相关性，脚本必须引用逐字稿原文，高光帧视觉观察必须标记为 AI 推断并引用 JPEG artifact。
+`prepare-analysis` 只允许读取已通过 `verify-fact-pack` 的完整事实包，并写入 `analysis-request.json`、`analysis-spec.json`、`analysis-input.json`、`analysis-receipt.json`。输入只包含声明字段和选择范围的切片；每个来源保留 manifest/sourceRef/哈希。`analysis-input.json` 是模型交接边界，模型应返回带 `contractVersion=2` 的 `analysis-result.json`；每条 claim 必须带 `claimType`、`section`、`priority`、`evidenceRefs`、`confidence`，可选 businessImplication，计算另带 formula/inputs。事实包正文按素材榜单、人群、脚本、高光帧固定分区；人群结论只能表达相关性，脚本必须引用逐字稿原文，高光帧视觉观察必须标记为 AI 推断并引用 JPEG artifact。历史结果缺少 section/priority 时按来源路径兼容归类，无法唯一归类的进入 synthesis。
 
-`verify-analysis` 完全离线校验结果契约、事实包、证据路径与哈希，并生成 `report.json`、`report.md`。报告固定包含执行摘要、范围与质量、素材榜单/人群/脚本/高光帧四类分区、综合洞察、建议、证据与限制，并保留 `claimsByType` 分层。缺少模型结果、query-only、事实包不完整、请求字段未知、素材越权、缺失类别或未声明计算时，只能保持 `blocked`/`awaiting_model`/`failed`/`incomplete`，禁止声称商业分析完成。任何证据缺失、脚本 `missing|failed` 或无高光帧都不会被推断为零或成功事实。当前 Markdown 为无外部依赖的唯一渲染格式；HTML/PDF 导出属于后续可选扩展，本次链路不依赖也不声称已生成。
+`verify-analysis` 完全离线校验结果契约、事实包、证据路径与哈希，并生成 `report.json`、`report.md`。报告固定按“核心商业结论、优先行动建议、素材榜单分析、人群分析、脚本分析、高光帧分析、跨分区综合洞察、数据限制与下一步、附录 A：证据索引、附录 B：结论审计”输出；正文只展示 `[E1]` 等短证据标记，confidence、完整来源路径、公式和归类方式仅保留在 JSON 与审计附录，并保留 `claimsByType` 兼容字段。缺少模型结果、query-only、事实包不完整、请求字段未知、素材越权、缺失类别或未声明计算时，只能保持 `blocked`/`awaiting_model`/`failed`/`incomplete`，禁止声称商业分析完成。任何证据缺失、脚本 `missing|failed` 或无高光帧都不会被推断为零或成功事实。当前 Markdown 为无外部依赖的唯一渲染格式；HTML/PDF 导出属于后续可选扩展，本次链路不依赖也不声称已生成。
 
 独立抽帧仅在已有本地视频与互动曲线时执行，不会发起报表查询；`run` 内部会自动准备这些输入：
 

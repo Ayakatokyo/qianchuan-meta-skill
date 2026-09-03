@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -340,10 +341,10 @@ class AnalysisInputTests(unittest.TestCase):
         self.assertEqual(model_input["modelConstraints"]["allowedMaterialIds"], ["m-1"])
         self.assertTrue(model_input["modelConstraints"]["doNotUseExternalData"])
         self.assertTrue(model_input["modelConstraints"]["doNotFillMissingData"])
-        self.assertEqual(model_input["resultSchema"]["required"], ["schemaVersion", "analysisSpecFingerprint", "claims"])
+        self.assertEqual(model_input["resultSchema"]["required"], ["schemaVersion", "contractVersion", "analysisSpecFingerprint", "claims"])
         self.assertEqual(
             model_input["resultSchema"]["claimRequired"],
-            ["claimType", "statement", "evidenceRefs", "confidence"],
+            ["claimType", "statement", "section", "priority", "evidenceRefs", "confidence"],
         )
 
     def test_slices_only_requested_leaderboard_fields_and_selected_rank(self):
@@ -379,7 +380,7 @@ class AnalysisInputTests(unittest.TestCase):
             evidence = slice_fact_pack(root, fact_dir, resolved, registry)
             model_input = compile_model_input(root, resolved, evidence, registry)
 
-        self.assertEqual(model_input["promptVersion"], "qianchuan-analysis-prompt-v1")
+        self.assertEqual(model_input["promptVersion"], "qianchuan-analysis-prompt-v2")
         self.assertEqual(set(model_input["sections"]), {"material_leaderboard", "audience", "scripts", "highlight_frames"})
         self.assertIn("do not infer causality", model_input["sections"]["audience"]["prompt"])
         self.assertIn("source/materials.json", json.dumps(model_input, ensure_ascii=False))
@@ -448,7 +449,67 @@ class AnalysisResultTests(unittest.TestCase):
             "analysisSpecFingerprint": "a" * 64,
             "sourceRefs": [source_ref],
             "sections": {"material_leaderboard": {"evidence": {"rows": [{"sourceRef": source_ref}]}}},
+            "resultSchema": {"claimRequired": ["claimType", "statement", "section", "priority", "evidenceRefs", "confidence"]},
         }, source_ref
+
+    def sectioned_model_input(self, root):
+        model_input, source_ref = self.model_input(root)
+        model_input["promptVersion"] = "qianchuan-analysis-prompt-v2"
+        model_input["analysisSpec"] = {"sections": ["material_leaderboard", "audience"]}
+        return model_input, source_ref
+
+    def test_requires_section_and_priority_for_new_result_claims(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_input, source_ref = self.sectioned_model_input(Path(temp_dir))
+            result = {
+                "schemaVersion": 1,
+                "contractVersion": 2,
+                "analysisSpecFingerprint": "a" * 64,
+                "claims": [{"statement": "事实", "claimType": "fact", "evidenceRefs": [source_ref], "confidence": 1}],
+            }
+
+            with self.assertRaisesRegex(AnalysisError, "section"):
+                validate_analysis_result(result, model_input, model_input["analysisSpec"], Path(temp_dir))
+
+    def test_rejects_claim_section_outside_selected_sections_and_synthesis(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_input, source_ref = self.sectioned_model_input(Path(temp_dir))
+            result = {
+                "schemaVersion": 1,
+                "contractVersion": 2,
+                "analysisSpecFingerprint": "a" * 64,
+                "claims": [{"statement": "事实", "claimType": "fact", "section": "scripts", "priority": "high", "evidenceRefs": [source_ref], "confidence": 1}],
+            }
+
+            with self.assertRaisesRegex(AnalysisError, "section"):
+                validate_analysis_result(result, model_input, model_input["analysisSpec"], Path(temp_dir))
+
+    def test_requires_priority_and_business_implication_for_new_recommendations(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_input, source_ref = self.sectioned_model_input(Path(temp_dir))
+            result = {
+                "schemaVersion": 1,
+                "contractVersion": 2,
+                "analysisSpecFingerprint": "a" * 64,
+                "claims": [{"statement": "建议", "claimType": "recommendation", "section": "audience", "evidenceRefs": [source_ref], "confidence": 1}],
+            }
+
+            with self.assertRaisesRegex(AnalysisError, "priority"):
+                validate_analysis_result(result, model_input, model_input["analysisSpec"], Path(temp_dir))
+
+            result["claims"][0]["priority"] = "high"
+            with self.assertRaisesRegex(AnalysisError, "businessImplication"):
+                validate_analysis_result(result, model_input, model_input["analysisSpec"], Path(temp_dir))
+
+    def test_compile_model_input_describes_sectioned_claim_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            model_input, _ = self.model_input(root)
+
+        self.assertEqual(model_input["promptVersion"], "qianchuan-analysis-prompt-v1")
+        # This assertion intentionally specifies the new contract and fails before implementation.
+        self.assertIn("section", model_input["resultSchema"]["claimRequired"])
+        self.assertIn("priority", model_input["resultSchema"]["claimRequired"])
 
     def test_rejects_claim_without_required_audit_fields(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -717,12 +778,76 @@ class AnalysisResultTests(unittest.TestCase):
 
         chapter_ids = [chapter["id"] for chapter in report["chapters"]]
         expected = [
-            "executive_summary", "scope_quality", "material_leaderboard", "audience",
-            "scripts", "highlight_frames", "synthesis", "recommendations", "evidence_limitations",
+            "executive_summary", "recommendations", "material_leaderboard", "audience",
+            "scripts", "highlight_frames", "synthesis", "limitations", "evidence_index", "claim_audit",
         ]
         self.assertEqual(chapter_ids, expected)
         positions = [markdown.index("## " + chapter["title"]) for chapter in report["chapters"]]
         self.assertEqual(positions, sorted(positions))
+
+    def test_legacy_claims_are_classified_by_source_and_ambiguous_claims_go_to_synthesis(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            refs = [
+                ref_for(root, "source/material-leaderboard.json", "material"),
+                ref_for(root, "source/audience.json", "audience"),
+                ref_for(root, "source/scripts.json", "scripts"),
+                ref_for(root, "source/highlight-frames.json", "frames"),
+            ]
+            model_input, _ = self.model_input(root)
+            model_input["sourceRefs"] = refs
+            claims = [{"claimType": "fact", "statement": label, "evidenceRefs": [ref], "confidence": 1} for label, ref in zip(("素材", "人群", "脚本", "高光"), refs)]
+            claims.append({"claimType": "inference", "statement": "跨分区", "evidenceRefs": [refs[0], refs[1]], "confidence": 0.5})
+            result = {"schemaVersion": 1, "analysisSpecFingerprint": "a" * 64, "claims": claims}
+
+            normalized = validate_analysis_result(result, model_input, {"sections": ["material_leaderboard", "audience", "scripts", "highlight_frames"]}, root)
+
+        self.assertEqual([claim["section"] for claim in normalized["claims"]], ["material_leaderboard", "audience", "scripts", "highlight_frames", "synthesis"])
+        self.assertTrue(all(claim["classificationMode"] == "legacy_inferred" for claim in normalized["claims"]))
+
+    def test_render_reports_creates_stable_evidence_index_and_claim_audit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            model_input, source_ref = self.model_input(root)
+            result = {
+                "schemaVersion": 1,
+                "analysisSpecFingerprint": "a" * 64,
+                "claims": [{"id": "f1", "statement": "事实", "claimType": "fact", "evidenceRefs": [source_ref], "confidence": 1, "section": "material_leaderboard", "priority": "high", "businessImplication": "优先复用"}],
+            }
+            render_reports(root / "analysis", model_input, result, {"status": "succeeded", "missingItems": []})
+            report = json.loads((root / "analysis" / "report.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(report["evidenceIndex"][0]["id"], "E1")
+        self.assertEqual(report["claimAudit"][0]["evidenceIds"], ["E1"])
+        self.assertEqual(report["claimAudit"][0]["classificationMode"], "explicit")
+
+    def test_markdown_uses_business_order_and_keeps_audit_fields_in_appendices(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            model_input, source_ref = self.model_input(root)
+            result = {
+                "schemaVersion": 1,
+                "contractVersion": 2,
+                "analysisSpecFingerprint": "a" * 64,
+                "claims": [
+                    {"id": "rec-low", "statement": "低优先建议", "claimType": "recommendation", "section": "material_leaderboard", "priority": "low", "businessImplication": "观察", "evidenceRefs": [source_ref], "confidence": 0.4},
+                    {"id": "fact", "statement": "素材关键发现", "claimType": "fact", "section": "material_leaderboard", "priority": "high", "businessImplication": "优先投入", "evidenceRefs": [source_ref], "confidence": 0.9},
+                    {"id": "rec-high", "statement": "高优先建议", "claimType": "recommendation", "section": "synthesis", "priority": "high", "businessImplication": "立即执行", "evidenceRefs": [source_ref], "confidence": 0.8},
+                ],
+            }
+            render_reports(root / "analysis", model_input, result, {"status": "succeeded", "missingItems": []})
+            markdown = (root / "analysis" / "report.md").read_text(encoding="utf-8")
+            report = json.loads((root / "analysis" / "report.json").read_text(encoding="utf-8"))
+
+        headings = ["核心商业结论", "优先行动建议", "素材榜单分析", "人群分析", "脚本分析", "高光帧分析", "跨分区综合洞察", "数据限制与下一步", "附录 A：证据索引", "附录 B：结论审计"]
+        self.assertEqual([markdown.index(f"## {heading}") for heading in headings], sorted(markdown.index(f"## {heading}") for heading in headings))
+        self.assertLess(markdown.index("高优先建议"), markdown.index("低优先建议"))
+        body, audit = markdown.split("## 附录 A：证据索引", 1)
+        self.assertNotIn("confidence=", body)
+        self.assertNotIn("source/facts.json", body)
+        self.assertIn("confidence=", audit)
+        self.assertIn("source/facts.json", audit)
+        self.assertEqual(report["claimAudit"][1]["businessImplication"], "优先投入")
 
     def test_prepare_real_top6_offline_writes_model_input_and_waits_for_model(self):
         run_dir = ROOT / "runs" / "run-20260810-20260820"
@@ -736,6 +861,25 @@ class AnalysisResultTests(unittest.TestCase):
             self.assertEqual(receipt["status"], "awaiting_model")
             self.assertTrue((output_dir / "analysis-input.json").is_file())
             self.assertFalse((output_dir / "analysis-result.json").exists())
+
+    def test_replays_real_run_reports_in_a_temporary_copy(self):
+        run_dir = ROOT / "runs" / "run-20260810-20260820"
+        if not (run_dir / "analysis" / "all-sections" / "analysis-result.json").is_file():
+            self.skipTest("real analysis results are not present")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            copied_run = Path(temp_dir) / run_dir.name
+            shutil.copytree(run_dir, copied_run)
+            for name in ("leaderboard-only", "audience-and-leaderboard", "all-sections"):
+                analysis_dir = copied_run / "analysis" / name
+                model_input = json.loads((analysis_dir / "analysis-input.json").read_text(encoding="utf-8"))
+                result = json.loads((analysis_dir / "analysis-result.json").read_text(encoding="utf-8"))
+                receipt = json.loads((analysis_dir / "analysis-receipt.json").read_text(encoding="utf-8"))
+                render_reports(analysis_dir, model_input, result, receipt)
+                report = json.loads((analysis_dir / "report.json").read_text(encoding="utf-8"))
+                markdown = (analysis_dir / "report.md").read_text(encoding="utf-8")
+                self.assertEqual(len(report["claimAudit"]), len(result["claims"]))
+                self.assertIn("## 附录 A：证据索引", markdown)
+                self.assertIn("## 附录 B：结论审计", markdown)
 
     def test_prepare_analysis_reuses_successful_fact_pack_verification_when_unchanged(self):
         with tempfile.TemporaryDirectory() as temp_dir:

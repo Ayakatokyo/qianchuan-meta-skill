@@ -80,3 +80,14 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("receive-analysis-result", body)
         self.assertIn("awaiting_model", body)
         self.assertIn("不得伪造", body)
+
+    def test_skill_body_documents_sectioned_business_report_contract(self):
+        _, body = load_skill_document()
+
+        self.assertIn("contractVersion=2", body)
+        self.assertIn("section", body)
+        self.assertIn("priority", body)
+        self.assertIn("businessImplication", body)
+        self.assertIn("附录 A：证据索引", body)
+        self.assertIn("附录 B：结论审计", body)
+        self.assertIn("历史结果缺少 section/priority", body)
