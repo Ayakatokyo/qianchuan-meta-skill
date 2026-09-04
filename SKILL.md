@@ -3,7 +3,7 @@ name: qianchuan-meta-skill
 description: 适用于按店铺、广告主和日期范围筛选千川素材，按投放指标排序取 Top N，并执行受控 RPA 诊断和本地高光帧提取的场景。
 argument_hint: 依次输入查询范围、指标筛选和高光帧规则；指标可用中文表达，系统会生成使用 API 原始字段名的 QuerySpec 和 HighlightSpec。
 metadata:
-  pre_input: 请采集千川素材列表和高光帧数据，授权店铺 ID 是 ____（必填）；广告主 ID 是 ____（必填）；时间周期是 ____（自定义起止日期），筛选条件是 ____（可选，例如综合消耗 >= 1000、净成交 ROI >= 1.2、视频完播率 >= 20）；排序指标是 ____（必填，例如综合消耗、净成交金额、净成交 ROI、净成交订单成本）；排序方向是 ____（升序或降序，必填）；需要执行详情拆解的素材数为 ____（正整数，必填）。高光帧筛选：是否保留封面帧（是/否）；高光指标至少选择一项，可从点击、流失、点赞、评论、分享、新增粉丝六项中选择；每个已选指标可按波峰或指标大小截取，并指定帧数。（如：保留封面帧，点赞次数取局部峰值/波峰 2 帧，分享取指标值最高的 1 帧。）
+  pre_input: 请采集千川素材列表和高光帧数据，授权店铺 ID 是 ____（必填）；广告主 ID 是 ____（必填）；时间周期是 ____（自定义起止日期），筛选条件是 ____（可选，例如综合消耗 >= 1000、净成交 ROI >= 1.2、视频完播率 >= 20）；排序指标是 ____（必填，例如综合消耗、净成交金额、净成交 ROI、净成交订单成本）；排序方向是 ____（升序或降序，必填）；需要执行详情拆解的素材数为 ____（正整数，必填）。高光帧筛选：是否保留封面帧（是/否）；高光指标至少选择一项，可从点击、流失、点赞、评论、分享、新增粉丝六项中选择；每个已选指标可按波峰或按全局指标数值排序截取，并指定帧数。（如：保留封面帧，点赞次数取局部峰值/波峰 2 帧，分享按全局指标数值排序取前 2 帧。）
 ---
 
 # 千川素材分析元技能
@@ -58,13 +58,13 @@ QuerySpec 的 `field` 必须来自 `config/asset-field-registry-v1.json`。注�
     "LOSE_COUNT": {"enabled": false},
     "LIKE_COUNT": {"enabled": false},
     "COMMENT_COUNT": {"enabled": false},
-    "SHARE_COUNT": {"enabled": true, "strategy": "global_maximum", "maxFrames": 1},
+    "SHARE_COUNT": {"enabled": true, "strategy": "global_top_values", "maxFrames": 2},
     "NEW_FOLLOWER_COUNT": {"enabled": false}
   }
 }
 ```
 
-六项指标必须全部显式声明。启用指标只能使用 `local_peaks` 或 `global_maximum`；后者的 `maxFrames` 必须为 1。相同秒数的多指标命中只抽取一张 JPEG，并在选帧证据中保留全部命中。
+六项指标必须全部显式声明。启用指标只能使用 `local_peaks` 或 `global_top_values`；`global_top_values` 会在完整互动曲线上按指标值降序、同值按时间升序取前 `maxFrames` 个不同时间点，`maxFrames` 为任意正整数。相同秒数的多指标命中只抽取一张 JPEG，并在选帧证据中保留全部命中。旧配置中的 `global_maximum` 仍可读取，但会归一化为 `global_top_values`。
 
 ## 执行
 

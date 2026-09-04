@@ -105,9 +105,22 @@ class ConfigSpecTests(unittest.TestCase):
 
     def test_highlight_spec_rejects_invalid_enabled_rule(self):
         invalid = highlight_spec()
-        invalid["metrics"]["CLICK_COUNT"] = {"enabled": True, "strategy": "global_maximum", "maxFrames": 2}
+        invalid["metrics"]["CLICK_COUNT"] = {"enabled": True, "strategy": "global_top_values", "maxFrames": 0}
         with self.assertRaisesRegex(ConfigSpecError, "maxFrames"):
             resolve_highlight_spec(invalid)
+
+    def test_highlight_spec_accepts_global_top_values_with_multiple_frames(self):
+        spec = highlight_spec()
+        spec["metrics"]["SHARE_COUNT"] = {"enabled": True, "strategy": "global_top_values", "maxFrames": 2}
+        resolved = resolve_highlight_spec(spec)
+        self.assertEqual(resolved["metrics"]["SHARE_COUNT"]["maxFrames"], 2)
+        self.assertEqual(highlight_spec_to_policy(resolved)["policies"][1]["mode"], "global_top_values")
+
+    def test_highlight_spec_normalizes_legacy_global_maximum(self):
+        spec = highlight_spec()
+        spec["metrics"]["SHARE_COUNT"] = {"enabled": True, "strategy": "global_maximum", "maxFrames": 2}
+        resolved = resolve_highlight_spec(spec)
+        self.assertEqual(resolved["metrics"]["SHARE_COUNT"]["strategy"], "global_top_values")
 
     def test_legacy_config_keeps_its_duplicate_metric_rejection(self):
         legacy = {

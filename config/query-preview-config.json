@@ -24,6 +24,11 @@
         "metric": "CLICK_COUNT",
         "mode": "local_peaks",
         "maxFrames": 3
+      },
+      {
+        "metric": "SHARE_COUNT",
+        "mode": "global_top_values",
+        "maxFrames": 2
       }
     ]
   }

@@ -12,7 +12,8 @@ from material_query import MaterialQueryError, parse_query_config
 
 
 QUERY_SPEC_SOURCE = "qianchuan_direct_material_report"
-_HIGHLIGHT_STRATEGIES = {"local_peaks", "global_maximum"}
+_HIGHLIGHT_STRATEGIES = {"local_peaks", "global_top_values"}
+_HIGHLIGHT_STRATEGY_ALIASES = {"global_maximum": "global_top_values"}
 
 
 class ConfigSpecError(ValueError):
@@ -137,14 +138,12 @@ def resolve_highlight_spec(payload):
             resolved[metric] = {"enabled": False}
             continue
         _keys(item, {"enabled", "strategy", "maxFrames"}, "HighlightSpec.metrics.%s" % metric)
-        strategy = item.get("strategy")
+        strategy = _HIGHLIGHT_STRATEGY_ALIASES.get(item.get("strategy"), item.get("strategy"))
         max_frames = item.get("maxFrames")
         if strategy not in _HIGHLIGHT_STRATEGIES:
             raise ConfigSpecError("HighlightSpec.metrics.%s.strategy is unsupported" % metric)
         if type(max_frames) is not int or max_frames <= 0:
             raise ConfigSpecError("HighlightSpec.metrics.%s.maxFrames must be a positive integer" % metric)
-        if strategy == "global_maximum" and max_frames != 1:
-            raise ConfigSpecError("HighlightSpec.metrics.%s.maxFrames must be 1 for global_maximum" % metric)
         resolved[metric] = {"enabled": True, "strategy": strategy, "maxFrames": max_frames}
     if not payload["includeZeroSecond"] and not any(item["enabled"] for item in resolved.values()):
         raise ConfigSpecError("HighlightSpec needs an enabled metric when includeZeroSecond is false")

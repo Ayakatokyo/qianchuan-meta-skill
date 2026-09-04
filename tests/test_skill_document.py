@@ -30,7 +30,7 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("高光指标至少选择一项", pre_input)
         self.assertIn("点击、流失、点赞、评论、分享、新增粉丝", pre_input)
         self.assertIn("波峰", pre_input)
-        self.assertIn("指标大小", pre_input)
+        self.assertIn("指标数值排序", pre_input)
         self.assertLess(pre_input.index("授权店铺 ID"), pre_input.index("筛选条件"))
         self.assertLess(pre_input.index("筛选条件"), pre_input.index("高光帧筛选"))
         self.assertNotIn("素材类型", pre_input)

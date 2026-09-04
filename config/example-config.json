@@ -39,8 +39,8 @@
       },
       {
         "metric": "SHARE_COUNT",
-        "mode": "global_maximum",
-        "maxFrames": 1
+        "mode": "global_top_values",
+        "maxFrames": 2
       }
     ]
   }

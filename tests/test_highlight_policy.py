@@ -55,8 +55,44 @@ class HighlightPolicyTests(unittest.TestCase):
 
         self.assertEqual(selection["frames"][0]["durationSec"], 3)
 
-    def test_rejects_unknown_metric_and_invalid_global_maximum_count(self):
+    def test_global_top_values_selects_top_k_by_value(self):
+        records = [
+            interaction("LIKE_COUNT", 1, 5), interaction("LIKE_COUNT", 3, 9),
+            interaction("LIKE_COUNT", 5, 7), interaction("LIKE_COUNT", 7, 8),
+        ]
+        selection = select_highlight_frames(
+            records,
+            {"schemaVersion": 1, "includeZeroSecond": False,
+             "policies": [{"metric": "LIKE_COUNT", "mode": "global_top_values", "maxFrames": 2}]},
+        )
+        self.assertEqual([f["durationSec"] for f in selection["frames"]], [3, 7])
+
+    def test_global_top_values_breaks_ties_by_earliest_timestamp(self):
+        selection = select_highlight_frames(
+            [interaction("LIKE_COUNT", 5, 9), interaction("LIKE_COUNT", 3, 9), interaction("LIKE_COUNT", 7, 8)],
+            {"schemaVersion": 1, "includeZeroSecond": False,
+             "policies": [{"metric": "LIKE_COUNT", "mode": "global_top_values", "maxFrames": 2}]},
+        )
+        self.assertEqual([f["durationSec"] for f in selection["frames"]], [3, 5])
+
+    def test_global_top_values_returns_all_points_when_k_is_larger(self):
+        selection = select_highlight_frames(
+            [interaction("LIKE_COUNT", 1, 2), interaction("LIKE_COUNT", 2, 1)],
+            {"schemaVersion": 1, "includeZeroSecond": False,
+             "policies": [{"metric": "LIKE_COUNT", "mode": "global_top_values", "maxFrames": 5}]},
+        )
+        self.assertEqual([f["durationSec"] for f in selection["frames"]], [1, 2])
+
+    def test_global_maximum_is_accepted_as_legacy_alias(self):
+        selection = select_highlight_frames(
+            [interaction("LIKE_COUNT", 1, 2)],
+            {"schemaVersion": 1, "includeZeroSecond": False,
+             "policies": [{"metric": "LIKE_COUNT", "mode": "global_maximum", "maxFrames": 2}]},
+        )
+        self.assertEqual(selection["policy"]["policies"][0]["mode"], "global_top_values")
+
+    def test_rejects_unknown_metric_and_invalid_global_selection_count(self):
         with self.assertRaisesRegex(HighlightPolicyError, "unsupported"):
             select_highlight_frames([], {"schemaVersion": 1, "policies": [{"metric": "PLAY_COUNT", "mode": "local_peaks", "maxFrames": 1}]})
         with self.assertRaisesRegex(HighlightPolicyError, "maxFrames"):
-            select_highlight_frames([], {"schemaVersion": 1, "policies": [{"metric": "LIKE_COUNT", "mode": "global_maximum", "maxFrames": 2}]})
+            select_highlight_frames([], {"schemaVersion": 1, "policies": [{"metric": "LIKE_COUNT", "mode": "global_top_values", "maxFrames": 0}]})

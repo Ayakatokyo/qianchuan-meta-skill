@@ -8,6 +8,8 @@ class HighlightPolicyError(ValueError):
 SUPPORTED_METRICS = (
     "CLICK_COUNT", "LOSE_COUNT", "LIKE_COUNT", "COMMENT_COUNT", "SHARE_COUNT", "NEW_FOLLOWER_COUNT",
 )
+_MODE_ALIASES = {"global_maximum": "global_top_values"}
+_SUPPORTED_MODES = {"local_peaks", "global_top_values"}
 
 
 def _number(value, label):
@@ -40,14 +42,15 @@ def normalize_highlight_policy(raw):
             raise HighlightPolicyError("highlight policy entry must be an object")
         metric = str(item.get("metric") or "").strip()
         mode = str(item.get("mode") or "").strip()
+        mode = _MODE_ALIASES.get(mode, mode)
         max_frames = item.get("maxFrames")
         if metric not in SUPPORTED_METRICS:
             raise HighlightPolicyError("unsupported interaction metric: %s" % metric)
         if metric in seen:
             raise HighlightPolicyError("duplicate interaction metric policy: %s" % metric)
-        if mode not in {"local_peaks", "global_maximum"}:
+        if mode not in _SUPPORTED_MODES:
             raise HighlightPolicyError("unsupported highlight selection mode")
-        if type(max_frames) is not int or max_frames <= 0 or (mode == "global_maximum" and max_frames != 1):
+        if type(max_frames) is not int or max_frames <= 0:
             raise HighlightPolicyError("maxFrames is invalid for highlight selection mode")
         seen.add(metric)
         normalized.append({"metric": metric, "mode": mode, "maxFrames": max_frames})
@@ -93,7 +96,7 @@ def select_highlight_frames(records, raw_policy):
         if item["mode"] == "local_peaks":
             selected = sorted(_local_peaks(points), key=lambda point: (-point[1], point[0]))[:item["maxFrames"]]
         else:
-            selected = [min(points, key=lambda point: (-point[1], point[0]))]
+            selected = sorted(points, key=lambda point: (-point[1], point[0]))[:item["maxFrames"]]
         for index, (second, value) in enumerate(selected, start=1):
             frame = by_second.setdefault(second, {"durationSec": second, "selectionEvidence": []})
             frame["selectionEvidence"].append({"metric": item["metric"], "mode": item["mode"], "policyRank": policy_rank, "selectionRank": index, "durationSec": second, "metricValue": value})
