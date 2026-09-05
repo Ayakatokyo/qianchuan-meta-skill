@@ -32,6 +32,27 @@ def origin_row(material_id, cost, amount):
 
 
 class MetaSkillCliTests(unittest.TestCase):
+    def test_continue_analysis_rejects_new_query_fields_before_prepare(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "analysis-handoff.json").write_text(json.dumps({
+                "stage": "fact_pack_ready", "runId": root.name, "factPackManifestSha256": "a" * 64,
+                "sections": ["material_leaderboard"], "materialScope": {"type": "all"}
+            }), encoding="utf-8")
+            request = root / "request.json"
+            request.write_text(json.dumps({"requestText": "分析", "period": {"startDate": "2026-01-01", "endDate": "2026-01-02"}}), encoding="utf-8")
+            with patch.object(run_meta_skill, "prepare_analysis", side_effect=AssertionError("must reject before prepare")):
+                with self.assertRaisesRegex(run_meta_skill.MetaSkillError, "forbidden|period|QuerySpec"):
+                    run_meta_skill.continue_analysis(root, request)
+
+    def test_workflow_alias_uses_existing_run_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            query_path, highlight_path = self.write_specs(root)
+            output_dir = root / "run"
+            with patch.object(run_meta_skill, "fetch_material_report", return_value=[origin_row("m-1", 10, 2)]):
+                status = run_meta_skill.main(["workflow", "--query-spec", str(query_path), "--highlight-spec", str(highlight_path), "--output-dir", str(output_dir)])
+        self.assertEqual(status, 0)
     def test_analysis_entry_fails_fast_when_required_registry_is_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

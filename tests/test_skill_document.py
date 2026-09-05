@@ -81,6 +81,13 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("awaiting_model", body)
         self.assertIn("不得伪造", body)
 
+    def test_skill_body_requires_natural_language_to_fact_retrieval_only(self):
+        _, body = load_skill_document()
+        self.assertIn("FactRetrievalSpec", body)
+        self.assertIn("只读取已落盘事实包", body)
+        self.assertIn("不重新查询", body)
+        self.assertIn("retrievalTrace", body)
+
     def test_skill_body_documents_sectioned_business_report_contract(self):
         _, body = load_skill_document()
 

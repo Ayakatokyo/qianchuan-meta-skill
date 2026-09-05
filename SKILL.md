@@ -8,7 +8,7 @@ metadata:
 
 # 千川素材分析元技能
 
-该技能负责受控素材查询、RPA 诊断、临时视频下载、高光帧资产，以及在完整事实包上的可审计商业分析准备与验收。模型将自然语言解析为 AnalysisSpec，脚本负责确定性校验、事实切片、脱敏、category-specific prompt 编译、结果验收与报告落盘；当前项目没有外部模型调用通道，不会擅自增加凭证或网络依赖。
+该技能负责受控素材查询、RPA 诊断、临时视频下载、高光帧资产，以及在完整事实包上的可审计商业分析准备与验收。整个流程只有一个 `qianchuan-meta-skill` 入口，并严格分两次调用：第一次只做外部取数和事实包落盘；第二次才接收用户自然语言商业分析思路，将其转换为 `FactRetrievalSpec`，只读取已落盘事实包，再交给模型分析。脚本负责确定性校验、事实切片、脱敏、结果验收与报告落盘；当前项目没有外部模型调用通道，不会擅自增加凭证或网络依赖。
 
 ## 输入
 
@@ -86,6 +86,13 @@ python scripts/run_meta_skill.py run \
   --execute-rpa \
   --output-dir /path/to/new-run
 
+# 单 skill 完整工作流入口（阶段一完成后暂停，等待第二次分析输入）
+python scripts/run_meta_skill.py workflow \
+  --query-spec /path/to/query-spec.json \
+  --highlight-spec /path/to/highlight-spec.json \
+  --execute-rpa \
+  --output-dir /path/to/new-run
+
 python scripts/run_meta_skill.py verify-run \
   --output-dir /path/to/completed-run
 
@@ -145,6 +152,8 @@ python scripts/run_meta_skill.py continue-analysis \
 阶段二长任务可安全重试：入口会先检查分析配置，`prepare-analysis` 会复用同一事实包且未变化时的成功校验回执；事实包、manifest 或来源文件变化时会自动失效并重新校验。超时后优先读取 `run-receipt.json`、`analysis/analysis-receipt.json` 和已生成的 `analysis-input.json`，不要重新执行查询或 RPA。
 
 分析请求文件使用 `{\"schemaVersion\": 1, \"requestText\": \"...\", \"analysisSpec\": {...}}`；阶段二由用户继续输入触发，当前对话模型先把自然语言标准化为 `AnalysisSpec`，本地脚本只接受并校验结构化 AnalysisSpec。AnalysisSpec 必须声明一个或多个 `sections`（`material_leaderboard`、`audience`、`scripts`、`highlight_frames`）、素材 ID/rank 选择、目标/问题、字段与聚合、分组比较、显式派生计算、证据策略和输出格式。
+
+阶段二补充约束：用户继续输入的自然语言先转成 `FactRetrievalSpec`，只读取已落盘事实包；它不得携带 `period`、`scope`、`ranking`、`candidateTopN`、RPA 或连接器字段。`analysis-input.json` 中的 `retrievalTrace` 记录意图到字段的映射，非法字段、越界素材或缺失分区只返回缺口并保持等待，不重新查询、不重跑 RPA；补问完成后只重新生成检索计划。`analysis-capability-registry-v1.json` 只保存业务问题到事实依赖的提示，不保存真实结果或成熟商业结论。
 
 阶段一停止时向用户提示：`阶段一采集和事实包校验已完成，当前暂停在 awaiting_analysis_input。请描述要分析的目标、分区、素材范围和关注指标；阶段二将由当前对话模型继续。` 不得在阶段一自动生成商业结论。用户继续输入后，模型必须先生成合法 `AnalysisSpec`，再调用 `continue-analysis`/`prepare-analysis` 生成交接文件；不能把自然语言直接当作已校验的分析结果。
 

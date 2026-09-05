@@ -20,6 +20,12 @@ class AnalysisError(ValueError):
 
 _HANDOFF_SECTIONS = ("material_leaderboard", "audience", "scripts", "highlight_frames")
 _SECTION_ALIASES = {"script": "scripts"}
+_RETRIEVAL_OPERATORS = {"eq", "neq", "contains", "in", "gt", "gte", "lt", "lte"}
+_FORBIDDEN_RETRIEVAL_KEYS = {"scope", "period", "ranking", "candidateTopN", "shopId", "advertiserId", "rpa", "querySpec", "highlightSpec"}
+_RETRIEVAL_KEYS = {
+    "schemaVersion", "runId", "factPackManifestSha256", "retrievalGoal", "sections", "materialScope",
+    "fields", "filters", "groupComparisons", "calculations", "evidenceStrategy", "retrievalTrace",
+} | _FORBIDDEN_RETRIEVAL_KEYS
 
 
 def _read_json(path: Path, label: str) -> Any:
@@ -44,6 +50,24 @@ def load_analysis_registry(path: Path) -> dict[str, Any]:
                 if field not in explicit_fields:
                     material_schema.setdefault("fields", []).append(field)
         payload["sections"]["material_leaderboard"] = material_schema
+    return payload
+
+
+def load_analysis_capability_registry(path: Path) -> dict[str, Any]:
+    """Load business-language dependency hints; values never contain run data."""
+    payload = _read_json(path, "analysis capability registry")
+    if payload.get("schemaVersion") != 1 or not isinstance(payload.get("capabilities"), dict):
+        raise AnalysisError("analysis capability registry schema is invalid")
+    for name, capability in payload["capabilities"].items():
+        if not isinstance(name, str) or not name.strip() or not isinstance(capability, dict):
+            raise AnalysisError("analysis capability registry entries are invalid")
+        if not isinstance(capability.get("sections"), list) or not capability["sections"]:
+            raise AnalysisError(f"capability {name} must declare sections")
+        if not all(section in _HANDOFF_SECTIONS for section in capability["sections"]):
+            raise AnalysisError(f"capability {name} references unknown section")
+        for key in ("fields", "optionalFields", "clarifications"):
+            if key in capability and not isinstance(capability[key], list):
+                raise AnalysisError(f"capability {name}.{key} must be a list")
     return payload
 
 
@@ -121,7 +145,7 @@ def validate_analysis_handoff(request: dict[str, Any], fact_pack_dir: Path) -> d
         request,
         {
             "stage", "runId", "factPackManifestSha256", "sections", "materialScope", "requestText", "analysisSpec",
-            "selection", "factPackPath", "manifestSummary", "sourceRefs",
+            "selection", "factPackPath", "manifestSummary", "sourceRefs", "factRetrievalSpec",
         },
         "analysis handoff request",
     )
@@ -335,6 +359,183 @@ def resolve_analysis_spec(payload: dict[str, Any], registry: dict[str, Any], fac
     return normalized
 
 
+def _retrieval_scalar(value: Any) -> Any:
+    """Return a comparable display value while preserving missing as None."""
+    if isinstance(value, dict):
+        for key in ("ValueStr", "valueStr", "Value", "value"):
+            if key in value:
+                return value[key]
+    return value
+
+
+def _retrieval_material_selection(scope: dict[str, Any], materials: list[dict[str, Any]]) -> dict[str, Any]:
+    ids = [str(item.get("materialId")) for item in materials]
+    target_top_n = len(ids)
+    scope = _require_object(scope, "FactRetrievalSpec.materialScope")
+    _keys(scope, {"type", "value"}, "FactRetrievalSpec.materialScope")
+    kind = scope.get("type")
+    if kind == "all":
+        return {"rankRange": {"start": 1, "end": target_top_n}}
+    if kind == "top_n":
+        value = scope.get("value")
+        if type(value) is not int or not 0 < value <= target_top_n:
+            raise AnalysisError("FactRetrievalSpec top_n materialScope is outside fact pack")
+        return {"rankRange": {"start": 1, "end": value}}
+    if kind == "material_ids":
+        value = scope.get("value")
+        if not isinstance(value, list) or not value:
+            raise AnalysisError("FactRetrievalSpec material_ids scope must be a nonempty list")
+        selected = [str(item) for item in value]
+        unknown = sorted(set(selected) - set(ids))
+        if unknown:
+            raise AnalysisError(f"FactRetrievalSpec material IDs outside fact pack: {', '.join(unknown)}")
+        return {"materialIds": selected}
+    if kind == "material_id_range":
+        value = scope.get("value")
+        if isinstance(value, dict):
+            _keys(value, {"start", "end"}, "FactRetrievalSpec material_id_range")
+            start, end = value.get("start"), value.get("end")
+        elif isinstance(value, list) and len(value) == 2:
+            start, end = value
+        else:
+            raise AnalysisError("FactRetrievalSpec material_id_range must contain start and end")
+        if type(start) is not int or type(end) is not int or start <= 0 or end < start or end > target_top_n:
+            raise AnalysisError("FactRetrievalSpec material_id_range is outside fact pack")
+        return {"materialIds": ids[start - 1:end]}
+    raise AnalysisError("FactRetrievalSpec materialScope.type is unsupported")
+
+
+def _retrieval_to_analysis_spec(spec: dict[str, Any], registry: dict[str, Any], fact_pack: dict[str, Any]) -> dict[str, Any]:
+    selection = spec["selection"]
+    metrics = [
+        {"section": item["section"], "field": item["field"], "aggregation": item["aggregation"]}
+        for item in spec["fields"]
+    ]
+    # AnalysisSpec's calculation contract is intentionally reused for deterministic local formulas.
+    return resolve_analysis_spec({
+        "schemaVersion": 1,
+        "sections": spec["sections"],
+        "selection": selection,
+        "objective": spec["retrievalGoal"],
+        "questions": [spec["retrievalGoal"]],
+        "metrics": metrics,
+        "groupComparisons": [
+            {"section": item["section"], "groupBy": item["groupBy"]}
+            for item in spec["groupComparisons"]
+        ],
+        "calculations": spec["calculations"],
+        "evidenceStrategy": {
+            "mode": "source_linked_with_artifacts" if spec["evidenceStrategy"].get("includeArtifacts") else "source_linked",
+            "includeArtifacts": bool(spec["evidenceStrategy"].get("includeArtifacts", False)),
+            "maxRows": spec["evidenceStrategy"].get("maxRows"),
+        },
+        "output": {"format": "json+markdown"},
+    }, registry, fact_pack)
+
+
+def resolve_fact_retrieval_spec(
+    payload: dict[str, Any],
+    registry: dict[str, Any],
+    fact_pack: dict[str, Any],
+    *,
+    run_id: str,
+    manifest_sha256: str,
+) -> dict[str, Any]:
+    """Validate a model-produced, fact-pack-only retrieval plan."""
+    payload = _require_object(payload, "FactRetrievalSpec")
+    _keys(payload, _RETRIEVAL_KEYS, "FactRetrievalSpec")
+    if _FORBIDDEN_RETRIEVAL_KEYS.intersection(payload):
+        raise AnalysisError("FactRetrievalSpec contains forbidden QuerySpec fields: %s" % ", ".join(sorted(_FORBIDDEN_RETRIEVAL_KEYS.intersection(payload))))
+    if payload.get("schemaVersion") != 1:
+        raise AnalysisError("FactRetrievalSpec schemaVersion must be 1")
+    if payload.get("runId") != run_id or payload.get("factPackManifestSha256") != manifest_sha256:
+        raise AnalysisError("FactRetrievalSpec run or manifest binding mismatch")
+    goal = payload.get("retrievalGoal")
+    if not isinstance(goal, str) or not goal.strip():
+        raise AnalysisError("FactRetrievalSpec retrievalGoal must be nonempty")
+    sections = _normalize_handoff_sections(payload.get("sections"))
+    materials = _fact_materials(fact_pack)
+    selection = _retrieval_material_selection(payload.get("materialScope"), materials)
+    raw_fields = payload.get("fields")
+    if not isinstance(raw_fields, list) or not raw_fields:
+        raise AnalysisError("FactRetrievalSpec.fields must be a nonempty list")
+    fields = []
+    seen = set()
+    for item in raw_fields:
+        item = _require_object(item, "FactRetrievalSpec.fields item")
+        _keys(item, {"section", "field", "aggregation"}, "FactRetrievalSpec.fields item")
+        section, field, aggregation = item.get("section"), item.get("field"), item.get("aggregation")
+        if section not in sections:
+            raise AnalysisError(f"FactRetrievalSpec field section is not selected: {section}")
+        schema = _field_entry(registry, section, field)
+        if aggregation not in schema.get("aggregations", []):
+            raise AnalysisError(f"FactRetrievalSpec unsupported aggregation: {section}.{field}.{aggregation}")
+        key = (section, field, aggregation)
+        if key not in seen:
+            fields.append({"section": section, "field": field, "aggregation": aggregation})
+            seen.add(key)
+    filters = []
+    raw_filters = payload.get("filters", [])
+    if not isinstance(raw_filters, list):
+        raise AnalysisError("FactRetrievalSpec.filters must be a list")
+    for item in raw_filters:
+        item = _require_object(item, "FactRetrievalSpec.filters item")
+        _keys(item, {"section", "field", "operator", "value"}, "FactRetrievalSpec.filters item")
+        section, field, operator = item.get("section"), item.get("field"), item.get("operator")
+        if section not in sections:
+            raise AnalysisError(f"FactRetrievalSpec filter section is not selected: {section}")
+        _field_entry(registry, section, field)
+        if operator not in _RETRIEVAL_OPERATORS:
+            raise AnalysisError(f"FactRetrievalSpec unsupported filter operator: {operator}")
+        if "value" not in item:
+            raise AnalysisError("FactRetrievalSpec filter value is required")
+        filters.append({"section": section, "field": field, "operator": operator, "value": deepcopy(item["value"])})
+    groups = []
+    raw_groups = payload.get("groupComparisons", [])
+    if not isinstance(raw_groups, list):
+        raise AnalysisError("FactRetrievalSpec.groupComparisons must be a list")
+    for item in raw_groups:
+        item = _require_object(item, "FactRetrievalSpec.groupComparisons item")
+        _keys(item, {"section", "groupBy", "aggregations"}, "FactRetrievalSpec.groupComparisons item")
+        section, group_by = item.get("section"), item.get("groupBy")
+        if section not in sections:
+            raise AnalysisError(f"FactRetrievalSpec group section is not selected: {section}")
+        schema = _field_entry(registry, section, group_by)
+        if group_by not in schema.get("groupableFields", []):
+            raise AnalysisError(f"FactRetrievalSpec field is not groupable: {section}.{group_by}")
+        aggregations = item.get("aggregations", ["count"])
+        if not isinstance(aggregations, list) or not aggregations or any(value not in schema.get("aggregations", []) for value in aggregations):
+            raise AnalysisError(f"FactRetrievalSpec invalid group aggregations: {section}.{group_by}")
+        groups.append({"section": section, "groupBy": group_by, "aggregations": list(dict.fromkeys(aggregations))})
+    calculations = payload.get("calculations", [])
+    if not isinstance(calculations, list):
+        raise AnalysisError("FactRetrievalSpec.calculations must be a list")
+    normalized = {
+        "schemaVersion": 1,
+        "runId": run_id,
+        "factPackManifestSha256": manifest_sha256,
+        "retrievalGoal": goal.strip(),
+        "sections": sections,
+        "materialScope": deepcopy(payload["materialScope"]),
+        "selection": selection,
+        "fields": fields,
+        "filters": filters,
+        "groupComparisons": groups,
+        "calculations": deepcopy(calculations),
+        "evidenceStrategy": deepcopy(payload.get("evidenceStrategy", {})),
+        "retrievalTrace": deepcopy(payload.get("retrievalTrace", [])),
+    }
+    evidence = normalized["evidenceStrategy"]
+    _keys(evidence, {"includeArtifacts", "maxRows"}, "FactRetrievalSpec.evidenceStrategy")
+    if "includeArtifacts" in evidence and type(evidence["includeArtifacts"]) is not bool:
+        raise AnalysisError("FactRetrievalSpec evidenceStrategy.includeArtifacts must be boolean")
+    if "maxRows" in evidence and (type(evidence["maxRows"]) is not int or evidence["maxRows"] <= 0):
+        raise AnalysisError("FactRetrievalSpec evidenceStrategy.maxRows must be a positive integer")
+    normalized["analysisSpec"] = _retrieval_to_analysis_spec(normalized, registry, fact_pack)
+    normalized["selectedMaterialIds"] = normalized["analysisSpec"]["selectedMaterialIds"]
+    return normalized
+
+
 def analysis_fingerprint(spec: dict[str, Any]) -> str:
     encoded = json.dumps(spec, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -481,6 +682,28 @@ def _project_row(row: dict[str, Any], fields: list[tuple[str, str]]) -> tuple[di
     return projected, missing
 
 
+def _matches_filter(row: dict[str, Any], item: dict[str, Any]) -> bool:
+    actual = _retrieval_scalar(_path_value(row, item["field"]))
+    expected = _retrieval_scalar(item.get("value"))
+    if actual is None:
+        return False
+    op = item["operator"]
+    if op == "eq":
+        return actual == expected or str(actual) == str(expected)
+    if op == "neq":
+        return not (actual == expected or str(actual) == str(expected))
+    if op == "contains":
+        return str(expected) in str(actual)
+    if op == "in":
+        values = expected if isinstance(expected, list) else [expected]
+        return any(actual == value or str(actual) == str(value) for value in values)
+    try:
+        left, right = float(actual), float(expected)
+    except (TypeError, ValueError):
+        return False
+    return {"gt": left > right, "gte": left >= right, "lt": left < right, "lte": left <= right}[op]
+
+
 def slice_fact_pack(run_dir: Path, fact_pack_dir: Path, spec: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any]:
     run_dir = Path(run_dir).resolve()
     fact_pack_dir = Path(fact_pack_dir).resolve()
@@ -499,6 +722,9 @@ def slice_fact_pack(run_dir: Path, fact_pack_dir: Path, spec: dict[str, Any], re
         projected_rows: list[dict[str, Any]] = []
         section_refs: list[dict[str, Any]] = []
         for row in rows:
+            row_filters = [item for item in spec.get("filters", []) if item.get("section") == section]
+            if row_filters and not all(_matches_filter(row, item) for item in row_filters):
+                continue
             projected, missing = _project_row(row, fields)
             result = {"materialId": str(row["materialId"]), "fields": projected}
             if isinstance(row.get("sourceRef"), dict):
@@ -521,6 +747,22 @@ def slice_fact_pack(run_dir: Path, fact_pack_dir: Path, spec: dict[str, Any], re
         for ref in section_refs:
             _append_ref(all_refs, ref)
         sections[section] = {"status": status, "rows": projected_rows, "sourceRefs": section_refs}
+
+        # Group summaries are deterministic and intentionally descriptive, not business conclusions.
+        for group in [item for item in spec.get("groupComparisons", []) if item.get("section") == section]:
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for row in rows:
+                key = _retrieval_scalar(_path_value(row, group["groupBy"]))
+                grouped.setdefault("<missing>" if key is None else str(key), []).append(row)
+            summaries = []
+            first_field = fields[0][0] if fields else None
+            for key, group_rows in grouped.items():
+                summary = {"group": key, "count": len(group_rows)}
+                if "avg" in group.get("aggregations", []) and first_field:
+                    vals = [_path_value(row, first_field) for row in group_rows]
+                    summary["avg"] = _aggregate(vals, "avg")
+                summaries.append(summary)
+            sections[section]["groupComparisons"] = summaries
 
     manifest_path = fact_pack_dir / "manifest.json"
     if manifest_path.is_file():
@@ -568,7 +810,30 @@ def slice_fact_pack(run_dir: Path, fact_pack_dir: Path, spec: dict[str, Any], re
         "sourceRefs": all_refs,
         "missingItems": missing_items,
         "calculations": calculations,
+        "retrievalTrace": deepcopy(spec.get("retrievalTrace", [])),
     }
+
+
+def retrieve_fact_slice(run_dir: Path, fact_pack_dir: Path, retrieval_spec: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any]:
+    """Execute a normalized FactRetrievalSpec entirely against local fact-pack files."""
+    spec = deepcopy(retrieval_spec.get("analysisSpec")) if isinstance(retrieval_spec.get("analysisSpec"), dict) else deepcopy(retrieval_spec)
+    spec["filters"] = deepcopy(retrieval_spec.get("filters", []))
+    spec["groupComparisons"] = deepcopy(retrieval_spec.get("groupComparisons", []))
+    spec["retrievalTrace"] = deepcopy(retrieval_spec.get("retrievalTrace", []))
+    evidence = slice_fact_pack(run_dir, fact_pack_dir, spec, registry)
+    trace = retrieval_spec.get("retrievalTrace") or []
+    if not trace:
+        trace = [
+            {
+                "intent": retrieval_spec.get("retrievalGoal", ""),
+                "section": field["section"],
+                "fields": [field["field"]],
+                "reason": "自然语言意图映射到事实包注册字段",
+            }
+            for field in retrieval_spec.get("fields", [])
+        ]
+    evidence["retrievalTrace"] = trace
+    return evidence
 
 
 _PROMPT_INSTRUCTIONS = {
@@ -597,6 +862,10 @@ def compile_model_input(
             "evidence": evidence["sections"].get(section, {"rows": [], "sourceRefs": []}),
         }
     manifest_ref = next((ref for ref in evidence["sourceRefs"] if ref["path"] == "fact-pack/manifest.json"), None)
+    capability_hints = None
+    capability_path = Path(__file__).resolve().parents[1] / "config" / "analysis-capability-registry-v1.json"
+    if capability_path.is_file():
+        capability_hints = load_analysis_capability_registry(capability_path)
     model_input = {
         "schemaVersion": 1,
         "inputType": "qianchuan_analysis_model_input",
@@ -609,6 +878,7 @@ def compile_model_input(
         "sections": sections,
         "calculations": deepcopy(evidence.get("calculations", [])),
         "sourceRefs": deepcopy(evidence["sourceRefs"]),
+        "capabilityHints": capability_hints,
         "modelConstraints": {
             "allowedSections": list(spec["sections"]),
             "allowedMaterialIds": list(spec["selectedMaterialIds"]),
@@ -754,6 +1024,14 @@ def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None 
     request = _read_json(Path(request_path), "analysis request")
     if not isinstance(request, dict):
         raise AnalysisError("analysis request must be an object")
+    nested_retrieval = request.get("factRetrievalSpec")
+    if isinstance(nested_retrieval, dict):
+        request = deepcopy(request)
+        request.setdefault("stage", "analysis")
+        request.setdefault("runId", nested_retrieval.get("runId"))
+        request.setdefault("factPackManifestSha256", nested_retrieval.get("factPackManifestSha256"))
+        request.setdefault("sections", nested_retrieval.get("sections"))
+        request.setdefault("materialScope", nested_retrieval.get("materialScope"))
     if request.get("stage") == "analysis" or any(
         key in request for key in ("runId", "factPackManifestSha256", "materialScope")
     ):
@@ -790,15 +1068,25 @@ def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None 
         raise AnalysisError("fact pack is incomplete; commercial analysis is blocked")
     registry = load_analysis_registry(Path(__file__).resolve().parents[1] / "config" / "analysis-registry-v1.json")
     fact_pack = _fact_pack_payload(fact_pack_dir)
-    request_spec = _request_spec(request)
-    if request.get("stage") == "analysis" and request_spec is None:
-        request_spec = _default_analysis_spec(request, registry)
-    if request.get("stage") == "analysis":
-        request_spec = deepcopy(request_spec)
-        request_spec["sections"] = deepcopy(request["sections"])
-        request_spec["selection"] = deepcopy(request["selection"])
-    spec = resolve_analysis_spec(request_spec, registry, fact_pack)
-    evidence = slice_fact_pack(run_dir, fact_pack_dir, spec, registry)
+    retrieval_spec = None
+    if isinstance(request.get("factRetrievalSpec"), dict):
+        retrieval_spec = resolve_fact_retrieval_spec(
+            request["factRetrievalSpec"], registry, fact_pack,
+            run_id=run_dir.name,
+            manifest_sha256=_manifest_ref(run_dir, fact_pack_dir)["sha256"],
+        )
+        spec = retrieval_spec["analysisSpec"]
+        evidence = retrieve_fact_slice(run_dir, fact_pack_dir, retrieval_spec, registry)
+    else:
+        request_spec = _request_spec(request)
+        if request.get("stage") == "analysis" and request_spec is None:
+            request_spec = _default_analysis_spec(request, registry)
+        if request.get("stage") == "analysis":
+            request_spec = deepcopy(request_spec)
+            request_spec["sections"] = deepcopy(request["sections"])
+            request_spec["selection"] = deepcopy(request["selection"])
+        spec = resolve_analysis_spec(request_spec, registry, fact_pack)
+        evidence = slice_fact_pack(run_dir, fact_pack_dir, spec, registry)
     model_input = compile_model_input(
         run_dir,
         spec,
@@ -806,6 +1094,9 @@ def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None 
         registry,
         request_text=request.get("requestText", "") if isinstance(request.get("requestText", ""), str) else "",
     )
+    if retrieval_spec is not None:
+        model_input["factRetrievalSpec"] = deepcopy(retrieval_spec)
+        model_input["retrievalTrace"] = deepcopy(evidence.get("retrievalTrace", []))
     _write_json(output_dir / "analysis-spec.json", spec)
     _write_json(output_dir / "analysis-input.json", model_input)
     status = "awaiting_model_with_missing_data" if evidence["missingItems"] else "awaiting_model"

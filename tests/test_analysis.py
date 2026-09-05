@@ -24,6 +24,9 @@ from analysis import (  # noqa: E402
     validate_analysis_handoff,
     validate_analysis_result,
     verify_analysis,
+    resolve_fact_retrieval_spec,
+    retrieve_fact_slice,
+    load_analysis_capability_registry,
 )
 
 
@@ -132,6 +135,70 @@ def analysis_fact_pack(root):
 
 
 class AnalysisSpecTests(unittest.TestCase):
+    def test_loads_capability_registry_without_real_results(self):
+        registry = load_analysis_capability_registry(ROOT / "config" / "analysis-capability-registry-v1.json")
+        self.assertIn("成交质量比较", registry["capabilities"])
+        self.assertNotIn("materials", json.dumps(registry, ensure_ascii=False))
+    def test_resolves_fact_retrieval_spec_and_rejects_query_fields(self):
+        registry = load_analysis_registry(REGISTRY_PATH)
+        manifest_hash = "a" * 64
+        payload = {
+            "schemaVersion": 1,
+            "runId": "run-1",
+            "factPackManifestSha256": manifest_hash,
+            "retrievalGoal": "比较成交质量并解释退款差异",
+            "sections": ["material_leaderboard", "audience"],
+            "materialScope": {"type": "top_n", "value": 2},
+            "fields": [
+                {"section": "material_leaderboard", "field": "metrics.total_prepay_and_pay_settle_roi2_7d", "aggregation": "value"},
+                {"section": "audience", "field": "metricPercentage", "aggregation": "value"},
+            ],
+            "filters": [{"section": "audience", "field": "dimensionName", "operator": "eq", "value": "八大人群"}],
+            "groupComparisons": [{"section": "audience", "groupBy": "audienceValue", "aggregations": ["count", "avg"]}],
+            "calculations": [],
+            "evidenceStrategy": {"maxRows": 20},
+        }
+        normalized = resolve_fact_retrieval_spec(
+            payload,
+            registry,
+            fact_pack(),
+            run_id="run-1",
+            manifest_sha256=manifest_hash,
+        )
+        self.assertEqual(normalized["retrievalGoal"], payload["retrievalGoal"])
+        self.assertEqual(normalized["materialScope"], {"type": "top_n", "value": 2})
+        self.assertEqual(normalized["filters"][0]["operator"], "eq")
+        with self.assertRaisesRegex(AnalysisError, "forbidden|QuerySpec|period"):
+            resolve_fact_retrieval_spec({**payload, "period": {"startDate": "2026-01-01", "endDate": "2026-01-02"}}, registry, fact_pack(), run_id="run-1", manifest_sha256=manifest_hash)
+
+    def test_retrieves_filtered_rows_without_turning_missing_into_zero(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            registry = load_analysis_registry(REGISTRY_PATH)
+            manifest_hash = hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest()
+            payload = {
+                "schemaVersion": 1,
+                "runId": root.name,
+                "factPackManifestSha256": manifest_hash,
+                "retrievalGoal": "比较素材表现",
+                "sections": ["material_leaderboard", "audience"],
+                "materialScope": {"type": "all"},
+                "fields": [
+                    {"section": "material_leaderboard", "field": "metrics.stat_cost_for_overall_roi2", "aggregation": "value"},
+                    {"section": "material_leaderboard", "field": "metrics.total_cpc_for_roi2", "aggregation": "value"},
+                    {"section": "audience", "field": "metricValue", "aggregation": "value"},
+                ],
+                "filters": [{"section": "audience", "field": "dimensionName", "operator": "eq", "value": "年龄"}],
+                "groupComparisons": [],
+                "calculations": [],
+                "evidenceStrategy": {"maxRows": 1},
+            }
+            spec = resolve_fact_retrieval_spec(payload, registry, fact_pack(json.loads((fact_dir / "material-leaderboard.json").read_text())["materials"]), run_id=root.name, manifest_sha256=manifest_hash)
+            evidence = retrieve_fact_slice(root, fact_dir, spec, registry)
+        self.assertTrue(any(item["code"] == "field_missing" for item in evidence["missingItems"]))
+        self.assertTrue(any(item["code"] == "evidence_truncated" for item in evidence["missingItems"]))
+        self.assertIn("retrievalTrace", evidence)
     def test_validates_single_section_analysis_handoff_and_normalizes_scope(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -181,6 +248,82 @@ class AnalysisSpecTests(unittest.TestCase):
         self.assertEqual(receipt["factPackManifestSha256"], request["factPackManifestSha256"])
         self.assertEqual(receipt["status"], "awaiting_model")
         self.assertEqual(receipt["sourceRefs"], model_input["sourceRefs"])
+
+    def test_prepare_analysis_accepts_fact_retrieval_spec_and_emits_trace(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            manifest_hash = hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest()
+            request = {
+                "stage": "analysis",
+                "runId": root.name,
+                "factPackManifestSha256": manifest_hash,
+                "sections": ["material_leaderboard"],
+                "materialScope": {"type": "all"},
+                "requestText": "比较 7 日 ROI",
+                "factRetrievalSpec": {
+                    "schemaVersion": 1,
+                    "runId": root.name,
+                    "factPackManifestSha256": manifest_hash,
+                    "retrievalGoal": "比较 7 日 ROI",
+                    "sections": ["material_leaderboard"],
+                    "materialScope": {"type": "all"},
+                    "fields": [{"section": "material_leaderboard", "field": "metrics.stat_cost_for_overall_roi2", "aggregation": "value"}],
+                    "filters": [], "groupComparisons": [], "calculations": [], "evidenceStrategy": {"maxRows": 10}
+                }
+            }
+            request_path = root / "analysis-request.json"
+            request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+            with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}):
+                receipt = prepare_analysis(root, request_path, root / "analysis")
+            model_input = json.loads((root / "analysis" / "analysis-input.json").read_text(encoding="utf-8"))
+        self.assertEqual(receipt["status"], "awaiting_model")
+        self.assertIn("factRetrievalSpec", model_input)
+        self.assertTrue(model_input["retrievalTrace"])
+
+    def test_real_run_replay_is_offline_and_preserves_missing_audience_metrics(self):
+        run_dir = ROOT / "runs" / "run-20260826-20260830"
+        fact_dir = run_dir / "fact-pack"
+        manifest_hash = hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest()
+        request = {
+            "stage": "analysis",
+            "runId": run_dir.name,
+            "factPackManifestSha256": manifest_hash,
+            "sections": ["material_leaderboard", "audience", "scripts"],
+            "materialScope": {"type": "all"},
+            "requestText": "比较三个素材的成交质量，重点看 7 日 ROI、退款率、完播率，并结合脚本和人群解释差异",
+            "factRetrievalSpec": {
+                "schemaVersion": 1,
+                "runId": run_dir.name,
+                "factPackManifestSha256": manifest_hash,
+                "retrievalGoal": "比较三个素材的成交质量，重点看 7 日 ROI、退款率、完播率，并结合脚本和人群解释差异",
+                "sections": ["material_leaderboard", "audience", "scripts"],
+                "materialScope": {"type": "all"},
+                "fields": [
+                    {"section": "material_leaderboard", "field": "metrics.total_prepay_and_pay_settle_roi2_7d", "aggregation": "value"},
+                    {"section": "material_leaderboard", "field": "metrics.total_refund_order_gmv_for_roi2_1h_rate", "aggregation": "value"},
+                    {"section": "material_leaderboard", "field": "metrics.video_play_finish_rate_for_roi2_v2", "aggregation": "value"},
+                    {"section": "audience", "field": "dimensionName", "aggregation": "value"},
+                    {"section": "audience", "field": "audienceValue", "aggregation": "value"},
+                    {"section": "audience", "field": "metricValue", "aggregation": "value"},
+                    {"section": "scripts", "field": "text", "aggregation": "value"}
+                ],
+                "filters": [], "groupComparisons": [], "calculations": [], "evidenceStrategy": {"maxRows": 200}
+            }
+        }
+        request_path = run_dir / "analysis-request-replay-test.json"
+        try:
+            request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+            with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}), patch("analysis.fetch_material_report", side_effect=AssertionError("network must not be called"), create=True):
+                receipt = prepare_analysis(run_dir, request_path, run_dir / "analysis-replay-test")
+            model_input = json.loads((run_dir / "analysis-replay-test" / "analysis-input.json").read_text(encoding="utf-8"))
+        finally:
+            request_path.unlink(missing_ok=True)
+            shutil.rmtree(run_dir / "analysis-replay-test", ignore_errors=True)
+        self.assertEqual(receipt["status"], "awaiting_model_with_missing_data")
+        self.assertTrue(receipt["missingItems"])
+        self.assertEqual(len(model_input["factRetrievalSpec"]["selectedMaterialIds"]), 3)
+        self.assertTrue(model_input["retrievalTrace"])
 
     def test_validates_multi_section_analysis_handoff(self):
         with tempfile.TemporaryDirectory() as temp_dir:

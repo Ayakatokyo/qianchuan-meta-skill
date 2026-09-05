@@ -38,6 +38,7 @@ def _ensure_analysis_assets():
     required = (
         ROOT / "config" / "analysis-registry-v1.json",
         ROOT / "config" / "asset-field-registry-v1.json",
+        ROOT / "config" / "analysis-capability-registry-v1.json",
     )
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
@@ -46,7 +47,7 @@ def _ensure_analysis_assets():
 
 PHASES = (
     "awaiting_query_input", "querying", "rpa_processing", "fact_pack_building", "fact_pack_verifying", "fact_pack_ready",
-    "awaiting_analysis_input", "analysis_preparing", "analysis_prepared", "awaiting_model", "analysis_verifying", "analysis_verified", "report_ready",
+    "awaiting_analysis_input", "planning_fact_retrieval", "fact_retrieval_ready", "analysis_preparing", "analysis_prepared", "awaiting_model", "analysis_verifying", "analysis_verified", "report_ready",
     "query_failed", "fact_pack_failed", "analysis_failed",
 )
 PHASE_STATES = PHASES
@@ -54,7 +55,7 @@ PHASE_STATES = PHASES
 
 _SUCCESSFUL_PHASES = {
     "querying", "rpa_processing", "fact_pack_building", "fact_pack_verifying", "fact_pack_ready",
-    "awaiting_analysis_input", "analysis_preparing", "analysis_prepared", "awaiting_model",
+    "awaiting_analysis_input", "planning_fact_retrieval", "fact_retrieval_ready", "analysis_preparing", "analysis_prepared", "awaiting_model",
     "analysis_verifying", "analysis_verified", "report_ready",
 }
 _TERMINAL_PHASES = {
@@ -221,6 +222,10 @@ def continue_analysis(run_dir, analysis_request, output_dir=None):
     request = _read_json(analysis_request, "analysis request")
     if not isinstance(request, dict):
         raise MetaSkillError("analysis request must be an object")
+    forbidden = {"scope", "period", "ranking", "candidateTopN", "shopId", "advertiserId", "rpa", "querySpec", "highlightSpec"}
+    present = forbidden.intersection(request)
+    if present:
+        raise MetaSkillError("stage-two request contains forbidden QuerySpec fields: %s" % ", ".join(sorted(present)))
     if request.get("stage") != "analysis":
         request = {**request, "stage": "analysis"}
     for key in ("runId", "factPackManifestSha256"):
@@ -230,11 +235,19 @@ def continue_analysis(run_dir, analysis_request, output_dir=None):
         request["sections"] = handoff["sections"]
     if "materialScope" not in request:
         request["materialScope"] = {"type": "all"}
+    _set_run_phase(run_dir, "planning_fact_retrieval", currentObject="FactRetrievalSpec")
     validated = validate_analysis_handoff(request, run_dir / "fact-pack")
     with tempfile.TemporaryDirectory() as temp_dir:
         normalized_request = Path(temp_dir) / "analysis-request.json"
         _write_json(normalized_request, validated)
         result = prepare_analysis(run_dir, normalized_request, Path(output_dir) if output_dir else None)
+    if "factRetrievalSpec" in validated:
+        _set_run_phase(
+            run_dir,
+            "fact_retrieval_ready",
+            phaseComplete=True,
+            retrievalGoal=validated["factRetrievalSpec"].get("retrievalGoal"),
+        )
     phase = "analysis_prepared" if result.get("status", "").startswith("awaiting_model") else "analysis_failed"
     _set_run_phase(run_dir, phase, analysisReceipt=str((Path(output_dir) if output_dir else run_dir / "analysis") / "analysis-receipt.json"))
     return result
@@ -348,6 +361,20 @@ def build_parser():
     run.add_argument("--csv-max-bytes", type=int)
     run.add_argument("--video-max-bytes", type=int)
     run.add_argument("--download-deadline-sec", type=int)
+    workflow = commands.add_parser("workflow", help="run the complete two-stage workflow; stage one stops at analysis handoff")
+    workflow.add_argument("--config")
+    workflow.add_argument("--query-spec")
+    workflow.add_argument("--highlight-spec")
+    workflow.add_argument("--output-dir", required=True)
+    workflow.add_argument("--execute-rpa", action="store_true")
+    workflow.add_argument("--rpa-concurrency", type=int)
+    workflow.add_argument("--material-timeout-sec", type=int)
+    workflow.add_argument("--csv-wait-window-sec", type=int)
+    workflow.add_argument("--recovery-attempts", type=int)
+    workflow.add_argument("--recovery-backoff-sec", type=float)
+    workflow.add_argument("--csv-max-bytes", type=int)
+    workflow.add_argument("--video-max-bytes", type=int)
+    workflow.add_argument("--download-deadline-sec", type=int)
     frames = commands.add_parser("select-frames")
     frames.add_argument("--config")
     frames.add_argument("--highlight-spec")
@@ -473,7 +500,7 @@ def main(argv=None):
             return 0 if result["status"] == "succeeded" else 1
         registry = load_field_registry(REGISTRY_PATH)
         query_spec, highlight_spec, query, policy = _load_specs(
-            args, registry, require_query=args.command in {"validate", "query", "run"}
+            args, registry, require_query=args.command in {"validate", "query", "run", "workflow"}
         )
         if args.command == "validate":
             print(json.dumps(_json_safe({
@@ -498,6 +525,8 @@ def main(argv=None):
             print("top_materials_json=%s" % (output_dir / "top_materials.json"))
             print("query_receipt=%s" % (output_dir / "query-receipt.json"))
             return 0
+        if args.command == "workflow":
+            args.command = "run"
         receipt = RunReceipt(output_dir, fingerprint, "run", args.execute_rpa)
         _set_run_phase(output_dir, "querying")
         receipt.start_stage("query")

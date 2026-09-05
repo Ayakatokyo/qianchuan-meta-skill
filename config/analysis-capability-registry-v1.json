@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "registryVersion": "2026-09-05-capabilities-v1",
+  "capabilities": {
+    "成交质量比较": {
+      "sections": ["material_leaderboard"],
+      "fields": [
+        "metrics.total_prepay_and_pay_settle_roi2_1h",
+        "metrics.total_prepay_and_pay_settle_roi2_7d",
+        "metrics.total_refund_order_gmv_for_roi2_1h_rate",
+        "metrics.total_order_real_settle_amount_for_roi2_1h",
+        "metrics.video_play_finish_rate_for_roi2_v2"
+      ],
+      "optionalSections": ["scripts", "audience", "highlight_frames"],
+      "clarifications": ["ROI/成交窗口（1h、7d、14d、30d、90d）", "全部目标素材或指定排名/素材 ID"]
+    },
+    "退款差异解释": {
+      "sections": ["material_leaderboard"],
+      "fields": [
+        "metrics.total_refund_order_gmv_for_roi2_1h_rate",
+        "metrics.total_refund_order_count_for_roi2_1h",
+        "metrics.total_prepay_and_pay_settle_roi2_7d"
+      ],
+      "optionalSections": ["scripts", "audience"],
+      "clarifications": ["退款口径（金额率或订单数）"]
+    },
+    "脚本复盘": {
+      "sections": ["scripts"],
+      "fields": ["text", "formula", "detail", "parseStatus"],
+      "optionalSections": ["material_leaderboard", "highlight_frames"],
+      "clarifications": ["是否需要逐字稿原文引用"]
+    },
+    "人群结构比较": {
+      "sections": ["audience"],
+      "fields": ["dimensionName", "audienceValue", "metricValue", "metricPercentage"],
+      "groupableFields": ["dimensionName", "audienceValue"],
+      "clarifications": ["按性别、年龄、八大人群还是省份比较", "展示次数还是点击/成交指标"]
+    },
+    "高光帧复盘": {
+      "sections": ["highlight_frames"],
+      "fields": ["frameSequence", "durationSec", "artifact", "selectionEvidence"],
+      "optionalSections": ["scripts", "material_leaderboard"],
+      "clarifications": ["是否需要附带 JPEG artifact"]
+    }
+  }
+}
