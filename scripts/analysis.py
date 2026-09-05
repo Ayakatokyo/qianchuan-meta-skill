@@ -718,13 +718,14 @@ def slice_fact_pack(run_dir: Path, fact_pack_dir: Path, spec: dict[str, Any], re
         if status not in {"available", "built", None}:
             missing_items.append({"section": section, "code": "category_unavailable", "status": status})
         rows = _section_rows(payload, section, selected_ids)
+        row_filters = [item for item in spec.get("filters", []) if item.get("section") == section]
+        rows = [row for row in rows if not row_filters or all(_matches_filter(row, item) for item in row_filters)]
+        if status not in {"available", "built", None}:
+            rows = []
         fields = _requested_fields(spec, section)
         projected_rows: list[dict[str, Any]] = []
         section_refs: list[dict[str, Any]] = []
         for row in rows:
-            row_filters = [item for item in spec.get("filters", []) if item.get("section") == section]
-            if row_filters and not all(_matches_filter(row, item) for item in row_filters):
-                continue
             projected, missing = _project_row(row, fields)
             result = {"materialId": str(row["materialId"]), "fields": projected}
             if isinstance(row.get("sourceRef"), dict):
@@ -757,10 +758,10 @@ def slice_fact_pack(run_dir: Path, fact_pack_dir: Path, spec: dict[str, Any], re
             summaries = []
             first_field = fields[0][0] if fields else None
             for key, group_rows in grouped.items():
-                summary = {"group": key, "count": len(group_rows)}
-                if "avg" in group.get("aggregations", []) and first_field:
-                    vals = [_path_value(row, first_field) for row in group_rows]
-                    summary["avg"] = _aggregate(vals, "avg")
+                summary = {"group": key}
+                vals = [_path_value(row, first_field) for row in group_rows] if first_field else []
+                for aggregation in group.get("aggregations", []):
+                    summary[aggregation] = _aggregate(vals, aggregation) if aggregation != "count" else len([value for value in vals if value is not None])
                 summaries.append(summary)
             sections[section]["groupComparisons"] = summaries
 

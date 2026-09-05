@@ -199,6 +199,45 @@ class AnalysisSpecTests(unittest.TestCase):
         self.assertTrue(any(item["code"] == "field_missing" for item in evidence["missingItems"]))
         self.assertTrue(any(item["code"] == "evidence_truncated" for item in evidence["missingItems"]))
         self.assertIn("retrievalTrace", evidence)
+
+    def test_group_comparisons_use_filtered_rows_and_requested_aggregations(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            registry = load_analysis_registry(REGISTRY_PATH)
+            manifest_hash = hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest()
+            payload = {
+                "schemaVersion": 1, "runId": root.name, "factPackManifestSha256": manifest_hash,
+                "retrievalGoal": "比较年龄人群", "sections": ["audience"], "materialScope": {"type": "all"},
+                "fields": [{"section": "audience", "field": "metricValue", "aggregation": "value"}],
+                "filters": [{"section": "audience", "field": "dimensionName", "operator": "eq", "value": "年龄"}],
+                "groupComparisons": [{"section": "audience", "groupBy": "audienceValue", "aggregations": ["count", "avg", "sum", "min", "max"]}],
+                "calculations": [], "evidenceStrategy": {"maxRows": 20}
+            }
+            spec = resolve_fact_retrieval_spec(payload, registry, fact_pack(), run_id=root.name, manifest_sha256=manifest_hash)
+            evidence = retrieve_fact_slice(root, fact_dir, spec, registry)
+        groups = evidence["sections"]["audience"]["groupComparisons"]
+        self.assertEqual(sum(item["count"] for item in groups), 2)
+        self.assertTrue(all("avg" in item and "sum" in item and "min" in item and "max" in item for item in groups))
+
+    def test_failed_section_is_not_projected_as_fact_rows(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            audience_path = fact_dir / "audience.json"
+            audience_path.write_text(json.dumps({"status": "failed", "audience": [{"materialId": "m-1", "metricValue": 99}]}), encoding="utf-8")
+            registry = load_analysis_registry(REGISTRY_PATH)
+            manifest_hash = hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest()
+            payload = {
+                "schemaVersion": 1, "runId": root.name, "factPackManifestSha256": manifest_hash,
+                "retrievalGoal": "分析人群", "sections": ["audience"], "materialScope": {"type": "all"},
+                "fields": [{"section": "audience", "field": "metricValue", "aggregation": "value"}],
+                "filters": [], "groupComparisons": [], "calculations": [], "evidenceStrategy": {"maxRows": 20}
+            }
+            spec = resolve_fact_retrieval_spec(payload, registry, fact_pack(), run_id=root.name, manifest_sha256=manifest_hash)
+            evidence = retrieve_fact_slice(root, fact_dir, spec, registry)
+        self.assertEqual(evidence["sections"]["audience"]["rows"], [])
+        self.assertTrue(any(item["code"] == "category_unavailable" for item in evidence["missingItems"]))
     def test_validates_single_section_analysis_handoff_and_normalizes_scope(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
