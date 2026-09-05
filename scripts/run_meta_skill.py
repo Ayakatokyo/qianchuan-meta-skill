@@ -48,7 +48,7 @@ def _ensure_analysis_assets():
 PHASES = (
     "awaiting_query_input", "querying", "rpa_processing", "fact_pack_building", "fact_pack_verifying", "fact_pack_ready",
     "awaiting_analysis_input", "planning_fact_retrieval", "fact_retrieval_ready", "analysis_preparing", "analysis_prepared", "awaiting_model", "analysis_verifying", "analysis_verified", "report_ready",
-    "query_failed", "fact_pack_failed", "analysis_failed",
+    "query_failed", "fact_pack_failed", "fact_retrieval_failed", "analysis_failed",
 )
 PHASE_STATES = PHASES
 
@@ -416,7 +416,12 @@ def main(argv=None):
                 _ensure_analysis_assets()
                 result = continue_analysis(Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
             except (MetaSkillError, AnalysisError) as exc:
-                _set_run_phase(Path(args.run_dir), "analysis_failed", error=str(exc))
+                try:
+                    request_payload = _read_json(Path(args.analysis_request), "analysis request")
+                except MetaSkillError:
+                    request_payload = {}
+                failed_phase = "fact_retrieval_failed" if isinstance(request_payload, dict) and "factRetrievalSpec" in request_payload else "analysis_failed"
+                _set_run_phase(Path(args.run_dir), failed_phase, error=str(exc))
                 raise
             print(json.dumps(result, ensure_ascii=False))
             return 0
