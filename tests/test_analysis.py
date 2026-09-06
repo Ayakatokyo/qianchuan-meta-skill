@@ -27,6 +27,7 @@ from analysis import (  # noqa: E402
     resolve_fact_retrieval_spec,
     retrieve_fact_slice,
     load_analysis_capability_registry,
+    validate_analysis_input,
 )
 
 
@@ -135,6 +136,56 @@ def analysis_fact_pack(root):
 
 
 class AnalysisSpecTests(unittest.TestCase):
+    def test_accepts_versioned_outer_request_and_rejects_mixed_shapes_with_repair_metadata(self):
+        registry = load_analysis_registry(REGISTRY_PATH)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            manifest_hash = hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest()
+            request = {
+                "schemaVersion": 1,
+                "stage": "analysis",
+                "runId": root.name,
+                "factPackManifestSha256": manifest_hash,
+                "sections": ["material_leaderboard"],
+                "materialScope": {"type": "top_n", "value": 1},
+                "requestText": "比较两个素材的表现",
+                "analysisSpec": None,
+            }
+            normalized = validate_analysis_handoff(request, fact_dir)
+            self.assertEqual(normalized["schemaVersion"], 1)
+
+            mixed = {**request, "analysisSpec": spec("material_leaderboard"), "factRetrievalSpec": {}}
+            with self.assertRaises(AnalysisError) as context:
+                validate_analysis_handoff(mixed, fact_dir)
+
+        self.assertEqual(context.exception.code, "mixed_analysis_request_shapes")
+        self.assertEqual(context.exception.to_dict()["path"], "analysisSpec/factRetrievalSpec")
+        self.assertIn("repair", context.exception.to_dict())
+
+    def test_rejects_direct_retrieval_fields_with_machine_readable_nesting_repair(self):
+        registry = load_analysis_registry(REGISTRY_PATH)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            manifest_hash = hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest()
+            request = {
+                "schemaVersion": 1,
+                "stage": "analysis",
+                "runId": root.name,
+                "factPackManifestSha256": manifest_hash,
+                "sections": ["material_leaderboard"],
+                "materialScope": {"type": "all"},
+                "requestText": "比较素材表现",
+                "retrievalGoal": "比较素材表现",
+                "fields": [{"section": "material_leaderboard", "field": "rank", "aggregation": "value"}],
+            }
+            with self.assertRaises(AnalysisError) as context:
+                validate_analysis_handoff(request, fact_dir)
+
+        self.assertEqual(context.exception.code, "fact_retrieval_spec_must_be_nested")
+        self.assertEqual(context.exception.to_dict()["path"], "factRetrievalSpec")
+
     def test_loads_capability_registry_without_real_results(self):
         registry = load_analysis_capability_registry(ROOT / "config" / "analysis-capability-registry-v1.json")
         self.assertIn("成交质量比较", registry["capabilities"])
@@ -199,6 +250,10 @@ class AnalysisSpecTests(unittest.TestCase):
         self.assertTrue(any(item["code"] == "field_missing" for item in evidence["missingItems"]))
         self.assertTrue(any(item["code"] == "evidence_truncated" for item in evidence["missingItems"]))
         self.assertIn("retrievalTrace", evidence)
+        self.assertEqual(evidence["sliceSummary"]["audience"]["requestedRows"], 2)
+        self.assertEqual(evidence["sliceSummary"]["audience"]["returnedRows"], 1)
+        self.assertTrue(evidence["sliceSummary"]["audience"]["truncated"])
+        self.assertTrue(all("sourcePath" in item and "selectedMaterialIds" in item for item in evidence["retrievalTrace"]))
 
     def test_group_comparisons_use_filtered_rows_and_requested_aggregations(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -322,6 +377,8 @@ class AnalysisSpecTests(unittest.TestCase):
 
     def test_real_run_replay_is_offline_and_preserves_missing_audience_metrics(self):
         run_dir = ROOT / "runs" / "run-20260826-20260830"
+        if not run_dir.is_dir():
+            self.skipTest("legacy replay fixture is not part of this checkout")
         fact_dir = run_dir / "fact-pack"
         manifest_hash = hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest()
         request = {
@@ -528,6 +585,11 @@ class AnalysisInputTests(unittest.TestCase):
             model_input["resultSchema"]["claimRequired"],
             ["claimType", "statement", "section", "priority", "evidenceRefs", "confidence"],
         )
+        self.assertEqual(model_input["inputContract"]["rootType"], "object")
+        self.assertEqual(model_input["inputContract"]["sectionsPath"], "sections.<section>.evidence.rows")
+        self.assertEqual(model_input["inputContract"]["factPackRootType"], "object")
+        self.assertEqual(model_input["sections"]["material_leaderboard"]["contract"]["collectionPath"], "materials")
+        self.assertIn("analysis-registry-v1.json", model_input["sections"]["material_leaderboard"]["contract"]["fieldRegistry"])
 
     def test_slices_only_requested_leaderboard_fields_and_selected_rank(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -865,6 +927,33 @@ class AnalysisResultTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "failed")
         self.assertFalse((root / "analysis" / "report.json").exists())
 
+    def test_reports_structured_repair_for_analysis_input_slice_mismatch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            model_input = self._prepared_analysis(root)
+            input_path = root / "analysis" / "analysis-input.json"
+            tampered = json.loads(input_path.read_text(encoding="utf-8"))
+            tampered["sections"]["material_leaderboard"]["evidence"]["rows"][0]["fields"]["metrics.stat_cost_for_overall_roi2"] = "tampered"
+            input_path.write_text(json.dumps(tampered, ensure_ascii=False), encoding="utf-8")
+            result_path = root / "model-result.json"
+            result_path.write_text(json.dumps({
+                "schemaVersion": 1,
+                "analysisSpecFingerprint": model_input["analysisSpecFingerprint"],
+                "claims": [{
+                    "claimType": "fact",
+                    "statement": "素材一的消耗为 100",
+                    "evidenceRefs": [model_input["sections"]["material_leaderboard"]["evidence"]["rows"][0]["sourceRef"]],
+                    "confidence": 1,
+                }],
+            }, ensure_ascii=False), encoding="utf-8")
+            with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}):
+                outcome = receive_analysis_result(root, result_path)
+
+        self.assertEqual(outcome["status"], "failed")
+        self.assertTrue(outcome["errorDetails"])
+        self.assertEqual(outcome["errorDetails"][0]["code"], "analysis_input_mismatch")
+        self.assertEqual(outcome["errorDetails"][0]["path"], "sections.material_leaderboard.evidence.rows[0].fields.metrics.stat_cost_for_overall_roi2")
+
     def test_verify_analysis_keeps_missing_model_result_awaiting_model(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -893,9 +982,29 @@ class AnalysisResultTests(unittest.TestCase):
             (root / "analysis").mkdir()
             (root / "analysis" / "analysis-input.json").write_text(json.dumps(model_input), encoding="utf-8")
 
-            with self.assertRaisesRegex(AnalysisError, "does not match fact slice"):
-                from analysis import validate_analysis_input
+            with self.assertRaisesRegex(AnalysisError, "does not match fact slice") as context:
                 validate_analysis_input(root, fact_dir, model_input, resolved, registry)
+
+        self.assertEqual(context.exception.code, "analysis_input_mismatch")
+        self.assertIn("path", context.exception.to_dict())
+
+    def test_real_run_replay_is_read_only_and_preserves_top3_script_and_frame_scope(self):
+        run_dir = Path("/Users/shuzida/Desktop/FDE客户/小仙炖/qianchuan-meta-skill/runs/run-20260830-20260904")
+        if not run_dir.is_dir():
+            self.skipTest("real replay fixture is not mounted")
+        request_path = run_dir / "analysis" / "analysis-request.json"
+        tracked = [run_dir / "fact-pack" / "manifest.json", request_path]
+        before = {path: (path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()) for path in tracked}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "analysis"
+            receipt = prepare_analysis(run_dir, request_path, output_dir)
+            model_input = json.loads((output_dir / "analysis-input.json").read_text(encoding="utf-8"))
+        after = {path: (path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()) for path in tracked}
+        self.assertEqual(receipt["status"], "awaiting_model")
+        self.assertEqual(len(model_input["sections"]["material_leaderboard"]["evidence"]["rows"]), 3)
+        self.assertEqual(len(model_input["sections"]["scripts"]["evidence"]["rows"]), 3)
+        self.assertEqual(len(model_input["sections"]["highlight_frames"]["evidence"]["rows"]), 13)
+        self.assertEqual(before, after)
 
     def test_rejects_absolute_or_parent_traversal_evidence_refs(self):
         with tempfile.TemporaryDirectory() as temp_dir:

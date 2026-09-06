@@ -421,7 +421,12 @@ def main(argv=None):
                 except MetaSkillError:
                     request_payload = {}
                 failed_phase = "fact_retrieval_failed" if isinstance(request_payload, dict) and "factRetrievalSpec" in request_payload else "analysis_failed"
-                _set_run_phase(Path(args.run_dir), failed_phase, error=str(exc))
+                _set_run_phase(
+                    Path(args.run_dir),
+                    failed_phase,
+                    error=str(exc),
+                    errorDetails=exc.to_dict() if isinstance(exc, AnalysisError) else None,
+                )
                 raise
             print(json.dumps(result, ensure_ascii=False))
             return 0
@@ -654,7 +659,10 @@ def main(argv=None):
                 lastSuccessfulPhase="querying" if failed_stage and failed_stage != "query" else None,
                 error=str(exc),
             )
-        print("meta skill failed: %s" % exc, file=sys.stderr)
+        if isinstance(exc, AnalysisError):
+            print(json.dumps({"error": exc.to_dict()}, ensure_ascii=False), file=sys.stderr)
+        else:
+            print("meta skill failed: %s" % exc, file=sys.stderr)
         return 2
 
 
