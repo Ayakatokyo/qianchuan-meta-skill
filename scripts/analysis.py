@@ -17,6 +17,38 @@ from fact_pack import file_hash_and_size, verify_fact_pack
 class AnalysisError(ValueError):
     """Raised when an analysis request or result violates the contract."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "analysis_error",
+        path: str | None = None,
+        expected: Any = None,
+        actual: Any = None,
+        repair: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.path = path
+        self.expected = expected
+        self.actual = actual
+        self.repair = repair
+        self.details = details or {}
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"code": self.code, "message": str(self)}
+        for key, value in (
+            ("path", self.path),
+            ("expected", self.expected),
+            ("actual", self.actual),
+            ("repair", self.repair),
+        ):
+            if value is not None:
+                payload[key] = deepcopy(value)
+        payload.update(deepcopy(self.details))
+        return payload
+
 
 _HANDOFF_SECTIONS = ("material_leaderboard", "audience", "scripts", "highlight_frames")
 _SECTION_ALIASES = {"script": "scripts"}
@@ -26,6 +58,19 @@ _RETRIEVAL_KEYS = {
     "schemaVersion", "runId", "factPackManifestSha256", "retrievalGoal", "sections", "materialScope",
     "fields", "filters", "groupComparisons", "calculations", "evidenceStrategy", "retrievalTrace",
 } | _FORBIDDEN_RETRIEVAL_KEYS
+
+_SECTION_FILES = {
+    "material_leaderboard": "material-leaderboard.json",
+    "audience": "audience.json",
+    "scripts": "scripts.json",
+    "highlight_frames": "highlight-frames.json",
+}
+_SECTION_COLLECTIONS = {
+    "material_leaderboard": "materials",
+    "audience": "audience",
+    "scripts": "scripts",
+    "highlight_frames": "highlightFrames",
+}
 
 
 def _read_json(path: Path, label: str) -> Any:
@@ -74,7 +119,14 @@ def load_analysis_capability_registry(path: Path) -> dict[str, Any]:
 def _keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = set(value) - allowed
     if unknown:
-        raise AnalysisError(f"unknown {label} fields: {', '.join(sorted(unknown))}")
+        raise AnalysisError(
+            f"unknown {label} fields: {', '.join(sorted(unknown))}",
+            code="unknown_fields",
+            path=label,
+            expected=sorted(allowed),
+            actual=sorted(unknown),
+            repair="Remove the unknown fields or put them under the documented nested request object.",
+        )
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -141,10 +193,39 @@ def _normalize_material_scope(scope: Any, material_ids: list[str], target_top_n:
 def validate_analysis_handoff(request: dict[str, Any], fact_pack_dir: Path) -> dict[str, Any]:
     """Validate and normalize the stage-two request against an immutable fact pack."""
     request = _require_object(request, "analysis handoff request")
+    if "schemaVersion" in request and request.get("schemaVersion") != 1:
+        raise AnalysisError(
+            "analysis handoff schemaVersion must be 1",
+            code="unsupported_schema_version",
+            path="schemaVersion",
+            expected=1,
+            actual=request.get("schemaVersion"),
+            repair="Set the outer analysis request schemaVersion to 1.",
+        )
+    if "analysisSpec" in request and "factRetrievalSpec" in request:
+        raise AnalysisError(
+            "analysis request must contain either analysisSpec or factRetrievalSpec, not both",
+            code="mixed_analysis_request_shapes",
+            path="analysisSpec/factRetrievalSpec",
+            expected="one request shape",
+            actual=["analysisSpec", "factRetrievalSpec"],
+            repair="Keep the natural-language handoff fields at the outer object and put exactly one structured plan under factRetrievalSpec, or use analysisSpec alone.",
+        )
+    direct_retrieval_fields = {"retrievalGoal", "fields", "filters", "groupComparisons", "calculations", "evidenceStrategy", "retrievalTrace"}
+    direct_present = sorted(direct_retrieval_fields.intersection(request))
+    if direct_present and "factRetrievalSpec" not in request:
+        raise AnalysisError(
+            "FactRetrievalSpec fields must be nested under factRetrievalSpec",
+            code="fact_retrieval_spec_must_be_nested",
+            path="factRetrievalSpec",
+            expected="object",
+            actual=direct_present,
+            repair="Wrap retrievalGoal, fields, filters, groupComparisons, calculations, evidenceStrategy and retrievalTrace in factRetrievalSpec.",
+        )
     _keys(
         request,
         {
-            "stage", "runId", "factPackManifestSha256", "sections", "materialScope", "requestText", "analysisSpec",
+            "schemaVersion", "stage", "runId", "factPackManifestSha256", "sections", "materialScope", "requestText", "analysisSpec",
             "selection", "factPackPath", "manifestSummary", "sourceRefs", "factRetrievalSpec",
         },
         "analysis handoff request",
@@ -198,6 +279,7 @@ def validate_analysis_handoff(request: dict[str, Any], fact_pack_dir: Path) -> d
     selection = _normalize_material_scope(request.get("materialScope"), material_ids, target_top_n)
     normalized = deepcopy(request)
     normalized.update({
+        "schemaVersion": request.get("schemaVersion", 1),
         "sections": sections,
         "selection": selection,
         "factPackPath": "fact-pack",
@@ -433,6 +515,24 @@ def _retrieval_to_analysis_spec(spec: dict[str, Any], registry: dict[str, Any], 
     }, registry, fact_pack)
 
 
+def _build_retrieval_trace(retrieval_spec: dict[str, Any]) -> list[dict[str, Any]]:
+    selected_ids = list(retrieval_spec.get("selectedMaterialIds", []))
+    trace = []
+    for field in retrieval_spec.get("fields", []):
+        section = field["section"]
+        trace.append({
+            "intent": retrieval_spec.get("retrievalGoal", ""),
+            "section": section,
+            "fields": [field["field"]],
+            "aggregation": field["aggregation"],
+            "sourcePath": f"fact-pack/{_SECTION_FILES[section]}",
+            "collectionPath": _SECTION_COLLECTIONS[section],
+            "selectedMaterialIds": selected_ids,
+            "reason": "自然语言目标映射到事实包白名单字段；仅执行本地事实切片",
+        })
+    return trace
+
+
 def resolve_fact_retrieval_spec(
     payload: dict[str, Any],
     registry: dict[str, Any],
@@ -533,6 +633,29 @@ def resolve_fact_retrieval_spec(
         raise AnalysisError("FactRetrievalSpec evidenceStrategy.maxRows must be a positive integer")
     normalized["analysisSpec"] = _retrieval_to_analysis_spec(normalized, registry, fact_pack)
     normalized["selectedMaterialIds"] = normalized["analysisSpec"]["selectedMaterialIds"]
+    if not normalized["retrievalTrace"]:
+        normalized["retrievalTrace"] = _build_retrieval_trace(normalized)
+    elif not isinstance(normalized["retrievalTrace"], list) or not all(isinstance(item, dict) for item in normalized["retrievalTrace"]):
+        raise AnalysisError(
+            "FactRetrievalSpec.retrievalTrace must be a list of objects",
+            code="invalid_retrieval_trace",
+            path="retrievalTrace",
+            expected="array<object>",
+            actual=type(normalized["retrievalTrace"]).__name__,
+            repair="Regenerate retrievalTrace from the retrievalGoal and selected fields.",
+        )
+    for index, item in enumerate(normalized["retrievalTrace"]):
+        required = {"intent", "section", "fields", "sourcePath", "selectedMaterialIds"}
+        if not required.issubset(item):
+            missing = sorted(required - set(item))
+            raise AnalysisError(
+                f"FactRetrievalSpec.retrievalTrace[{index}] is not self-describing",
+                code="invalid_retrieval_trace",
+                path=f"retrievalTrace[{index}]",
+                expected=sorted(required),
+                actual={"missing": missing},
+                repair="Include intent, section, fields, sourcePath and selectedMaterialIds for each trace item.",
+            )
     return normalized
 
 
@@ -655,12 +778,7 @@ def _aggregate(values: list[Any], aggregation: str) -> Any:
 
 
 def _load_section(fact_pack_dir: Path, section: str) -> dict[str, Any]:
-    filename = {
-        "material_leaderboard": "material-leaderboard.json",
-        "audience": "audience.json",
-        "scripts": "scripts.json",
-        "highlight_frames": "highlight-frames.json",
-    }[section]
+    filename = _SECTION_FILES[section]
     payload = _read_json(fact_pack_dir / filename, f"{section} fact file")
     if not isinstance(payload, dict):
         raise AnalysisError(f"{section} fact file must be an object")
@@ -722,21 +840,19 @@ def slice_fact_pack(run_dir: Path, fact_pack_dir: Path, spec: dict[str, Any], re
         rows = [row for row in rows if not row_filters or all(_matches_filter(row, item) for item in row_filters)]
         if status not in {"available", "built", None}:
             rows = []
+        requested_rows = len(rows)
         fields = _requested_fields(spec, section)
         projected_rows: list[dict[str, Any]] = []
-        section_refs: list[dict[str, Any]] = []
         for row in rows:
             projected, missing = _project_row(row, fields)
             result = {"materialId": str(row["materialId"]), "fields": projected}
             if isinstance(row.get("sourceRef"), dict):
                 result["sourceRef"] = deepcopy(row["sourceRef"])
-                _append_ref(section_refs, row["sourceRef"])
             if missing:
                 result["missingFields"] = missing
                 for field in missing:
                     missing_items.append({"section": section, "materialId": str(row.get("materialId")), "field": field, "code": "field_missing"})
             projected_rows.append(result)
-            _collect_refs(projected, section_refs)
         row_material_ids = {row["materialId"] for row in projected_rows}
         for material_id in sorted(selected_ids - row_material_ids):
             missing_items.append({"section": section, "materialId": material_id, "code": "no_category_record"})
@@ -745,9 +861,23 @@ def slice_fact_pack(run_dir: Path, fact_pack_dir: Path, spec: dict[str, Any], re
             projected_rows = projected_rows[:max_rows]
         if not projected_rows:
             missing_items.append({"section": section, "code": "no_selected_evidence", "materialIds": sorted(selected_ids)})
+        section_refs: list[dict[str, Any]] = []
+        for projected_row in projected_rows:
+            _collect_refs(projected_row, section_refs)
         for ref in section_refs:
             _append_ref(all_refs, ref)
         sections[section] = {"status": status, "rows": projected_rows, "sourceRefs": section_refs}
+        sections.setdefault(section, {})
+        sections[section]["sliceSummary"] = {
+            "selectedMaterialIds": sorted(selected_ids),
+            "requestedRows": requested_rows,
+            "returnedRows": len(projected_rows),
+            "truncated": requested_rows > len(projected_rows),
+            "requestedFields": [{"field": field, "aggregation": aggregation} for field, aggregation in fields],
+            "returnedSourceRefCount": len(section_refs),
+            "collectionPath": _SECTION_COLLECTIONS[section],
+            "factFile": f"fact-pack/{_SECTION_FILES[section]}",
+        }
 
         # Group summaries are deterministic and intentionally descriptive, not business conclusions.
         for group in [item for item in spec.get("groupComparisons", []) if item.get("section") == section]:
@@ -812,6 +942,7 @@ def slice_fact_pack(run_dir: Path, fact_pack_dir: Path, spec: dict[str, Any], re
         "missingItems": missing_items,
         "calculations": calculations,
         "retrievalTrace": deepcopy(spec.get("retrievalTrace", [])),
+        "sliceSummary": {section: sections[section]["sliceSummary"] for section in spec["sections"]},
     }
 
 
@@ -822,18 +953,7 @@ def retrieve_fact_slice(run_dir: Path, fact_pack_dir: Path, retrieval_spec: dict
     spec["groupComparisons"] = deepcopy(retrieval_spec.get("groupComparisons", []))
     spec["retrievalTrace"] = deepcopy(retrieval_spec.get("retrievalTrace", []))
     evidence = slice_fact_pack(run_dir, fact_pack_dir, spec, registry)
-    trace = retrieval_spec.get("retrievalTrace") or []
-    if not trace:
-        trace = [
-            {
-                "intent": retrieval_spec.get("retrievalGoal", ""),
-                "section": field["section"],
-                "fields": [field["field"]],
-                "reason": "自然语言意图映射到事实包注册字段",
-            }
-            for field in retrieval_spec.get("fields", [])
-        ]
-    evidence["retrievalTrace"] = trace
+    evidence["retrievalTrace"] = retrieval_spec.get("retrievalTrace") or _build_retrieval_trace(retrieval_spec)
     return evidence
 
 
@@ -854,19 +974,28 @@ def compile_model_input(
 ) -> dict[str, Any]:
     sections = {}
     for section in spec["sections"]:
+        section_evidence = evidence["sections"].get(section, {"rows": [], "sourceRefs": []})
+        selected_fields = _requested_fields(spec, section)
         sections[section] = {
             "prompt": _PROMPT_INSTRUCTIONS[section],
             "objective": spec["objective"],
             "questions": spec["questions"],
-            "metrics": _requested_fields(spec, section),
+            "metrics": selected_fields,
             "groupComparisons": [item for item in spec["groupComparisons"] if item["section"] == section],
-            "evidence": evidence["sections"].get(section, {"rows": [], "sourceRefs": []}),
+            "evidence": section_evidence,
+            "contract": {
+                "rootType": "object",
+                "factFile": f"fact-pack/{_SECTION_FILES[section]}",
+                "collectionPath": _SECTION_COLLECTIONS[section],
+                "inputRowsPath": f"sections.{section}.evidence.rows",
+                "fieldRegistry": f"config/analysis-registry-v1.json#/sections/{section}/fields",
+                "selectedFields": [{"field": field, "aggregation": aggregation} for field, aggregation in selected_fields],
+                "rowIdentity": "materialId",
+                "sourceRefPath": "rows[].sourceRef and nested artifact refs",
+                "missingSemantics": "missingItems records absent, unavailable or truncated evidence; never infer zero",
+            },
         }
     manifest_ref = next((ref for ref in evidence["sourceRefs"] if ref["path"] == "fact-pack/manifest.json"), None)
-    capability_hints = None
-    capability_path = Path(__file__).resolve().parents[1] / "config" / "analysis-capability-registry-v1.json"
-    if capability_path.is_file():
-        capability_hints = load_analysis_capability_registry(capability_path)
     model_input = {
         "schemaVersion": 1,
         "inputType": "qianchuan_analysis_model_input",
@@ -875,11 +1004,35 @@ def compile_model_input(
         "analysisSpec": deepcopy(spec),
         "analysisSpecFingerprint": analysis_fingerprint(spec),
         "factPackManifestSha256": manifest_ref.get("sha256") if manifest_ref else None,
-        "factPack": {"manifestRef": manifest_ref, "manifestSha256": manifest_ref.get("sha256") if manifest_ref else None},
+        "factPack": {
+            "rootType": "object",
+            "manifestRef": manifest_ref,
+            "manifestSha256": manifest_ref.get("sha256") if manifest_ref else None,
+            "sectionFiles": {
+                section: {
+                    "path": f"fact-pack/{_SECTION_FILES[section]}",
+                    "rootType": "object",
+                    "collectionPath": _SECTION_COLLECTIONS[section],
+                }
+                for section in spec["sections"]
+            },
+        },
         "sections": sections,
         "calculations": deepcopy(evidence.get("calculations", [])),
         "sourceRefs": deepcopy(evidence["sourceRefs"]),
-        "capabilityHints": capability_hints,
+        "retrievalTrace": deepcopy(evidence.get("retrievalTrace", [])),
+        "sliceSummary": deepcopy(evidence.get("sliceSummary", {})),
+        "inputContract": {
+            "rootType": "object",
+            "factPackRootType": "object",
+            "factPackSectionFilesPath": "factPack.sectionFiles.<section>.path",
+            "sectionsPath": "sections.<section>.evidence.rows",
+            "sourceRefsPath": "sourceRefs",
+            "selectedMaterialIdsPath": "analysisSpec.selectedMaterialIds",
+            "selectedFieldsPath": "sections.<section>.contract.selectedFields",
+            "unselectedFacts": "not available to the model and must not be read or inferred",
+            "evidenceRule": "claims may cite only sourceRefs present in this input and selected rows",
+        },
         "modelConstraints": {
             "allowedSections": list(spec["sections"]),
             "allowedMaterialIds": list(spec["selectedMaterialIds"]),
@@ -1166,10 +1319,45 @@ def _source_path(run_dir: Path, ref: dict[str, Any], label: str) -> Path:
 def _verify_source_ref(run_dir: Path, ref: dict[str, Any], label: str) -> None:
     path = _source_path(run_dir, ref, label)
     if not path.is_file():
-        raise AnalysisError(f"{label} hash does not match source")
+        raise AnalysisError(
+            f"{label} hash does not match source",
+            code="source_ref_not_found",
+            path=label,
+            repair="Use a sourceRef emitted in analysis-input.json and do not invent or relocate evidence paths.",
+        )
     digest, size = file_hash_and_size(path)
     if size != ref.get("sizeBytes") or digest != ref.get("sha256"):
-        raise AnalysisError(f"{label} hash does not match source")
+        raise AnalysisError(
+            f"{label} hash does not match source",
+            code="source_ref_hash_mismatch",
+            path=label,
+            expected={"sha256": ref.get("sha256"), "sizeBytes": ref.get("sizeBytes")},
+            actual={"sha256": digest, "sizeBytes": size},
+            repair="Reuse the exact sourceRef from analysis-input.json; do not edit its hash or source file.",
+        )
+
+
+def _first_difference(expected: Any, actual: Any, path: str = "") -> tuple[str, Any, Any] | None:
+    if type(expected) is not type(actual):
+        return path or "$", expected, actual
+    if isinstance(expected, dict):
+        for key in sorted(set(expected) | set(actual)):
+            child = f"{path}.{key}" if path else str(key)
+            if key not in expected or key not in actual:
+                return child, expected.get(key), actual.get(key)
+            difference = _first_difference(expected[key], actual[key], child)
+            if difference:
+                return difference
+        return None
+    if isinstance(expected, list):
+        if len(expected) != len(actual):
+            return f"{path}.length" if path else "$.length", len(expected), len(actual)
+        for index, (left, right) in enumerate(zip(expected, actual)):
+            difference = _first_difference(left, right, f"{path}[{index}]")
+            if difference:
+                return difference
+        return None
+    return None if expected == actual else (path or "$", expected, actual)
 
 
 def _legacy_claim_section(claim: dict[str, Any], selected_sections: list[str]) -> tuple[str, str]:
@@ -1225,7 +1413,13 @@ def validate_analysis_result(result: dict[str, Any], model_input: dict[str, Any]
         claim = _require_object(claim, label)
         for required in ("claimType", "evidenceRefs", "confidence"):
             if required not in claim:
-                raise AnalysisError(f"{label} missing {required}")
+                raise AnalysisError(
+                    f"{label} missing {required}",
+                    code="claim_field_missing",
+                    path=f"claims[{index}].{required}",
+                    expected="present",
+                    repair="Return every required claim field described by resultSchema.",
+                )
         if not legacy and "section" not in claim:
             raise AnalysisError(f"{label} missing section")
         if not legacy and "priority" not in claim:
@@ -1250,11 +1444,25 @@ def validate_analysis_result(result: dict[str, Any], model_input: dict[str, Any]
             raise AnalysisError(f"{label} confidence must be a number from 0 to 1")
         evidence_refs = claim["evidenceRefs"]
         if not isinstance(evidence_refs, list) or not evidence_refs:
-            raise AnalysisError(f"{label} evidenceRefs must be a nonempty list")
-        for ref in evidence_refs:
+            raise AnalysisError(
+                f"{label} evidenceRefs must be a nonempty list",
+                code="claim_evidence_required",
+                path=f"claims[{index}].evidenceRefs",
+                expected="nonempty array",
+                actual=evidence_refs,
+                repair="Attach at least one exact sourceRef from analysis-input.json to every claim.",
+            )
+        for ref_index, ref in enumerate(evidence_refs):
             if not isinstance(ref, dict) or not _ref_is_present(ref, refs):
-                raise AnalysisError(f"{label} evidence ref is not present in model input")
-            _verify_source_ref(run_dir, ref, f"{label} evidence ref")
+                raise AnalysisError(
+                    f"{label} evidence ref is not present in model input",
+                    code="evidence_ref_not_allowed",
+                    path=f"claims[{index}].evidenceRefs[{ref_index}]",
+                    expected="a sourceRef from analysis-input.json",
+                    actual=ref,
+                    repair="Use only the exact sourceRefs provided for the selected sections and materials.",
+                )
+            _verify_source_ref(run_dir, ref, f"{label} evidenceRefs[{ref_index}]")
         if claim["claimType"] == "calculation":
             if not claim.get("formula") or not isinstance(claim.get("inputs"), list) or not claim["inputs"]:
                 raise AnalysisError(f"{label} calculation requires formula and inputs")
@@ -1279,11 +1487,25 @@ def validate_analysis_input(run_dir: Path, fact_pack_dir: Path, model_input: dic
         registry,
         request_text=model_input.get("requestText") if "requestText" in model_input else None,
     )
-    if json.dumps(expected, ensure_ascii=False, sort_keys=True, separators=(",", ":")) != json.dumps(model_input, ensure_ascii=False, sort_keys=True, separators=(",", ":")):
-        raise AnalysisError("analysis input does not match fact slice")
+    if "factRetrievalSpec" in model_input:
+        expected["factRetrievalSpec"] = deepcopy(model_input["factRetrievalSpec"])
+        expected["retrievalTrace"] = deepcopy(model_input.get("retrievalTrace", expected.get("retrievalTrace", [])))
+    expected_json = json.loads(json.dumps(expected, ensure_ascii=False))
+    actual_json = json.loads(json.dumps(model_input, ensure_ascii=False))
+    difference = _first_difference(expected_json, actual_json)
+    if difference:
+        path, expected_value, actual_value = difference
+        raise AnalysisError(
+            "analysis input does not match fact slice",
+            code="analysis_input_mismatch",
+            path=path,
+            expected=expected_value,
+            actual=actual_value,
+            repair="Regenerate analysis-input.json from the same run, manifest hash, selected sections, material scope and FactRetrievalSpec; do not edit fact rows manually.",
+        )
 
 
-def _mark_model_awaiting(analysis_dir: Path, error: str) -> dict[str, Any]:
+def _mark_model_awaiting(analysis_dir: Path, error: str, error_detail: dict[str, Any] | None = None) -> dict[str, Any]:
     receipt_path = Path(analysis_dir) / "analysis-receipt.json"
     receipt = _read_json(receipt_path, "analysis receipt")
     errors = list(receipt.get("errors", []))
@@ -1293,6 +1515,8 @@ def _mark_model_awaiting(analysis_dir: Path, error: str) -> dict[str, Any]:
         "errors": errors,
         "validation": {**(receipt.get("validation") or {}), "result": "awaiting_model", "errors": errors},
     })
+    if error_detail:
+        receipt["errorDetails"] = [*receipt.get("errorDetails", []), deepcopy(error_detail)]
     _write_json(receipt_path, receipt)
     for report_name in ("report.json", "report.md"):
         (Path(analysis_dir) / report_name).unlink(missing_ok=True)
@@ -1444,8 +1668,10 @@ def verify_analysis(run_dir: Path, analysis_dir: Path | None = None) -> dict[str
         spec = _read_json(analysis_dir / "analysis-spec.json", "analysis spec")
         fact_result = verify_fact_pack(run_dir, run_dir / "fact-pack")
         errors: list[str] = []
+        error_details: list[dict[str, Any]] = []
         if fact_result.get("status") != "succeeded":
             errors.append("fact pack is incomplete")
+            error_details.append({"code": "fact_pack_incomplete", "message": "fact pack is incomplete", "repair": "Complete and verify the existing fact pack before analysis."})
         if model_input.get("analysisSpecFingerprint") != analysis_fingerprint(spec):
             errors.append("analysis input fingerprint mismatch")
         try:
@@ -1457,13 +1683,22 @@ def verify_analysis(run_dir: Path, analysis_dir: Path | None = None) -> dict[str
                     checked_refs.add(cache_key)
         except AnalysisError as exc:
             errors.append(str(exc))
+            error_details.append(exc.to_dict())
         try:
             registry = load_analysis_registry(Path(__file__).resolve().parents[1] / "config" / "analysis-registry-v1.json")
             validate_analysis_input(run_dir, run_dir / "fact-pack", model_input, spec, registry)
         except AnalysisError as exc:
             errors.append(str(exc))
+            error_details.append(exc.to_dict())
         if model_input.get("missingItems"):
             errors.append("analysis input has missing items; commercial analysis is incomplete")
+            error_details.append({
+                "code": "analysis_input_missing_items",
+                "message": "analysis input has missing items; commercial analysis is incomplete",
+                "path": "missingItems",
+                "actual": deepcopy(model_input.get("missingItems")),
+                "repair": "Narrow the request to available evidence or resolve the reported missing/truncated items; do not fill them with zero.",
+            })
         base_errors = list(errors)
         result_path = analysis_dir / "analysis-result.json"
         model_waiting = False
@@ -1481,14 +1716,15 @@ def verify_analysis(run_dir: Path, analysis_dir: Path | None = None) -> dict[str
                     result = validate_analysis_result(result, model_input, spec, run_dir)
                 except AnalysisError as exc:
                     errors.append(str(exc))
+                    error_details.append(exc.to_dict())
         if errors:
             if model_waiting and not base_errors:
                 status = "awaiting_model"
             else:
                 status = "incomplete" if model_input.get("missingItems") and len(errors) == 1 else "failed"
-            receipt.update({"status": status, "validation": {"factPack": fact_result, "errors": errors}})
+            receipt.update({"status": status, "validation": {"factPack": fact_result, "errors": errors}, "errorDetails": error_details})
             _write_json(receipt_path, receipt)
-            return {"status": status, "errors": errors}
+            return {"status": status, "errors": errors, "errorDetails": error_details}
         receipt.update({"status": "succeeded", "resultStatus": result.get("status") or "verified", "errors": [], "validation": {"factPack": fact_result, "result": "succeeded"}, "missingItems": model_input.get("missingItems", [])})
         _write_json(receipt_path, receipt)
         render_reports(analysis_dir, model_input, result, receipt)

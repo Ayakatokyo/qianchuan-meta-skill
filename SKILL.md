@@ -127,10 +127,11 @@ python scripts/run_meta_skill.py verify-analysis \
 
 阶段一的交接文件为 `analysis-handoff.json`，至少包含 `runId`、`factPackPath`、`factPackManifestSha256`、四类计数、`missingItems` 和 `sourceRefs`。阶段二由用户选择一个或多个 `material_leaderboard`、`audience`、`scripts`、`highlight_frames` 分区，指定全部、TopN 或素材 ID 范围，并用自然语言描述分析目标、关注指标、比较维度、输出形式和深度。
 
-阶段二请求契约如下；`analysisSpec` 可先为 `null`，本地恢复入口会根据交接内容生成最小合法规范，或直接使用上游解析出的 AnalysisSpec：
+阶段二请求契约是一个 JSON 根对象；外层 `schemaVersion` 位于请求根，且固定为 `1`。`analysisSpec` 与 `factRetrievalSpec` 是二选一的嵌套对象，不能把两者混在一起，也不能把检索字段平铺到外层。`analysisSpec` 可先为 `null`，本地恢复入口会根据交接内容生成最小合法规范，或直接使用上游解析出的 AnalysisSpec：
 
 ```json
 {
+  "schemaVersion": 1,
   "stage": "analysis",
   "runId": "run-20260810-20260820",
   "factPackManifestSha256": "...",
@@ -140,6 +141,8 @@ python scripts/run_meta_skill.py verify-analysis \
   "analysisSpec": null
 }
 ```
+
+`FactRetrievalSpec` 自身也是根对象，内部另有自己的 `schemaVersion: 1`；它只表达自然语言目标到事实包白名单字段的中性检索计划。`period`、`scope`、`ranking`、`candidateTopN`、店铺/广告主、QuerySpec、HighlightSpec 和 RPA 字段都不能出现在其中。对象/数组误用、未知字段、外层与嵌套形态混用时，脚本返回包含 `code`、`path`、`expected`、`actual` 和 `repair` 的结构化错误，供当前对话模型自动修正。
 
 继续分析时必须绑定同一 `runId` 和 manifest SHA-256；事实包变化、分区文件缺失/不可用、素材范围越界或请求文本为空都会被阻断，缺失数据不会被当作零：
 
@@ -151,13 +154,13 @@ python scripts/run_meta_skill.py continue-analysis \
 
 阶段二长任务可安全重试：入口会先检查分析配置，`prepare-analysis` 会复用同一事实包且未变化时的成功校验回执；事实包、manifest 或来源文件变化时会自动失效并重新校验。超时后优先读取 `run-receipt.json`、`analysis/analysis-receipt.json` 和已生成的 `analysis-input.json`，不要重新执行查询或 RPA。
 
-分析请求文件使用 `{\"schemaVersion\": 1, \"requestText\": \"...\", \"analysisSpec\": {...}}`；阶段二由用户继续输入触发，当前对话模型先把自然语言标准化为 `AnalysisSpec`，本地脚本只接受并校验结构化 AnalysisSpec。AnalysisSpec 必须声明一个或多个 `sections`（`material_leaderboard`、`audience`、`scripts`、`highlight_frames`）、素材 ID/rank 选择、目标/问题、字段与聚合、分组比较、显式派生计算、证据策略和输出格式。
+分析请求文件使用上述外层对象；阶段二由用户继续输入触发，当前对话模型先把自然语言标准化为 `FactRetrievalSpec` 或 `AnalysisSpec`，本地脚本只接受并校验对应嵌套对象。AnalysisSpec 必须声明一个或多个 `sections`（`material_leaderboard`、`audience`、`scripts`、`highlight_frames`）、素材 ID/rank 选择、目标/问题、字段与聚合、分组比较、显式派生计算、证据策略和输出格式。
 
-阶段二补充约束：用户继续输入的自然语言先转成 `FactRetrievalSpec`，只读取已落盘事实包；它不得携带 `period`、`scope`、`ranking`、`candidateTopN`、RPA 或连接器字段。`analysis-input.json` 中的 `retrievalTrace` 记录意图到字段的映射，非法字段、越界素材或缺失分区只返回缺口并保持等待，不重新查询、不重跑 RPA；补问完成后只重新生成检索计划。`analysis-capability-registry-v1.json` 只保存业务问题到事实依赖的提示，不保存真实结果或成熟商业结论。
+阶段二补充约束：用户继续输入的自然语言先转成中性的 `FactRetrievalSpec`，只读取已落盘事实包；它不得携带阶段一字段。`analysis-input.json` 中的 `retrievalTrace` 记录意图、分区、字段、事实文件/集合路径和选定素材，非法字段、越界素材或缺失分区只返回缺口并保持等待，不重新查询、不重跑 RPA；补问完成后只重新生成检索计划。
 
-阶段一停止时向用户提示：`阶段一采集和事实包校验已完成，当前暂停在 awaiting_analysis_input。请描述要分析的目标、分区、素材范围和关注指标；阶段二将由当前对话模型继续。` 不得在阶段一自动生成商业结论。用户继续输入后，模型必须先生成合法 `AnalysisSpec`，再调用 `continue-analysis`/`prepare-analysis` 生成交接文件；不能把自然语言直接当作已校验的分析结果。
+阶段一停止时向用户提示：`阶段一采集和事实包校验已完成，当前暂停在 awaiting_analysis_input。请描述要分析的目标、分区、素材范围和关注指标；阶段二将由当前对话模型继续。` 不得在阶段一自动生成商业结论。用户继续输入后，模型必须先生成合法 `FactRetrievalSpec` 或 `AnalysisSpec`，再调用 `continue-analysis`/`prepare-analysis` 生成交接文件；不能把自然语言直接当作已校验的分析结果。
 
-`analysis-input.json` 是当前对话模型的唯一事实边界，至少包含 `runId`、`factPackManifestSha256`、`factPack.manifestRef`、标准化 `analysisSpec`、用户原始 `requestText`、选定分区的事实切片和 `sourceRefs`，并包含以下约束：`modelConstraints.onlyUseProvidedEvidence=true`、`doNotUseExternalData=true`、`doNotFillMissingData=true`。模型只能使用选定分区和选定素材 ID；不得访问未选分区、补充外部事实、把缺失推断为零或伪造模型调用。
+`analysis-input.json` 是当前对话模型的唯一事实边界，至少包含 `runId`、`factPackManifestSha256`、`factPack.manifestRef`、标准化 `analysisSpec`、用户原始 `requestText`、选定分区的事实切片和 `sourceRefs`。其中 `inputContract.rootType=object`，`factPackRootType=object`，集合行路径固定为 `sections.<section>.evidence.rows`，每个分区声明事实文件、集合路径、字段注册表路径、选定字段和 sourceRef 路径；`sliceSummary` 与 `missingItems` 明确请求行数、返回行数、截断、缺失和证据可用性。`modelConstraints.onlyUseProvidedEvidence=true`、`doNotUseExternalData=true`、`doNotFillMissingData=true`。模型只能使用选定分区、素材 ID、字段和 input 中的 sourceRefs；不得访问未选分区、补充外部事实、把缺失推断为零或伪造模型调用。
 
 模型完成二次分析后必须只返回可解析的 `analysis-result.json`，至少包含 `schemaVersion`、`contractVersion=2`、`analysisSpecFingerprint` 和非空 `claims`；每条 claim 必须包含 `claimType`、`statement`、`section`、`priority`、`evidenceRefs`、`confidence`，其中 `section` 只能是本次选定的事实包分区或 `synthesis`，`priority` 为 `high|medium|low`，可选 `businessImplication` 用于表达业务含义。建议必须带证据引用，计算还必须声明 `calculationId`、`formula` 和 `inputs`。结果必须符合输入中的 `resultSchema`，并通过：
 
