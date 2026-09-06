@@ -362,7 +362,9 @@ def _build_scripts(run_dir: Path, material_ids: list[str], diagnosis: dict[str, 
     return {"schemaVersion": SCHEMA_VERSION, "status": "available", "scripts": facts, "sourceRefs": _aggregate_refs(refs)}, refs
 
 
-def _build_highlights(run_dir: Path, material_ids: list[str], diagnosis: dict[str, tuple[Path, list[dict[str, Any]]]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _build_highlights(run_dir: Path, material_ids: list[str], diagnosis: dict[str, tuple[Path, list[dict[str, Any]]]], *, requested: bool) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if not requested:
+        return {"schemaVersion": SCHEMA_VERSION, "status": "not_requested", "highlightFrames": [], "sourceRefs": []}, []
     frames: list[dict[str, Any]] = []
     refs: list[dict[str, Any]] = []
     for material_id in material_ids:
@@ -424,7 +426,8 @@ def build_fact_pack(run_dir: Path, output_dir: Path | None = None) -> dict[str, 
     materials, material_refs = _build_materials(run_dir, selected_materials, diagnosis)
     audience, audience_refs = _build_audience(run_dir, material_ids, diagnosis)
     scripts, script_refs = _build_scripts(run_dir, material_ids, diagnosis)
-    highlights, highlight_refs = _build_highlights(run_dir, material_ids, diagnosis)
+    highlights_requested = any((run_dir / "rpa" / "peak-frames" / material_id / "summary.json").is_file() for material_id in material_ids)
+    highlights, highlight_refs = _build_highlights(run_dir, material_ids, diagnosis, requested=highlights_requested)
     category_payloads = (
         ("material-leaderboard.json", materials), ("audience.json", audience),
         ("scripts.json", scripts), ("highlight-frames.json", highlights),
@@ -557,9 +560,10 @@ def verify_fact_pack(run_dir: Path, fact_pack_dir: Path) -> dict[str, Any]:
         if any(str(item.get("materialId")) not in expected_ids for item in highlights):
             errors.append("highlight frames contain a material outside targetTopN")
         source_frame_count = 0
-        for material_id in expected_ids:
-            summary = _load_json(artifact_path(run_dir / "rpa" / "peak-frames", material_id) / "summary.json")
-            source_frame_count += len(summary.get("frames", []))
+        if highlights_payload.get("status") != "not_requested":
+            for material_id in expected_ids:
+                summary = _load_json(artifact_path(run_dir / "rpa" / "peak-frames", material_id) / "summary.json")
+                source_frame_count += len(summary.get("frames", []))
         if len(highlights) != source_frame_count:
             errors.append(f"highlight frame count mismatch: {len(highlights)} != {source_frame_count}")
         expected_counts = {"materials": len(materials), "audienceFacts": len(audience_payload.get("audience", [])), "scriptFacts": len(scripts), "highlightFrames": len(highlights)}

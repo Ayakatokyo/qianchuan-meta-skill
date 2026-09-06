@@ -150,6 +150,23 @@ def resolve_highlight_spec(payload):
     return {"schemaVersion": 1, "includeZeroSecond": payload["includeZeroSecond"], "metrics": resolved}
 
 
+def resolve_highlight_request(payload, *, enabled=None):
+    """Normalize the stage-one image choice while preserving the old spec contract."""
+    if enabled is not None and type(enabled) is not bool:
+        raise ConfigSpecError("highlight enabled must be boolean")
+    if payload is None:
+        if enabled is True:
+            raise ConfigSpecError("highlight_spec_required")
+        return {"enabled": False, "spec": None, "requestSource": "explicit_off" if enabled is False else "default_off"}
+    if enabled is False:
+        raise ConfigSpecError("highlight_request_conflict")
+    return {
+        "enabled": True,
+        "spec": resolve_highlight_spec(payload),
+        "requestSource": "explicit_on" if enabled is True else "legacy_spec",
+    }
+
+
 def highlight_spec_to_policy(spec):
     return {
         "schemaVersion": 1,
@@ -231,6 +248,7 @@ def write_resolved_specs(output_dir, query_spec, highlight_spec):
         "fingerprint": root / "configuration-fingerprint.json",
     }
     _write_json_atomically(paths["query"], query_spec)
-    _write_json_atomically(paths["highlight"], highlight_spec)
+    if highlight_spec is not None:
+        _write_json_atomically(paths["highlight"], highlight_spec)
     _write_json_atomically(paths["fingerprint"], {"schemaVersion": 1, "configurationFingerprint": fingerprint})
     return paths

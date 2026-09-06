@@ -11,7 +11,7 @@ import time
 
 from config_specs import (
     ConfigSpecError, highlight_spec_to_policy, legacy_config_to_specs, query_spec_to_query_config,
-    resolve_highlight_spec, resolve_query_spec, spec_fingerprint, write_resolved_specs,
+    resolve_highlight_request, resolve_highlight_spec, resolve_query_spec, spec_fingerprint, write_resolved_specs,
 )
 from analysis import AnalysisError, prepare_analysis, receive_analysis_result, verify_analysis
 from frame_extractor import FrameExtractionError, extract_highlight_frames
@@ -92,17 +92,22 @@ def _load_specs(args, registry, *, require_query):
     if args.config and (query_spec_path or highlight_spec_path):
         raise MetaSkillError("--config cannot be combined with --query-spec or --highlight-spec")
     try:
+        requested = getattr(args, "highlight_mode", None)
+        enabled = {"on": True, "off": False}.get(requested)
         if args.config:
-            query_spec, highlight_spec = legacy_config_to_specs(_read_json(args.config, "meta-skill config"), registry)
+            query_spec, legacy_highlight_spec = legacy_config_to_specs(_read_json(args.config, "meta-skill config"), registry)
+            highlight_request = resolve_highlight_request(legacy_highlight_spec, enabled=enabled)
         else:
-            if not highlight_spec_path or (require_query and not query_spec_path):
-                raise MetaSkillError("--query-spec and --highlight-spec are required")
+            if require_query and not query_spec_path:
+                raise MetaSkillError("--query-spec is required")
             query_spec = resolve_query_spec(_read_json(query_spec_path, "QuerySpec"), registry) if query_spec_path else None
-            highlight_spec = resolve_highlight_spec(_read_json(highlight_spec_path, "HighlightSpec"))
+            raw_highlight_spec = _read_json(highlight_spec_path, "HighlightSpec") if highlight_spec_path else None
+            highlight_request = resolve_highlight_request(raw_highlight_spec, enabled=enabled)
     except (ConfigSpecError, MaterialQueryError) as exc:
         raise MetaSkillError(str(exc)) from exc
+    highlight_spec = highlight_request["spec"]
     query = query_spec_to_query_config(query_spec) if query_spec is not None else None
-    return query_spec, highlight_spec, query, highlight_spec_to_policy(highlight_spec)
+    return query_spec, highlight_spec, query, highlight_spec_to_policy(highlight_spec) if highlight_spec is not None else None
 
 
 def _write_json(path, payload):
@@ -342,15 +347,18 @@ def build_parser():
         command.add_argument("--config")
         command.add_argument("--query-spec")
         command.add_argument("--highlight-spec")
+        command.add_argument("--highlight-mode", choices=("on", "off"))
     query = commands.add_parser("query")
     query.add_argument("--config")
     query.add_argument("--query-spec")
     query.add_argument("--highlight-spec")
+    query.add_argument("--highlight-mode", choices=("on", "off"))
     query.add_argument("--output-dir", required=True)
     run = commands.add_parser("run")
     run.add_argument("--config")
     run.add_argument("--query-spec")
     run.add_argument("--highlight-spec")
+    run.add_argument("--highlight-mode", choices=("on", "off"))
     run.add_argument("--output-dir", required=True)
     run.add_argument("--execute-rpa", action="store_true")
     run.add_argument("--rpa-concurrency", type=int)
@@ -365,6 +373,7 @@ def build_parser():
     workflow.add_argument("--config")
     workflow.add_argument("--query-spec")
     workflow.add_argument("--highlight-spec")
+    workflow.add_argument("--highlight-mode", choices=("on", "off"))
     workflow.add_argument("--output-dir", required=True)
     workflow.add_argument("--execute-rpa", action="store_true")
     workflow.add_argument("--rpa-concurrency", type=int)
@@ -585,7 +594,8 @@ def main(argv=None):
             options=options,
             account={"accountId": account["accountId"], "platform": account["platform"]},
             fetch_diagnosis=fetch,
-            postprocess=build_postprocessor(policy, options),
+            postprocess=build_postprocessor(policy, options) if highlight_spec is not None else None,
+            highlights_enabled=highlight_spec is not None,
             progress_callback=lambda phase, progress, current: _set_run_phase(
                 output_dir, phase, progress=progress, currentObject=current
             ),

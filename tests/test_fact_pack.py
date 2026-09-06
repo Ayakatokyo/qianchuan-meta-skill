@@ -220,6 +220,21 @@ class FactPackTests(unittest.TestCase):
             with self.assertRaisesRegex(FactPackError, "requires completed RPA"):
                 build_fact_pack(run_dir)
 
+    def test_builds_and_verifies_source_facts_without_any_highlight_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            make_run(run_dir, 1)
+            import shutil
+            shutil.rmtree(run_dir / "rpa" / "peak-frames")
+
+            manifest = build_fact_pack(run_dir)
+            highlights = json.loads((run_dir / "fact-pack" / "highlight-frames.json").read_text(encoding="utf-8"))
+            verification = verify_fact_pack(run_dir, run_dir / "fact-pack")
+
+        self.assertEqual(highlights["status"], "not_requested")
+        self.assertEqual(manifest["quality"]["categoryStatuses"]["highlightFrames"], "not_requested")
+        self.assertEqual(verification["status"], "succeeded")
+
     def test_build_and_verify_cli_commands_work_on_fixture_without_network(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"

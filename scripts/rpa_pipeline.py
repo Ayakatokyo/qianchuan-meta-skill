@@ -132,12 +132,18 @@ def _entry(candidate, rank):
     return result
 
 
+def _source_completed(entry):
+    return entry.get("rpaStatus") == "selected" and entry.get("recordsPersisted") is True
+
+
 def _completed(entry):
-    return entry.get("status") == "succeeded" and entry.get("rpaStatus") == "selected" and entry.get("postprocessStatus") == "succeeded" and entry.get("recordsPersisted") is True
+    """A reusable run has both source evidence and any requested image assets."""
+    return _source_completed(entry) and entry.get("postprocessStatus") in {"succeeded", "not_requested"}
 
 
 def _completed_artifacts_are_valid(entry, paths):
-    if not _completed(entry):
+    # A failed optional image task must not make durable source evidence look stale.
+    if not _source_completed(entry):
         return False
     try:
         csv_path = Path(entry["diagnosisCsvPath"]) if entry.get("diagnosisCsvPath") else None
@@ -260,7 +266,7 @@ def _failure(entry, error):
 
 
 def _ready_payload(entries, fingerprint):
-    selected = sorted((entry for entry in entries if _completed(entry)), key=lambda item: item.get("rank", 0))
+    selected = sorted((entry for entry in entries if _source_completed(entry)), key=lambda item: item.get("rank", 0))
     # The selected entries keep runtime paths for resume. The public ready payload replaces them with portable references.
     def material(item):
         records_path = Path(item["diagnosisRecordsPath"])
@@ -334,7 +340,7 @@ def build_postprocessor(policy, options, *, download_video=download_file, extrac
 
 
 def _verify(paths, entries, fingerprint, target_top_n):
-    selected = sorted((entry for entry in entries if _completed(entry)), key=lambda item: item.get("rank", 0))[:target_top_n]
+    selected = sorted((entry for entry in entries if _source_completed(entry)), key=lambda item: item.get("rank", 0))[:target_top_n]
     errors = []
     for entry in selected:
         for key in ("diagnosisCsvPath", "diagnosisRecordsPath"):
@@ -346,12 +352,18 @@ def _verify(paths, entries, fingerprint, target_top_n):
         for frame in entry.get("highlightFrames", []):
             if not isinstance(frame, dict) or not _is_jpeg(frame.get("framePath")):
                 errors.append("invalid highlight frame for %s" % entry["materialId"])
-    payload = {"schemaVersion": 1, "configurationFingerprint": fingerprint, "targetTopN": target_top_n, "succeededCount": len(selected), "status": "succeeded" if len(selected) >= target_top_n and not errors else "partial_failed", "errors": errors}
+    asset_statuses = [entry.get("postprocessStatus") for entry in selected]
+    payload = {
+        "schemaVersion": 1, "configurationFingerprint": fingerprint, "targetTopN": target_top_n,
+        "succeededCount": len(selected), "status": "succeeded" if len(selected) >= target_top_n and not errors else "partial_failed",
+        "assetStatus": "not_requested" if asset_statuses and all(status == "not_requested" for status in asset_statuses) else ("succeeded" if asset_statuses and all(status == "succeeded" for status in asset_statuses) else "partial_failed"),
+        "errors": errors,
+    }
     _write_json(paths["verification"], payload)
     return payload
 
 
-def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint, period, options=None, account=None, fetch_diagnosis, postprocess, progress_callback=None):
+def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint, period, options=None, account=None, fetch_diagnosis, postprocess=None, highlights_enabled=True, progress_callback=None):
     """Execute candidate RPA waves and return a persisted batch outcome.
 
     ``fetch_diagnosis`` and ``postprocess`` isolate external effects for deterministic
@@ -411,17 +423,17 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
                 return entry, None
 
     next_index = 0
-    while next_index < len(entries) and sum(_completed(item) for item in entries) < target_top_n:
-        remaining = target_top_n - sum(_completed(item) for item in entries)
+    while next_index < len(entries) and sum(_source_completed(item) for item in entries) < target_top_n:
+        remaining = target_top_n - sum(_source_completed(item) for item in entries)
         wave_size = min(options["rpaConcurrency"], max(1, remaining))
-        wave = [item for item in entries[next_index:next_index + wave_size] if not _completed(item)]
+        wave = [item for item in entries[next_index:next_index + wave_size] if not _source_completed(item)]
         next_index += wave_size
         if not wave:
             continue
         if progress_callback:
             for item in wave:
                 try:
-                    progress_callback("rpa_processing", {"completed": sum(_completed(entry) for entry in entries), "total": target_top_n}, item["materialId"])
+                    progress_callback("rpa_processing", {"completed": sum(_source_completed(entry) for entry in entries), "total": target_top_n}, item["materialId"])
                 except Exception:
                     pass
         with ThreadPoolExecutor(max_workers=len(wave)) as executor:
@@ -430,21 +442,24 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
         for entry, records in sorted(wave_results, key=lambda value: value[0]["rank"]):
             if records is None:
                 continue
-            entry["postprocessAttemptCount"] += 1
-            entry["postprocessStatus"] = "running"
-            try:
-                postprocessed = postprocess(entry, records, paths)
-                frames = postprocessed.get("frames") if isinstance(postprocessed, dict) else None
-                if not isinstance(frames, list):
-                    raise RpaPipelineError("frame_verification_failed: postprocess did not return frames", "frame_verification_failed")
-                entry.update({"postprocessStatus": "succeeded", "status": "succeeded", "highlightFrames": frames})
-                entry["highlightSummaryPath"] = postprocessed.get("summaryPath")
-            except Exception as exc:
-                entry.update({"postprocessStatus": "failed", "status": "failed", "failureReason": getattr(exc, "error_type", "frame_extraction_failed"), "errorType": type(exc).__name__, "errorMessage": str(exc)})
+            if not highlights_enabled:
+                entry.update({"postprocessStatus": "not_requested", "status": "succeeded", "highlightFrames": []})
+            else:
+                entry["postprocessAttemptCount"] += 1
+                entry["postprocessStatus"] = "running"
+                try:
+                    postprocessed = postprocess(entry, records, paths)
+                    frames = postprocessed.get("frames") if isinstance(postprocessed, dict) else None
+                    if not isinstance(frames, list):
+                        raise RpaPipelineError("frame_verification_failed: postprocess did not return frames", "frame_verification_failed")
+                    entry.update({"postprocessStatus": "succeeded", "status": "succeeded", "highlightFrames": frames})
+                    entry["highlightSummaryPath"] = postprocessed.get("summaryPath")
+                except Exception as exc:
+                    entry.update({"postprocessStatus": "failed", "status": "partial", "failureReason": getattr(exc, "error_type", "frame_extraction_failed"), "errorType": type(exc).__name__, "errorMessage": str(exc)})
             _persist(paths, entries, configuration_fingerprint, period, options, account)
             if progress_callback:
                 try:
-                    progress_callback("rpa_processing", {"completed": sum(_completed(item) for item in entries), "total": target_top_n}, entry["materialId"])
+                    progress_callback("rpa_processing", {"completed": sum(_source_completed(item) for item in entries), "total": target_top_n}, entry["materialId"])
                 except Exception:
                     pass
         _persist(paths, entries, configuration_fingerprint, period, options, account)
