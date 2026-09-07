@@ -74,6 +74,21 @@ class MaterialQueryTests(unittest.TestCase):
         )
         self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1"])
 
+    def test_resolves_verified_display_fields_to_api_fields_before_filtering_and_sorting(self):
+        query = dict(self.query)
+        query["metricFilters"] = [{"field": "整体展现次数", "operator": "gte", "value": 100}]
+        query["sort"] = {"field": "整体点击次数", "direction": "desc"}
+        first = origin_row("m-1", "素材一", "直播素材", 10, 20, 2)
+        second = origin_row("m-2", "素材二", "直播素材", 20, 30, 3)
+        first["metrics"].update({"live_show_count_for_roi2_v2": {"Value": "100"}, "live_watch_count_for_roi2_v2": {"Value": "10"}})
+        second["metrics"].update({"live_show_count_for_roi2_v2": {"Value": "200"}, "live_watch_count_for_roi2_v2": {"Value": "20"}})
+
+        result = execute_material_query([first, second], query, self.registry)
+
+        self.assertEqual([item["materialId"] for item in result["materials"]], ["m-2", "m-1"])
+        self.assertEqual(result["receipt"]["sort"]["field"], "live_watch_count_for_roi2_v2")
+        self.assertEqual(result["receipt"]["query"]["metricFilters"][0]["field"], "live_show_count_for_roi2_v2")
+
     def test_excludes_aigc_dynamic_creative_collection_before_duplicate_validation(self):
         query = dict(self.query)
         query["dimensionFilters"] = []

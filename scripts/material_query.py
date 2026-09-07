@@ -71,6 +71,7 @@ def _normalize_filter(raw, registry, expected_kind):
         entry = registry.validate_operator(field_id, operator)
     except FieldRegistryError as exc:
         raise MaterialQueryError(str(exc)) from exc
+    field_id = entry["id"]
     if entry["kind"] != expected_kind:
         raise MaterialQueryError("field %s has the wrong filter type" % field_id)
     allowed = _DIMENSION_OPERATORS if expected_kind == "dimension" else _METRIC_OPERATORS
@@ -123,6 +124,7 @@ def parse_query_config(raw, registry):
         entry = registry.require(field_id)
     except FieldRegistryError as exc:
         raise MaterialQueryError(str(exc)) from exc
+    field_id = entry["id"]
     if entry["kind"] != "metric" or not entry.get("sortable"):
         raise MaterialQueryError("sort field must be a sortable metric")
     direction = _text(sort.get("direction")).lower()

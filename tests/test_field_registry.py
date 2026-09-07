@@ -33,6 +33,23 @@ class FieldRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(FieldRegistryError, "unknown field"):
             registry.require("net_settlement_roi")
 
+    def test_uses_verified_qianchuan_export_labels_for_report_fields(self):
+        registry = load_field_registry(ROOT / "config" / "asset-field-registry-v1.json")
+
+        expected = {
+            "live_show_count_for_roi2_v2": "整体展现次数",
+            "live_watch_count_for_roi2_v2": "整体点击次数",
+            "live_cvr_rate_for_roi2_v2": "整体点击率",
+            "live_convert_rate_for_roi2_v2": "整体转化率",
+            "total_pay_order_gmv_include_coupon_for_roi2": "整体成交金额",
+            "video_play_finish_rate_for_roi2_v2": "视频完播率",
+            "additional_delivery_stat_cost_for_roi2_assist": "追投调控消耗",
+        }
+        for field_id, label in expected.items():
+            entry = registry.require(field_id)
+            self.assertEqual(entry["label"], label)
+            self.assertEqual(entry["labelEvidence"]["source"], "qianchuan_material_export_20260830_20260904")
+
     def test_rejects_unknown_fields_and_invalid_operators(self):
         registry = load_field_registry(ROOT / "config" / "asset-field-registry-v1.json")
 
