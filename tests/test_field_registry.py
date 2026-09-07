@@ -50,6 +50,21 @@ class FieldRegistryTests(unittest.TestCase):
             self.assertEqual(entry["label"], label)
             self.assertEqual(entry["labelEvidence"]["source"], "qianchuan_material_export_20260830_20260904")
 
+    def test_all_report_fields_have_chinese_display_labels(self):
+        registry = load_field_registry(ROOT / "config" / "asset-field-registry-v1.json")
+
+        unmapped = [entry["id"] for entry in registry.entries() if entry["label"] == entry["id"]]
+
+        self.assertEqual(unmapped, [])
+
+        expected = {
+            "total_pay_order_gmv_rate_for_roi2": "整体成交金额率",
+            "cost_rate_for_roi2": "整体成本率",
+            "total_prepay_order_count_for_roi2": "整体预售订单数",
+            "total_prepay_order_gmv_for_roi2": "整体预售金额",
+        }
+        self.assertEqual({field_id: registry.require(field_id)["label"] for field_id in expected}, expected)
+
     def test_rejects_unknown_fields_and_invalid_operators(self):
         registry = load_field_registry(ROOT / "config" / "asset-field-registry-v1.json")
 

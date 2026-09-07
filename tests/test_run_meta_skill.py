@@ -32,6 +32,22 @@ def origin_row(material_id, cost, amount):
 
 
 class MetaSkillCliTests(unittest.TestCase):
+    def test_render_overview_dispatches_without_collection_or_rpa(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            output_dir = run_dir / "overview"
+            with patch.object(run_meta_skill, "write_overview", return_value={"status": "succeeded"}) as render, patch.object(
+                run_meta_skill, "fetch_material_report", side_effect=AssertionError("must not collect")
+            ), patch.object(
+                run_meta_skill, "run_rpa_pipeline", side_effect=AssertionError("must not run RPA")
+            ):
+                status = run_meta_skill.main([
+                    "render-overview", "--run-dir", str(run_dir), "--output-dir", str(output_dir),
+                ])
+
+        self.assertEqual(status, 0)
+        render.assert_called_once_with(run_dir, output_dir, run_meta_skill.REGISTRY_PATH)
+
     def test_continue_analysis_rejects_new_query_fields_before_prepare(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

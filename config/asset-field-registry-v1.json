@@ -564,7 +564,7 @@
     },
     {
       "id": "total_pay_order_gmv_rate_for_roi2",
-      "label": "total_pay_order_gmv_rate_for_roi2",
+      "label": "整体成交金额率",
       "kind": "metric",
       "source": [
         "metrics",
@@ -580,7 +580,11 @@
         "between"
       ],
       "filterStage": "row",
-      "sortable": true
+      "sortable": true,
+      "labelEvidence": {
+        "source": "qianchuan_material_export_20260830_20260904",
+        "verification": "semantic_field_name_alignment"
+      }
     },
     {
       "id": "total_pay_order_gmv_include_coupon_for_roi2",
@@ -608,7 +612,7 @@
     },
     {
       "id": "cost_rate_for_roi2",
-      "label": "cost_rate_for_roi2",
+      "label": "整体成本率",
       "kind": "metric",
       "source": [
         "metrics",
@@ -624,7 +628,11 @@
         "between"
       ],
       "filterStage": "row",
-      "sortable": true
+      "sortable": true,
+      "labelEvidence": {
+        "source": "qianchuan_material_export_20260830_20260904",
+        "verification": "semantic_field_name_alignment"
+      }
     },
     {
       "id": "total_prepay_and_pay_order_roi2",
@@ -772,7 +780,7 @@
     },
     {
       "id": "total_prepay_order_count_for_roi2",
-      "label": "total_prepay_order_count_for_roi2",
+      "label": "整体预售订单数",
       "kind": "metric",
       "source": [
         "metrics",
@@ -788,11 +796,15 @@
         "between"
       ],
       "filterStage": "row",
-      "sortable": true
+      "sortable": true,
+      "labelEvidence": {
+        "source": "qianchuan_material_export_20260830_20260904",
+        "verification": "semantic_field_name_alignment"
+      }
     },
     {
       "id": "total_prepay_order_gmv_for_roi2",
-      "label": "total_prepay_order_gmv_for_roi2",
+      "label": "整体预售金额",
       "kind": "metric",
       "source": [
         "metrics",
@@ -808,7 +820,11 @@
         "between"
       ],
       "filterStage": "row",
-      "sortable": true
+      "sortable": true,
+      "labelEvidence": {
+        "source": "qianchuan_material_export_20260830_20260904",
+        "verification": "semantic_field_name_alignment"
+      }
     },
     {
       "id": "total_unfinished_estimate_order_gmv_for_roi2",
