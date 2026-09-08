@@ -152,6 +152,43 @@ def _attach_audience_facts(run_dir):
     })
 
 
+def _attach_script_facts(run_dir):
+    refs = []
+    scripts = []
+    for material_id, primary, secondary in (
+        ("m-1", "商品卖点", "适用场景"),
+        ("m-2", "商品卖点", "适用场景"),
+        ("m-3", "价格优惠", "降价/折扣"),
+    ):
+        diagnosis = run_dir / "rpa" / "diagnosis-records" / (material_id + "-script.json")
+        diagnosis.parent.mkdir(parents=True, exist_ok=True)
+        diagnosis.write_text('{"recordType":"script_analysis"}', encoding="utf-8")
+        source_ref = {
+            "path": diagnosis.relative_to(run_dir).as_posix(),
+            "sha256": hashlib.sha256(diagnosis.read_bytes()).hexdigest(),
+            "sizeBytes": diagnosis.stat().st_size,
+        }
+        refs.append(source_ref)
+        scripts.append({
+            "materialId": material_id,
+            "parseStatus": "parsed",
+            "completeness": {"formulaLabels": True},
+            "data": [{"level_1_label": {"label": primary}, "level_2_labels": [{"label": secondary}]}],
+            "sourceRef": source_ref,
+            "text": "script text must not be projected",
+            "detail": {"1": {"list": ["detail must not be projected"]}},
+        })
+    _write_json(run_dir / "fact-pack" / "scripts.json", {
+        "schemaVersion": 1, "status": "available", "scripts": scripts, "sourceRefs": refs,
+    })
+    _write_json(run_dir / "fact-pack" / "manifest.json", {
+        "schemaVersion": 1,
+        "materialIds": ["m-1", "m-2", "m-3"],
+        "counts": {"materials": 3, "scriptFacts": 3},
+        "quality": {"categoryStatuses": {"scripts": "available"}},
+    })
+
+
 class OverviewProjectionTests(unittest.TestCase):
     def test_build_overview_projects_all_source_rows_with_verified_field_labels(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -222,8 +259,65 @@ class OverviewProjectionTests(unittest.TestCase):
         self.assertNotIn("shopId", json.dumps(audience, ensure_ascii=False))
         self.assertNotIn("https://", json.dumps(audience, ensure_ascii=False))
 
+    def test_overview_model_includes_safe_script_formula_section(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = _make_run(Path(temp_dir))
+            _attach_script_facts(run_dir)
+            model = build_overview_data(run_dir, REGISTRY_PATH)
+
+        scripts = model["scriptFormulaOverview"]
+        self.assertEqual(scripts["status"], "available")
+        self.assertIn("primaryBuckets", scripts)
+        serialized = json.dumps(scripts, ensure_ascii=False)
+        self.assertNotIn("detail", serialized)
+        self.assertNotIn("https://", serialized)
+
 
 class OverviewHtmlTests(unittest.TestCase):
+    def test_html_has_script_formula_navigation_and_same_card_drilldown_contract(self):
+        model = {
+            "schemaVersion": 1,
+            "kind": "qianchuan_material_leaderboard_overview",
+            "runId": "run-test",
+            "source": {"path": "source-data/materials.csv.structured.json", "sha256": "a" * 64, "recordCount": 0},
+            "queryContext": {"period": {}, "filters": {}, "ranking": {}},
+            "fields": [], "rows": [],
+            "audienceOverview": {"status": "unavailable", "gaps": []},
+            "scriptFormulaOverview": {
+                "schemaVersion": 1, "status": "available",
+                "source": {"path": "fact-pack/scripts.json", "sha256": "b" * 64, "recordCount": 2},
+                "materialScope": {"count": 2}, "coverage": {"formulaMaterialCount": 2},
+                "primaryBuckets": [{"label": "商品卖点", "value": 2, "share": 1, "total": 2}],
+                "secondaryBucketsByPrimary": {"商品卖点": [{"label": "适用场景", "value": 2, "share": 1, "total": 2}]},
+                "gaps": [],
+            },
+        }
+        html = render_overview_html(model)
+
+        self.assertIn("脚本内容公式", html)
+        self.assertIn("main { max-width: 1120px; margin: 0 auto; }", html)
+        self.assertIn('data-section="scripts"', html)
+        self.assertIn("renderScriptFormula", html)
+        self.assertIn("selectedPrimary", html)
+        self.assertIn("收起二级内容公式", html)
+        self.assertIn("secondaryBucketsByPrimary", html)
+        self.assertIn('data-script-formula-card', html)
+        self.assertIn('id="script-formula-secondary-card"', html)
+        self.assertIn('id="script-formula-secondary-chart"', html)
+        self.assertIn('class="script-formula-donut"><div id="script-formula-secondary-chart"', html)
+        self.assertNotIn("script-formula-summary", html)
+        self.assertIn("点击一级内容公式柱状图可以显示二级内容公式分布", html)
+        self.assertIn("setScriptFormulaSelection", html)
+        self.assertIn("toggleScriptFormulaSelection", html)
+        self.assertIn("data-script-formula-secondary-index", html)
+        self.assertIn("当前一级覆盖素材数", html)
+        self.assertIn("const fullTurn = Math.PI * 2;", html)
+        self.assertIn("if (sweep >= fullTurn - 0.0001)", html)
+        self.assertIn("const width = Math.max(560, Math.min(760, primaryBuckets.length * 170, (chart.clientWidth || 900) - 8));", html)
+        self.assertIn("const barWidth = band * .52;", html)
+        self.assertIn('style="width:${width}px;height:${height}px"', html)
+        self.assertNotIn("fetch(", html)
+
     def test_rendered_html_has_audience_metric_linkage_and_accessible_chart_contracts(self):
         model = {
             "schemaVersion": 1,
@@ -317,7 +411,8 @@ class OverviewHtmlTests(unittest.TestCase):
         self.assertIn('#audience-geography { display: block; width: 100%; max-width: 100%; overflow: hidden;', html)
         self.assertIn('.geo-chart-scroll { width: 100%; max-width: 100%; overflow-x: auto;', html)
         self.assertIn('.geo-chart-scroll svg { max-width: none; margin: 0 auto;', html)
-        self.assertIn('const geoBarRatio = isGeography ? (shown.length > 24 ? .68 : shown.length > 14 ? .62 : .52) : .52;', html)
+        self.assertIn('const geoBand = shown.length > 24 ? 56 : shown.length > 14 ? 64 : 74;', html)
+        self.assertIn('const geoBarRatio = isGeography ? (shown.length > 24 ? .68 : shown.length > 14 ? .60 : .52) : .52;', html)
         self.assertIn('const barWidth = band * geoBarRatio;', html)
         self.assertIn('const geoLabelStep = 1;', html)
         self.assertIn('const geoValueStep = 1;', html)

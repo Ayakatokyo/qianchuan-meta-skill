@@ -14,6 +14,10 @@ try:
     from audience_overview import AudienceOverviewError, build_audience_overview
 except ImportError:  # pragma: no cover - supports package-style imports.
     from .audience_overview import AudienceOverviewError, build_audience_overview
+try:
+    from script_formula_overview import ScriptFormulaOverviewError, build_script_formula_overview
+except ImportError:  # pragma: no cover - supports package-style imports.
+    from .script_formula_overview import ScriptFormulaOverviewError, build_script_formula_overview
 
 
 SCHEMA_VERSION = 1
@@ -368,6 +372,14 @@ def build_overview_data(run_dir, registry_path):
             "status": "unavailable",
             "gaps": [{"code": "audience_unavailable"}],
         }
+    try:
+        model["scriptFormulaOverview"] = build_script_formula_overview(run_root)
+    except ScriptFormulaOverviewError:
+        model["scriptFormulaOverview"] = {
+            "schemaVersion": 1,
+            "status": "unavailable",
+            "gaps": [{"code": "script_formula_unavailable"}],
+        }
     return model
 
 
@@ -387,7 +399,7 @@ def render_overview_html(model):
 :root { color-scheme: light; --bg: #f4f7fb; --surface: #ffffff; --surface-muted: #f8fafc; --line: #dfe6f0; --line-strong: #c9d5e5; --text: #172033; --muted: #63708a; --accent: #2563eb; --accent-soft: #eff6ff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text); background: var(--bg); }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 32px; background: var(--bg); }
-main { max-width: 1500px; margin: 0 auto; }
+main { max-width: 1120px; margin: 0 auto; }
 h1 { margin: 0 0 22px; font-size: 30px; line-height: 1.25; letter-spacing: -.02em; }
 .toolbar, .summary, .pager { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .toolbar { padding: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
@@ -492,10 +504,23 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 #audience-geography { display: block; width: 100%; max-width: 100%; overflow: hidden; }
 .geo-chart-scroll { width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
 .geo-chart-scroll svg { max-width: none; margin: 0 auto; }
+.script-section { display: grid; gap: 16px; }
+.script-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.script-card-header h3 { margin: 0; }
+.script-card-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.script-card-hint { color: var(--muted); font-size: 12px; }
+.script-card-header button { min-height: 34px; padding: 6px 10px; }
+.script-formula-svg { width: min(760px, 100%); height: 290px; margin: 0 auto; }
+.script-formula-donut { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(180px, 1fr); align-items: center; gap: 14px; }
+.script-formula-donut svg { min-width: 220px; height: 270px; }
+.script-formula-bar { fill: #5b8def; cursor: pointer; }
+.script-formula-bar:hover, .script-formula-bar:focus { fill: #2563eb; outline: none; }
+.script-formula-segment { transform-box: view-box; transform-origin: 116px 130px; transition: transform .24s cubic-bezier(.22, .61, .36, 1), filter .24s ease, stroke-width .24s ease; }
+.script-formula-segment.active { filter: brightness(.9); stroke-width: 3; }
 .chart-tooltip { position: fixed; z-index: 30; max-width: 280px; padding: 10px 12px; pointer-events: none; background: #172033; color: white; border-radius: 8px; box-shadow: 0 8px 24px rgba(15, 23, 42, .2); font-size: 12px; line-height: 1.65; }
 .chart-tooltip[hidden] { display: none; }
 @media (max-width: 900px) { .field-modal-body { grid-template-columns: 160px minmax(0, 1fr); } .field-modal-selected { grid-column: 2; max-height: 190px; border-top: 1px solid var(--line); } }
-@media (max-width: 700px) { body { padding: 18px 12px; } h1 { font-size: 24px; } input[type=search] { min-width: 0; } .field-modal { padding: 10px; } .field-modal-panel { height: calc(100vh - 20px); } .field-modal-body { display: flex; flex-direction: column; } .field-modal-groups { display: flex; gap: 6px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); } .field-modal-groups button { flex: 0 0 auto; width: auto; margin: 0; white-space: nowrap; } .field-modal-selected { max-height: 190px; border-top: 1px solid var(--line); border-left: 0; } .field-option-grid { grid-template-columns: 1fr; } .field-modal-footer { align-items: flex-end; flex-direction: column; } .field-modal-footer-actions { width: 100%; } .field-modal-footer-actions button { flex: 1; } .field-modal-footer p { align-self: flex-start; } .material-name-column { min-width: 300px; width: 300px; } .chart-grid { grid-template-columns: 1fr; } .donut-layout { grid-template-columns: 1fr; } .donut-layout svg { margin: 0 auto; } }
+@media (max-width: 700px) { body { padding: 18px 12px; } h1 { font-size: 24px; } input[type=search] { min-width: 0; } .field-modal { padding: 10px; } .field-modal-panel { height: calc(100vh - 20px); } .field-modal-body { display: flex; flex-direction: column; } .field-modal-groups { display: flex; gap: 6px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); } .field-modal-groups button { flex: 0 0 auto; width: auto; margin: 0; white-space: nowrap; } .field-modal-selected { max-height: 190px; border-top: 1px solid var(--line); border-left: 0; } .field-option-grid { grid-template-columns: 1fr; } .field-modal-footer { align-items: flex-end; flex-direction: column; } .field-modal-footer-actions { width: 100%; } .field-modal-footer-actions button { flex: 1; } .field-modal-footer p { align-self: flex-start; } .material-name-column { min-width: 300px; width: 300px; } .chart-grid { grid-template-columns: 1fr; } .donut-layout, .script-formula-donut { grid-template-columns: 1fr; } .donut-layout svg, .script-formula-donut svg { margin: 0 auto; } }
 </style>
 </head>
 <body>
@@ -504,6 +529,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 <nav class="section-nav" aria-label="报告部分">
   <button type="button" class="active" data-section="materials">素材榜单</button>
   <button type="button" data-section="audience">人群数据</button>
+  <button type="button" data-section="scripts">脚本内容公式</button>
 </nav>
 <section id="materials-panel" data-section-panel="materials">
 <div class="toolbar">
@@ -567,6 +593,16 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     </div>
   </div>
 </section>
+<section id="scripts-panel" class="script-section" data-section-panel="scripts" hidden>
+  <div class="audience-card chart-card" data-script-formula-card>
+    <div class="script-card-header"><h3 id="script-formula-title">一级内容公式</h3><div class="script-card-actions"><span id="script-formula-hint" class="script-card-hint">点击一级内容公式柱状图可以显示二级内容公式分布</span></div></div>
+    <div id="script-formula-chart" class="chart-box"></div>
+  </div>
+  <div id="script-formula-secondary-card" class="audience-card chart-card" hidden>
+    <div class="script-card-header"><h3 id="script-formula-secondary-title">二级内容公式分布</h3><div class="script-card-actions"><button id="script-formula-secondary-back" type="button">收起二级内容公式</button></div></div>
+    <div class="script-formula-donut"><div id="script-formula-secondary-chart" class="chart-box"></div><div id="script-formula-secondary-legend" class="legend" aria-label="二级内容公式图例"></div></div>
+  </div>
+</section>
 <div id="chart-tooltip" class="chart-tooltip" role="status" aria-live="polite" hidden></div>
 </main>
 <script id="overview-model" type="application/json">""" + embedded + r"""</script>
@@ -608,6 +644,8 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   const audienceState = { metricId: "SHOW_COUNT", geoLevel: "province", geoVisibleCount: 10, donutSelection: { gender: null, age: null }, tooltip: null };
   const chartTooltip = document.getElementById("chart-tooltip");
   const metricMap = Object.fromEntries((audience.metrics || []).map(metric => [metric.id, metric]));
+  const scriptFormula = model.scriptFormulaOverview || { status: "unavailable", gaps: [{ code: "script_formula_unavailable" }] };
+  const scriptFormulaState = { selectedPrimary: null, selectedSecondary: null, tooltip: null };
 
   function normalize(value) {
     return String(value == null ? "" : value).normalize("NFKC").toLocaleLowerCase().trim();
@@ -747,17 +785,18 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     const container = document.getElementById(containerId);
     if (!buckets.length) { container.innerHTML = chartEmpty(audienceDimension(dimension)?.label || "图表"); return; }
     const shown = buckets.slice(0, visibleCount || buckets.length);
+    const isGeography = dimension === "province" || dimension === "city";
+    const geoBand = shown.length > 24 ? 56 : shown.length > 14 ? 64 : 74;
     const width = dimension === "eight_groups"
       ? Math.max(760, (container.clientWidth || 900) - 8)
-      : Math.max(560, shown.length * 74);
+      : Math.max(560, shown.length * (isGeography ? geoBand : 74));
     const height = 290;
     const left = 42;
     const bottom = 72;
     const plotHeight = height - bottom - 20;
     const max = Math.max(...shown.map(bucket => Number(bucket.value)), 1);
     const band = (width - left - 18) / shown.length;
-    const isGeography = dimension === "province" || dimension === "city";
-    const geoBarRatio = isGeography ? (shown.length > 24 ? .68 : shown.length > 14 ? .62 : .52) : .52;
+    const geoBarRatio = isGeography ? (shown.length > 24 ? .68 : shown.length > 14 ? .60 : .52) : .52;
     const geoLabelStep = 1;
     const geoValueStep = 1;
     const bars = shown.map((bucket, index) => {
@@ -782,6 +821,12 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 
   function donutPath(start, end, outer, inner, cx, cy) {
     const point = (radius, angle) => `${(cx + radius * Math.cos(angle)).toFixed(2)} ${(cy + radius * Math.sin(angle)).toFixed(2)}`;
+    const sweep = end - start;
+    const fullTurn = Math.PI * 2;
+    if (sweep >= fullTurn - 0.0001) {
+      const midpoint = start + Math.PI;
+      return `M ${point(outer, start)} A ${outer} ${outer} 0 1 1 ${point(outer, midpoint)} A ${outer} ${outer} 0 1 1 ${point(outer, start)} L ${point(inner, start)} A ${inner} ${inner} 0 1 0 ${point(inner, midpoint)} A ${inner} ${inner} 0 1 0 ${point(inner, start)} Z`;
+    }
     const large = end - start > Math.PI ? 1 : 0;
     return `M ${point(outer, start)} A ${outer} ${outer} 0 ${large} 1 ${point(outer, end)} L ${point(inner, end)} A ${inner} ${inner} 0 ${large} 0 ${point(inner, start)} Z`;
   }
@@ -838,6 +883,150 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     renderDonut("audience-gender", "legend-gender", audienceBuckets("gender", audienceState.metricId), metric, "gender");
     renderDonut("audience-age", "legend-age", audienceBuckets("age", audienceState.metricId), metric, "age");
     renderGeography();
+  }
+
+  function hideScriptFormulaTooltip() {
+    chartTooltip.hidden = true;
+    scriptFormulaState.tooltip = null;
+  }
+
+  function formulaShare(bucket) {
+    return new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 2 }).format(bucket.share);
+  }
+
+  function showScriptFormulaTooltip(event, bucket, level) {
+    const source = event.currentTarget || event.target;
+    const rect = source && source.getBoundingClientRect ? source.getBoundingClientRect() : null;
+    chartTooltip.innerHTML = `<div>${escaped(level)}：${escaped(bucket.label)}</div><div>覆盖素材数：${escaped(bucket.value)}</div><div>占比：${escaped(formulaShare(bucket))}</div><div>${level === "一级内容公式" ? "有公式素材总数" : "当前一级覆盖素材总数"}：${escaped(bucket.total)}</div>`;
+    chartTooltip.hidden = false;
+    scriptFormulaState.tooltip = { bucket, level };
+    const left = rect ? rect.right + 8 : 16;
+    const top = rect ? rect.top : 16;
+    chartTooltip.style.left = `${Math.min(Math.max(12, left), Math.max(12, window.innerWidth - chartTooltip.offsetWidth - 12))}px`;
+    chartTooltip.style.top = `${Math.min(Math.max(12, top), Math.max(12, window.innerHeight - chartTooltip.offsetHeight - 12))}px`;
+  }
+
+  function attachScriptFormulaInteractions(container, buckets, level) {
+    container.querySelectorAll("[data-script-formula-index], [data-script-formula-secondary-index]").forEach(element => {
+      const rawIndex = element.dataset.scriptFormulaSecondaryIndex ?? element.dataset.scriptFormulaIndex;
+      const bucket = buckets[Number(rawIndex)];
+      element.addEventListener("pointerenter", event => showScriptFormulaTooltip(event, bucket, level));
+      element.addEventListener("pointerleave", hideScriptFormulaTooltip);
+      element.addEventListener("focus", event => showScriptFormulaTooltip(event, bucket, level));
+      element.addEventListener("blur", hideScriptFormulaTooltip);
+      if (level === "二级内容公式") {
+        element.addEventListener("click", event => toggleScriptFormulaSelection(event.currentTarget.dataset.scriptFormulaSecondaryIndex));
+      }
+    });
+  }
+
+  function setScriptFormulaSelection(index) {
+    scriptFormulaState.selectedSecondary = index == null ? null : Number(index);
+    document.querySelectorAll("#script-formula-secondary-chart [data-script-formula-secondary-index], #script-formula-secondary-legend [data-script-formula-secondary-index]").forEach(element => {
+      const selected = Number(element.dataset.scriptFormulaSecondaryIndex) === scriptFormulaState.selectedSecondary;
+      element.classList.toggle("active", selected);
+      element.setAttribute("aria-pressed", String(selected));
+      if (element.classList.contains("script-formula-segment")) {
+        const angle = Number(element.dataset.scriptFormulaAngle || 0);
+        const distance = selected ? 8 : 0;
+        element.style.transform = `translate(${(Math.cos(angle) * distance).toFixed(2)}px, ${(Math.sin(angle) * distance).toFixed(2)}px)`;
+      }
+    });
+  }
+
+  function toggleScriptFormulaSelection(index) {
+    const nextIndex = scriptFormulaState.selectedSecondary === Number(index) ? null : Number(index);
+    setScriptFormulaSelection(nextIndex);
+  }
+
+  function renderScriptFormula() {
+    const chart = document.getElementById("script-formula-chart");
+    const secondaryCard = document.getElementById("script-formula-secondary-card");
+    const secondaryChart = document.getElementById("script-formula-secondary-chart");
+    const secondaryLegend = document.getElementById("script-formula-secondary-legend");
+    const secondaryTitle = document.getElementById("script-formula-secondary-title");
+    const title = document.getElementById("script-formula-title");
+    const hint = document.getElementById("script-formula-hint");
+    const available = scriptFormula.status === "available";
+    hideScriptFormulaTooltip();
+    if (!available) {
+      title.textContent = "一级内容公式";
+      hint.hidden = true;
+      chart.innerHTML = '<div class="empty">脚本内容公式不可用</div>';
+      secondaryCard.hidden = true;
+      secondaryChart.innerHTML = "";
+      secondaryLegend.innerHTML = "";
+      return;
+    }
+    const primaryBuckets = Array.isArray(scriptFormula.primaryBuckets) ? scriptFormula.primaryBuckets : [];
+    scriptFormulaState.selectedSecondary = null;
+    title.textContent = "一级内容公式";
+    hint.hidden = false;
+    if (!primaryBuckets.length) {
+      chart.innerHTML = '<div class="empty">暂无可展示的一级内容公式</div>';
+      secondaryCard.hidden = true;
+      return;
+    }
+
+    const width = Math.max(560, Math.min(760, primaryBuckets.length * 170, (chart.clientWidth || 900) - 8));
+    const height = 290;
+    const left = 42;
+    const bottom = 72;
+    const plotHeight = height - bottom - 20;
+    const max = Math.max(...primaryBuckets.map(bucket => Number(bucket.value)), 1);
+    const band = (width - left - 18) / primaryBuckets.length;
+    const bars = primaryBuckets.map((bucket, index) => {
+      const barHeight = Math.max(2, Number(bucket.value) / max * plotHeight);
+      const barWidth = band * .52;
+      const x = left + index * band + (band - barWidth) / 2;
+      const y = height - bottom - barHeight;
+      const center = x + barWidth / 2;
+      const shortLabel = bucket.label.length > 8 ? `${bucket.label.slice(0, 8)}…` : bucket.label;
+      return `<rect class="script-formula-bar" data-script-formula-index="${index}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${barHeight.toFixed(2)}" rx="5" tabindex="0" role="button" aria-label="${escaped(bucket.label)}，覆盖 ${escaped(bucket.value)} 个素材，占比 ${escaped(formulaShare(bucket))}" data-script-primary="${escaped(bucket.label)}"></rect><text class="chart-value" x="${center.toFixed(2)}" y="${Math.max(14, y - 6).toFixed(2)}" text-anchor="middle">${escaped(bucket.value)}</text><text class="chart-label" x="${center.toFixed(2)}" y="${height - 42}" text-anchor="middle">${escaped(shortLabel)}</text>`;
+    }).join("");
+    chart.innerHTML = `<svg class="script-formula-svg" style="width:${width}px;height:${height}px" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="group" aria-label="一级内容公式柱状图"><line class="chart-axis" x1="${left}" y1="${height - bottom}" x2="${width - 12}" y2="${height - bottom}"></line>${bars}</svg>`;
+    attachScriptFormulaInteractions(chart, primaryBuckets, "一级内容公式");
+    chart.querySelectorAll("[data-script-primary]").forEach(element => {
+      const select = () => { scriptFormulaState.selectedPrimary = element.dataset.scriptPrimary; renderScriptFormula(); };
+      element.addEventListener("click", select);
+      element.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); }
+      });
+    });
+
+    if (scriptFormulaState.selectedPrimary == null) {
+      secondaryCard.hidden = true;
+      secondaryChart.innerHTML = "";
+      secondaryLegend.innerHTML = "";
+      return;
+    }
+
+    const primary = scriptFormulaState.selectedPrimary;
+    const secondaryBuckets = scriptFormula.secondaryBucketsByPrimary?.[primary] || [];
+    secondaryCard.hidden = false;
+    secondaryTitle.textContent = `${primary} · 二级内容公式分布`;
+    if (!secondaryBuckets.length) {
+      secondaryChart.innerHTML = `<div class="empty">暂无该一级内容公式的二级公式数据</div>`;
+      secondaryLegend.innerHTML = "";
+      return;
+    }
+    const colors = ["#2563eb", "#60a5fa", "#14b8a6", "#f59e0b", "#ef6a6a", "#8b5cf6", "#64748b", "#22c55e"];
+    const secondaryValueTotal = secondaryBuckets.reduce((sum, bucket) => sum + Math.max(0, Number(bucket.value) || 0), 0);
+    let cursor = -Math.PI / 2;
+    const segments = secondaryBuckets.map((bucket, index) => {
+      const sliceShare = secondaryValueTotal ? Math.max(0, Number(bucket.value) || 0) / secondaryValueTotal : 0;
+      const end = cursor + sliceShare * Math.PI * 2;
+      const angle = (cursor + end) / 2;
+      const path = donutPath(cursor, end, 96, 58, 116, 130);
+      cursor = end;
+      return `<path class="donut-segment script-formula-segment" data-script-formula-secondary-index="${index}" data-script-formula-angle="${angle.toFixed(6)}" d="${path}" fill="${colors[index % colors.length]}" tabindex="0" role="img" aria-pressed="false" aria-label="${escaped(bucket.label)}，覆盖 ${escaped(bucket.value)} 个素材，占比 ${escaped(formulaShare(bucket))}"></path>`;
+    }).join("");
+    const total = secondaryBuckets[0].total;
+    secondaryChart.innerHTML = `<svg viewBox="0 0 232 270" role="group" aria-label="${escaped(primary)}二级内容公式环形图">${segments}<text class="donut-center-label" x="116" y="124">当前一级覆盖素材数</text><text class="donut-center-value" x="116" y="150">${escaped(total)}</text></svg>`;
+    secondaryLegend.innerHTML = secondaryBuckets.map((bucket, index) => `<button type="button" class="legend-item" data-script-formula-secondary-index="${index}" tabindex="0" role="img" aria-pressed="false" aria-label="${escaped(bucket.label)}，覆盖 ${escaped(bucket.value)} 个素材，占比 ${escaped(formulaShare(bucket))}"><span class="legend-swatch" style="background:${colors[index % colors.length]}"></span><span>${escaped(bucket.label)}<span class="legend-detail">${escaped(bucket.value)} 个素材 · ${escaped(formulaShare(bucket))}</span></span></button>`).join("");
+    attachScriptFormulaInteractions(secondaryChart, secondaryBuckets, "二级内容公式");
+    attachScriptFormulaInteractions(secondaryLegend, secondaryBuckets, "二级内容公式");
+    setScriptFormulaSelection(null);
   }
 
   function fieldMatches(field, query) {
@@ -987,13 +1176,21 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   document.addEventListener("keydown", event => {
     if (event.key === "Escape" && !fieldModal.hidden) closeFieldDialog();
     if (event.key === "Escape") hideChartTooltip();
+    if (event.key === "Escape") hideScriptFormulaTooltip();
   });
   document.querySelectorAll("[data-section]").forEach(button => button.addEventListener("click", event => {
     const section = event.currentTarget.dataset.section;
     document.querySelectorAll("[data-section]").forEach(item => item.classList.toggle("active", item.dataset.section === section));
     document.querySelectorAll("[data-section-panel]").forEach(panel => { panel.hidden = panel.dataset.sectionPanel !== section; });
     if (section === "audience") renderAudience();
+    if (section === "scripts") renderScriptFormula();
+    if (section !== "scripts") hideScriptFormulaTooltip();
+    if (section !== "audience") hideChartTooltip();
   }));
+  document.getElementById("script-formula-secondary-back").addEventListener("click", () => {
+    scriptFormulaState.selectedPrimary = null;
+    renderScriptFormula();
+  });
   document.querySelectorAll("[data-audience-metric]").forEach(button => button.addEventListener("click", event => {
     audienceState.metricId = event.currentTarget.dataset.audienceMetric;
     const total = audienceBuckets(audienceState.geoLevel, audienceState.metricId).length;
@@ -1014,6 +1211,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     renderGeography();
   });
   renderAudience();
+  renderScriptFormula();
   search.addEventListener("input", event => { state.query = event.target.value; state.page = 1; render(); });
   document.getElementById("first").addEventListener("click", () => { state.page = 1; render(); });
   document.getElementById("previous").addEventListener("click", () => { state.page = Math.max(1, state.page - 1); render(); });

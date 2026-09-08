@@ -40,6 +40,10 @@ class MetaSkillCliTests(unittest.TestCase):
                 run_meta_skill, "fetch_material_report", side_effect=AssertionError("must not collect")
             ), patch.object(
                 run_meta_skill, "run_rpa_pipeline", side_effect=AssertionError("must not run RPA")
+            ), patch.object(
+                run_meta_skill, "build_fact_pack", side_effect=AssertionError("must not rebuild facts")
+            ), patch.object(
+                run_meta_skill, "prepare_analysis", side_effect=AssertionError("must not prepare analysis")
             ):
                 status = run_meta_skill.main([
                     "render-overview", "--run-dir", str(run_dir), "--output-dir", str(output_dir),
