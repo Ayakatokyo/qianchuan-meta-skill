@@ -32,7 +32,15 @@ def runtime_context(environ=None):
     environment = os.environ if environ is None else environ
     api_base = str(environment.get("ENV_BACKEND_HOST", "")).strip().rstrip("/")
     authorization = str(environment.get("YUCE_AUTHORIZATION", "")).strip()
-    agent_session = str(environment.get("YUCE_SESSION_ID") or environment.get("YCSESSIONID") or "").strip()
+    # The report connector accepts a gateway authorization token as the final
+    # session fallback.  Keep RPA on the same runtime contract: local Codex
+    # provides only YUCE_AUTHORIZATION in some execution surfaces, while the
+    # hosted runner also injects a dedicated session value.
+    agent_session = str(
+        environment.get("YUCE_SESSION_ID")
+        or environment.get("YCSESSIONID")
+        or authorization
+    ).strip()
     cookie_session = str(environment.get("YCSESSIONID") or authorization).strip()
     missing = [label for label, value in (("ENV_BACKEND_HOST", api_base), ("YUCE_AUTHORIZATION", authorization), ("agent session", agent_session)) if not value]
     if missing:

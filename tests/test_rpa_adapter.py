@@ -43,6 +43,15 @@ class FakeSession:
 
 
 class RpaAdapterTests(unittest.TestCase):
+    def test_runtime_context_uses_authorization_as_session_fallback(self):
+        context = rpa_adapter.runtime_context({
+            "ENV_BACKEND_HOST": "https://gateway.test/",
+            "YUCE_AUTHORIZATION": "authorization-token",
+        })
+
+        self.assertEqual(context["agentSession"], "authorization-token")
+        self.assertEqual(context["cookieSession"], "authorization-token")
+
     def test_selects_exactly_one_rpa_authorization(self):
         account = rpa_adapter.select_rpa_account(
             {"data": [{"platform": rpa_adapter.PLATFORM, "accountId": "rpa-1"}]}

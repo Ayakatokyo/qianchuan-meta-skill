@@ -68,47 +68,49 @@ QuerySpec 的 `field` 必须来自 `config/asset-field-registry-v1.json`。注�
 
 ## 执行
 
-`validate` 不访问外部服务；`query` 使用 `ENV_BACKEND_HOST`、`YUCE_AUTHORIZATION`，以及 `YUCE_SESSION_ID` 或 `YCSESSIONID` 调用千川报表连接器。凭证不得进入 Spec、Git、日志或运行工件。
+`validate` 不访问外部服务；`query` 使用 `ENV_BACKEND_HOST`、`YUCE_AUTHORIZATION`，以及 `YUCE_SESSION_ID` 或 `YCSESSIONID` 调用千川报表连接器。RPA 与报表连接器采用相同会话优先级：`YUCE_SESSION_ID` → `YCSESSIONID` → `YUCE_AUTHORIZATION`。凭证不得进入 Spec、Git、日志或运行工件。
+
+在未预装依赖的本地 Codex 运行面，统一从技能根目录使用 `uv run --with-requirements requirements.txt python`；它会按本技能清单解析依赖，避免 `requests` 缺失被误判为鉴权故障。不要把凭证写入命令行。
 
 ```bash
-python scripts/run_meta_skill.py validate \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py validate \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json
 
-python scripts/run_meta_skill.py query \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py query \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
   --output-dir /path/to/new-run
 
-python scripts/run_meta_skill.py run \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py run \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
   --execute-rpa \
   --output-dir /path/to/new-run
 
 # 单 skill 完整工作流入口（阶段一完成后暂停，等待第二次分析输入）
-python scripts/run_meta_skill.py workflow \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py workflow \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
   --execute-rpa \
   --output-dir /path/to/new-run
 
-python scripts/run_meta_skill.py verify-run \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py verify-run \
   --output-dir /path/to/completed-run
 
-python scripts/run_meta_skill.py build-fact-pack \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py build-fact-pack \
   --run-dir /path/to/completed-run
 
-python scripts/run_meta_skill.py verify-fact-pack \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py verify-fact-pack \
   --run-dir /path/to/completed-run \
   --fact-pack-dir /path/to/completed-run/fact-pack
 
-python scripts/run_meta_skill.py prepare-analysis \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py prepare-analysis \
   --run-dir /path/to/completed-run \
   --analysis-request /path/to/analysis-request.json \
   --output-dir /path/to/completed-run/analysis
 
-python scripts/run_meta_skill.py verify-analysis \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py verify-analysis \
   --run-dir /path/to/completed-run \
   --analysis-dir /path/to/completed-run/analysis
 ```
@@ -147,7 +149,7 @@ python scripts/run_meta_skill.py verify-analysis \
 继续分析时必须绑定同一 `runId` 和 manifest SHA-256；事实包变化、分区文件缺失/不可用、素材范围越界或请求文本为空都会被阻断，缺失数据不会被当作零：
 
 ```bash
-python scripts/run_meta_skill.py continue-analysis \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py continue-analysis \
   --run-dir /path/to/completed-run \
   --analysis-request /path/to/analysis-request.json
 ```
@@ -165,7 +167,7 @@ python scripts/run_meta_skill.py continue-analysis \
 模型完成二次分析后必须只返回可解析的 `analysis-result.json`，至少包含 `schemaVersion`、`contractVersion=2`、`analysisSpecFingerprint` 和非空 `claims`；每条 claim 必须包含 `claimType`、`statement`、`section`、`priority`、`evidenceRefs`、`confidence`，其中 `section` 只能是本次选定的事实包分区或 `synthesis`，`priority` 为 `high|medium|low`，可选 `businessImplication` 用于表达业务含义。建议必须带证据引用，计算还必须声明 `calculationId`、`formula` 和 `inputs`。结果必须符合输入中的 `resultSchema`，并通过：
 
 ```bash
-python scripts/run_meta_skill.py receive-analysis-result \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py receive-analysis-result \
   --run-dir /path/to/completed-run --analysis-result /path/to/analysis-result.json
 ```
 
@@ -178,7 +180,7 @@ python scripts/run_meta_skill.py receive-analysis-result \
 独立抽帧仅在已有本地视频与互动曲线时执行，不会发起报表查询；`run` 内部会自动准备这些输入：
 
 ```bash
-python scripts/run_meta_skill.py select-frames \
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py select-frames \
   --highlight-spec /path/to/highlight-spec.json \
   --records-json /path/to/interactions.json \
   --video /path/to/material.mp4 \
