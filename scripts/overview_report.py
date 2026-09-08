@@ -10,6 +10,11 @@ import tempfile
 
 from field_registry import FieldRegistryError, load_field_registry
 
+try:
+    from audience_overview import AudienceOverviewError, build_audience_overview
+except ImportError:  # pragma: no cover - supports package-style imports.
+    from .audience_overview import AudienceOverviewError, build_audience_overview
+
 
 SCHEMA_VERSION = 1
 OVERVIEW_KIND = "qianchuan_material_leaderboard_overview"
@@ -341,7 +346,7 @@ def build_overview_data(run_dir, registry_path):
     for field in fields:
         field["defaultVisible"] = field["id"] in default_fields
 
-    return {
+    model = {
         "schemaVersion": SCHEMA_VERSION,
         "kind": OVERVIEW_KIND,
         "runId": run_root.name,
@@ -355,6 +360,15 @@ def build_overview_data(run_dir, registry_path):
         "defaultFieldIds": default_field_ids,
         "rows": rows,
     }
+    try:
+        model["audienceOverview"] = build_audience_overview(run_root)
+    except AudienceOverviewError:
+        model["audienceOverview"] = {
+            "schemaVersion": 1,
+            "status": "unavailable",
+            "gaps": [{"code": "audience_unavailable"}],
+        }
+    return model
 
 
 def _json_for_script(model):
@@ -441,13 +455,57 @@ tbody tr:hover .material-name-column { background: #fbfdff; }
 mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 .empty { padding: 44px; text-align: center; color: var(--muted); }
 .pager { justify-content: space-between; padding: 14px 2px; color: var(--muted); font-size: 14px; }
+.section-nav { display: flex; gap: 8px; margin: 0 0 16px; }
+.section-nav button.active { border-color: var(--accent); background: var(--accent); color: white; }
+[data-section-panel][hidden] { display: none; }
+.audience-section { display: grid; gap: 16px; }
+.chart-grid { display: grid; gap: 16px; }
+.chart-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.audience-card { width: 100%; min-width: 0; overflow: hidden; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
+.metric-switcher, .geo-switcher { display: flex; gap: 8px; flex-wrap: wrap; }
+.metric-switcher button.active, .geo-switcher button.active { border-color: var(--accent); background: var(--accent-soft); color: #1d4ed8; font-weight: 650; }
+.chart-card h3 { margin: 0; font-size: 16px; }
+.chart-box { min-width: 0; max-width: 100%; min-height: 260px; overflow-x: auto; overflow-y: hidden; }
+.chart-box svg { display: block; min-width: 0; max-width: 100%; height: 290px; }
+.chart-bar { fill: #5b8def; cursor: pointer; }
+.chart-bar:hover, .chart-bar:focus { fill: #2563eb; outline: none; }
+.chart-axis { stroke: #dfe6f0; stroke-width: 1; }
+.chart-label { fill: #63708a; font-size: 12px; }
+.chart-value { fill: #172033; font-size: 11px; font-weight: 650; }
+.donut-layout { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(150px, 1fr); align-items: center; gap: 12px; }
+.donut-layout svg { min-width: 220px; height: 250px; }
+.donut-segment { cursor: pointer; stroke: white; stroke-width: 2; outline: none; transform-box: view-box; transform-origin: 116px 124px; transition: transform .24s cubic-bezier(.22, .61, .36, 1), filter .24s ease, stroke-width .24s ease; }
+.donut-segment:hover, .donut-segment:focus { filter: brightness(.9); }
+.donut-segment.active { stroke: white; stroke-width: 2; filter: brightness(.92); }
+.donut-center-label { fill: #63708a; font-size: 12px; text-anchor: middle; }
+.donut-center-value { fill: #172033; font-size: 18px; font-weight: 700; text-anchor: middle; }
+.legend { display: grid; gap: 7px; align-content: center; }
+.legend-item { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 7px; align-items: start; min-height: 32px; padding: 4px 6px; border: 0; border-radius: 6px; text-align: left; font-size: 12px; }
+.legend-item:hover, .legend-item:focus { background: var(--accent-soft); outline: none; }
+.legend-item.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.legend-swatch { width: 10px; height: 10px; margin-top: 3px; border-radius: 3px; }
+.legend-detail { display: block; margin-top: 2px; color: var(--muted); }
+.geo-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.geo-slider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.geo-slider input { width: min(300px, 50vw); accent-color: var(--accent); }
+#audience-content { min-width: 0; }
+#audience-geography { display: block; width: 100%; max-width: 100%; overflow: hidden; }
+.geo-chart-scroll { width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+.geo-chart-scroll svg { max-width: none; margin: 0 auto; }
+.chart-tooltip { position: fixed; z-index: 30; max-width: 280px; padding: 10px 12px; pointer-events: none; background: #172033; color: white; border-radius: 8px; box-shadow: 0 8px 24px rgba(15, 23, 42, .2); font-size: 12px; line-height: 1.65; }
+.chart-tooltip[hidden] { display: none; }
 @media (max-width: 900px) { .field-modal-body { grid-template-columns: 160px minmax(0, 1fr); } .field-modal-selected { grid-column: 2; max-height: 190px; border-top: 1px solid var(--line); } }
-@media (max-width: 700px) { body { padding: 18px 12px; } h1 { font-size: 24px; } input[type=search] { min-width: 0; } .field-modal { padding: 10px; } .field-modal-panel { height: calc(100vh - 20px); } .field-modal-body { display: flex; flex-direction: column; } .field-modal-groups { display: flex; gap: 6px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); } .field-modal-groups button { flex: 0 0 auto; width: auto; margin: 0; white-space: nowrap; } .field-modal-selected { max-height: 190px; border-top: 1px solid var(--line); border-left: 0; } .field-option-grid { grid-template-columns: 1fr; } .field-modal-footer { align-items: flex-end; flex-direction: column; } .field-modal-footer-actions { width: 100%; } .field-modal-footer-actions button { flex: 1; } .field-modal-footer p { align-self: flex-start; } .material-name-column { min-width: 300px; width: 300px; } }
+@media (max-width: 700px) { body { padding: 18px 12px; } h1 { font-size: 24px; } input[type=search] { min-width: 0; } .field-modal { padding: 10px; } .field-modal-panel { height: calc(100vh - 20px); } .field-modal-body { display: flex; flex-direction: column; } .field-modal-groups { display: flex; gap: 6px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); } .field-modal-groups button { flex: 0 0 auto; width: auto; margin: 0; white-space: nowrap; } .field-modal-selected { max-height: 190px; border-top: 1px solid var(--line); border-left: 0; } .field-option-grid { grid-template-columns: 1fr; } .field-modal-footer { align-items: flex-end; flex-direction: column; } .field-modal-footer-actions { width: 100%; } .field-modal-footer-actions button { flex: 1; } .field-modal-footer p { align-self: flex-start; } .material-name-column { min-width: 300px; width: 300px; } .chart-grid { grid-template-columns: 1fr; } .donut-layout { grid-template-columns: 1fr; } .donut-layout svg { margin: 0 auto; } }
 </style>
 </head>
 <body>
 <main>
 <h1>千川素材榜单数据工作台</h1>
+<nav class="section-nav" aria-label="报告部分">
+  <button type="button" class="active" data-section="materials">素材榜单</button>
+  <button type="button" data-section="audience">人群数据</button>
+</nav>
+<section id="materials-panel" data-section-panel="materials">
 <div class="toolbar">
   <input id="search" type="search" placeholder="输入素材标题或 ID" aria-label="输入素材标题或 ID">
   <button id="field-button" type="button">自定义指标</button>
@@ -488,6 +546,28 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     <button id="last" type="button">末</button>
   </span>
 </div>
+ </section>
+<section id="audience-panel" class="audience-section" data-section-panel="audience" hidden>
+  <div id="audience-unavailable" class="audience-card empty" hidden>人群数据不可用</div>
+  <div id="audience-content">
+    <div id="audience-metric-switcher" class="metric-switcher" aria-label="人群数据指标">
+      <button type="button" class="active" data-audience-metric="SHOW_COUNT">整体展现次数</button>
+      <button type="button" data-audience-metric="TRANSACTION_AMOUNT">整体成交金额</button>
+      <button type="button" data-audience-metric="CLICK_COUNT">整体点击次数</button>
+    </div>
+    <div class="audience-card chart-card"><h3>八大人群分布</h3><div id="audience-eight-groups" class="chart-box"></div></div>
+    <div class="chart-grid">
+      <div class="audience-card chart-card"><h3>性别分布</h3><div class="donut-layout"><div id="audience-gender" class="chart-box"></div><div id="legend-gender" class="legend" aria-label="性别图例"></div></div></div>
+      <div class="audience-card chart-card"><h3>年龄分布</h3><div class="donut-layout"><div id="audience-age" class="chart-box"></div><div id="legend-age" class="legend" aria-label="年龄图例"></div></div></div>
+    </div>
+    <div class="audience-card chart-card">
+      <div class="geo-controls"><div><h3>地域分布</h3></div><div class="geo-switcher" aria-label="地域层级"><button type="button" class="active" data-geo-level="province">省份</button><button type="button" data-geo-level="city">城市</button></div></div>
+      <div class="geo-slider"><label for="geo-visible-count">数据窗口</label><input id="geo-visible-count" type="range" min="1" max="1" value="1"><span id="geo-visible-label">显示前 1 / 1 个</span></div>
+      <div id="audience-geography" class="chart-box"></div>
+    </div>
+  </div>
+</section>
+<div id="chart-tooltip" class="chart-tooltip" role="status" aria-live="polite" hidden></div>
 </main>
 <script id="overview-model" type="application/json">""" + embedded + r"""</script>
 <script>
@@ -524,6 +604,10 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   const selectedFields = document.getElementById("selected-fields");
   const selectedCount = document.getElementById("selected-count");
   const tableContainer = document.getElementById("table-container");
+  const audience = model.audienceOverview || { status: "unavailable", gaps: [{ code: "audience_unavailable" }] };
+  const audienceState = { metricId: "SHOW_COUNT", geoLevel: "province", geoVisibleCount: 10, donutSelection: { gender: null, age: null }, tooltip: null };
+  const chartTooltip = document.getElementById("chart-tooltip");
+  const metricMap = Object.fromEntries((audience.metrics || []).map(metric => [metric.id, metric]));
 
   function normalize(value) {
     return String(value == null ? "" : value).normalize("NFKC").toLocaleLowerCase().trim();
@@ -586,6 +670,174 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     if (missing(value)) return "—";
     if (typeof value === "number") return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 4 }).format(value);
     return escaped(value);
+  }
+
+  function formatAudienceValue(value, metric) {
+    const options = metric && metric.unit === "currency"
+      ? { minimumFractionDigits: 2, maximumFractionDigits: 2 }
+      : { maximumFractionDigits: 2 };
+    const formatted = new Intl.NumberFormat("zh-CN", options).format(Number(value) || 0);
+    return metric && metric.unit === "currency" ? `${formatted} 元` : formatted;
+  }
+
+  function audienceDimension(id) {
+    if (id === "province" || id === "city") return audience.dimensions?.geography?.levels?.[id];
+    return audience.dimensions?.[id];
+  }
+
+  function audienceBuckets(id, metricId) {
+    return audienceDimension(id)?.bucketsByMetric?.[metricId] || [];
+  }
+
+  function hideChartTooltip() {
+    chartTooltip.hidden = true;
+    audienceState.tooltip = null;
+  }
+
+  function showChartTooltip(event, bucket, metric, dimension, rank) {
+    const source = event.currentTarget || event.target;
+    const rect = source && source.getBoundingClientRect ? source.getBoundingClientRect() : null;
+    chartTooltip.innerHTML = `<div>分类：${escaped(bucket.label)}</div><div>${escaped(metric.label)}：${formatAudienceValue(bucket.value, metric)}</div><div>占比：${new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 2 }).format(bucket.share)}</div><div>本维度总值：${formatAudienceValue(bucket.total, metric)}</div>${rank ? `<div>排名：${rank}</div>` : ""}`;
+    chartTooltip.hidden = false;
+    audienceState.tooltip = { bucket, metricId: metric.id, dimension, rank };
+    const left = rect ? rect.right + 8 : 16;
+    const top = rect ? rect.top : 16;
+    chartTooltip.style.left = `${Math.min(Math.max(12, left), Math.max(12, window.innerWidth - chartTooltip.offsetWidth - 12))}px`;
+    chartTooltip.style.top = `${Math.min(Math.max(12, top), Math.max(12, window.innerHeight - chartTooltip.offsetHeight - 12))}px`;
+  }
+
+  function chartEmpty(label) {
+    return `<div class="empty">暂无${escaped(label)}有效数据</div>`;
+  }
+
+  function attachChartInteractions(container, buckets, metric, dimension) {
+    container.querySelectorAll("[data-chart-index]").forEach((element, index) => {
+      const bucket = buckets[Number(element.dataset.chartIndex)];
+      const rank = dimension === "province" || dimension === "city" ? Number(element.dataset.chartRank) : index + 1;
+      element.addEventListener("pointerenter", event => showChartTooltip(event, bucket, metric, dimension, rank));
+      element.addEventListener("pointerleave", hideChartTooltip);
+      element.addEventListener("focus", event => showChartTooltip(event, bucket, metric, dimension, rank));
+      element.addEventListener("blur", hideChartTooltip);
+    });
+  }
+
+  function setDonutSelection(dimension, index) {
+    audienceState.donutSelection[dimension] = index == null ? null : Number(index);
+    document.querySelectorAll(`[data-donut-dimension="${dimension}"][data-chart-index]`).forEach(element => {
+      const selected = Number(element.dataset.chartIndex) === audienceState.donutSelection[dimension];
+      element.classList.toggle("active", selected);
+      if (element.tagName.toLowerCase() === "button") element.setAttribute("aria-pressed", String(selected));
+      if (element.classList.contains("donut-segment")) {
+        const angle = Number(element.dataset.donutAngle || 0);
+        const distance = selected ? 8 : 0;
+        const offsetX = Math.cos(angle) * distance;
+        const offsetY = Math.sin(angle) * distance;
+        element.style.transform = `translate(${offsetX.toFixed(2)}px, ${offsetY.toFixed(2)}px)`;
+      }
+    });
+  }
+
+  function toggleDonutSelection(dimension, index) {
+    const currentIndex = audienceState.donutSelection[dimension];
+    const nextIndex = currentIndex === Number(index) ? null : Number(index);
+    setDonutSelection(dimension, nextIndex);
+  }
+
+  function renderBars(containerId, buckets, metric, dimension, visibleCount) {
+    const container = document.getElementById(containerId);
+    if (!buckets.length) { container.innerHTML = chartEmpty(audienceDimension(dimension)?.label || "图表"); return; }
+    const shown = buckets.slice(0, visibleCount || buckets.length);
+    const width = dimension === "eight_groups"
+      ? Math.max(760, (container.clientWidth || 900) - 8)
+      : Math.max(560, shown.length * 74);
+    const height = 290;
+    const left = 42;
+    const bottom = 72;
+    const plotHeight = height - bottom - 20;
+    const max = Math.max(...shown.map(bucket => Number(bucket.value)), 1);
+    const band = (width - left - 18) / shown.length;
+    const isGeography = dimension === "province" || dimension === "city";
+    const geoBarRatio = isGeography ? (shown.length > 24 ? .68 : shown.length > 14 ? .62 : .52) : .52;
+    const geoLabelStep = 1;
+    const geoValueStep = 1;
+    const bars = shown.map((bucket, index) => {
+      const barHeight = Math.max(2, Number(bucket.value) / max * plotHeight);
+      const barWidth = band * geoBarRatio;
+      const x = left + index * band + (band - barWidth) / 2;
+      const y = height - bottom - barHeight;
+      const showAxisLabel = !isGeography || index % geoLabelStep === 0 || index === shown.length - 1;
+      const showValue = !isGeography || index % geoValueStep === 0 || index === shown.length - 1;
+      const labelLimit = 8;
+      const label = bucket.label.length > labelLimit ? `${bucket.label.slice(0, labelLimit)}…` : bucket.label;
+      const center = x + barWidth / 2;
+      const valueMarkup = showValue ? `<text class="chart-value" x="${center.toFixed(2)}" y="${Math.max(14, y - 6).toFixed(2)}" text-anchor="middle">${escaped(formatAudienceValue(bucket.value, metric))}</text>` : "";
+      const labelMarkup = showAxisLabel ? `<text class="chart-label" x="${center.toFixed(2)}" y="${height - 42}" text-anchor="middle">${escaped(label)}</text>` : "";
+      return `<rect class="chart-bar" data-chart-index="${index}" data-chart-rank="${index + 1}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${barHeight.toFixed(2)}" rx="5" tabindex="0" role="img" aria-label="${escaped(bucket.label)} ${escaped(metric.label)} ${escaped(formatAudienceValue(bucket.value, metric))}"></rect>${valueMarkup}${labelMarkup}`;
+    }).join("");
+    const svgStyle = dimension === "eight_groups" ? `style="width:100%;height:${height}px"` : `style="width:${width}px;height:${height}px"`;
+    const svgMarkup = `<svg ${svgStyle} preserveAspectRatio="none" viewBox="0 0 ${width} ${height}" role="group" aria-label="${escaped(audienceDimension(dimension)?.label || "柱状图")}"><line class="chart-axis" x1="${left}" y1="${height - bottom}" x2="${width - 12}" y2="${height - bottom}"></line>${bars}</svg>`;
+    container.innerHTML = isGeography ? `<div class="geo-chart-scroll">${svgMarkup}</div>` : svgMarkup;
+    attachChartInteractions(container, shown, metric, dimension);
+  }
+
+  function donutPath(start, end, outer, inner, cx, cy) {
+    const point = (radius, angle) => `${(cx + radius * Math.cos(angle)).toFixed(2)} ${(cy + radius * Math.sin(angle)).toFixed(2)}`;
+    const large = end - start > Math.PI ? 1 : 0;
+    return `M ${point(outer, start)} A ${outer} ${outer} 0 ${large} 1 ${point(outer, end)} L ${point(inner, end)} A ${inner} ${inner} 0 ${large} 0 ${point(inner, start)} Z`;
+  }
+
+  function renderDonut(containerId, legendId, buckets, metric, dimension) {
+    const container = document.getElementById(containerId);
+    const legend = document.getElementById(legendId);
+    if (!buckets.length) { container.innerHTML = chartEmpty(audienceDimension(dimension)?.label || "图表"); legend.innerHTML = ""; return; }
+    const colors = ["#2563eb", "#60a5fa", "#14b8a6", "#f59e0b", "#ef6a6a", "#8b5cf6", "#64748b", "#22c55e"];
+    const total = buckets[0].total;
+    let cursor = -Math.PI / 2;
+    const segments = buckets.map((bucket, index) => {
+      const end = cursor + Math.max(0, bucket.share) * Math.PI * 2;
+      const angle = (cursor + end) / 2;
+      const path = donutPath(cursor, end, 92, 56, 116, 124);
+      cursor = end;
+      return `<path class="donut-segment" data-donut-dimension="${dimension}" data-chart-index="${index}" data-donut-angle="${angle.toFixed(6)}" d="${path}" fill="${colors[index % colors.length]}" tabindex="0" role="img" aria-label="${escaped(bucket.label)} ${escaped(metric.label)} ${escaped(formatAudienceValue(bucket.value, metric))}"></path>`;
+    }).join("");
+    container.innerHTML = `<svg viewBox="0 0 232 250" role="group" aria-label="${escaped(audienceDimension(dimension)?.label || "环形图")}">${segments}<text class="donut-center-label" x="116" y="118">${escaped(metric.label)}</text><text class="donut-center-value" x="116" y="143">${escaped(formatAudienceValue(total, metric))}</text></svg>`;
+    legend.innerHTML = buckets.map((bucket, index) => `<button type="button" class="legend-item" data-donut-dimension="${dimension}" data-chart-index="${index}" tabindex="0" role="img" aria-pressed="false" aria-label="${escaped(bucket.label)} ${escaped(metric.label)} ${escaped(formatAudienceValue(bucket.value, metric))}"><span class="legend-swatch" style="background:${colors[index % colors.length]}"></span><span>${escaped(bucket.label)}<span class="legend-detail">${escaped(formatAudienceValue(bucket.value, metric))} · ${new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 2 }).format(bucket.share)}</span></span></button>`).join("");
+    attachChartInteractions(container, buckets, metric, dimension);
+    attachChartInteractions(legend, buckets, metric, dimension);
+    const selectedIndex = audienceState.donutSelection[dimension];
+    setDonutSelection(dimension, selectedIndex != null && selectedIndex < buckets.length ? selectedIndex : null);
+    document.querySelectorAll(`[data-donut-dimension="${dimension}"][data-chart-index]`).forEach(element => element.addEventListener("click", event => {
+      toggleDonutSelection(dimension, event.currentTarget.dataset.chartIndex);
+    }));
+  }
+
+  function renderGeography() {
+    if (audience.status !== "available") return;
+    const metric = metricMap[audienceState.metricId] || audience.metrics[0];
+    const geography = audienceBuckets(audienceState.geoLevel, audienceState.metricId);
+    audienceState.geoVisibleCount = Math.min(Math.max(1, audienceState.geoVisibleCount), Math.max(1, geography.length));
+    const slider = document.getElementById("geo-visible-count");
+    slider.min = geography.length ? 1 : 1;
+    slider.max = Math.max(1, geography.length);
+    slider.value = geography.length ? audienceState.geoVisibleCount : 1;
+    document.getElementById("geo-visible-label").textContent = `显示前 ${geography.length ? audienceState.geoVisibleCount : 0} / ${geography.length} 个`;
+    renderBars("audience-geography", geography, metric, audienceState.geoLevel, audienceState.geoVisibleCount);
+  }
+
+  function renderAudience() {
+    const content = document.getElementById("audience-content");
+    const unavailable = document.getElementById("audience-unavailable");
+    const available = audience.status === "available";
+    content.hidden = !available;
+    unavailable.hidden = available;
+    document.querySelectorAll("[data-audience-metric]").forEach(button => button.classList.toggle("active", button.dataset.audienceMetric === audienceState.metricId));
+    document.querySelectorAll("[data-geo-level]").forEach(button => button.classList.toggle("active", button.dataset.geoLevel === audienceState.geoLevel));
+    if (!available) return;
+    const metric = metricMap[audienceState.metricId] || audience.metrics[0];
+    renderBars("audience-eight-groups", audienceBuckets("eight_groups", audienceState.metricId), metric, "eight_groups");
+    renderDonut("audience-gender", "legend-gender", audienceBuckets("gender", audienceState.metricId), metric, "gender");
+    renderDonut("audience-age", "legend-age", audienceBuckets("age", audienceState.metricId), metric, "age");
+    renderGeography();
   }
 
   function fieldMatches(field, query) {
@@ -734,7 +986,34 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   });
   document.addEventListener("keydown", event => {
     if (event.key === "Escape" && !fieldModal.hidden) closeFieldDialog();
+    if (event.key === "Escape") hideChartTooltip();
   });
+  document.querySelectorAll("[data-section]").forEach(button => button.addEventListener("click", event => {
+    const section = event.currentTarget.dataset.section;
+    document.querySelectorAll("[data-section]").forEach(item => item.classList.toggle("active", item.dataset.section === section));
+    document.querySelectorAll("[data-section-panel]").forEach(panel => { panel.hidden = panel.dataset.sectionPanel !== section; });
+    if (section === "audience") renderAudience();
+  }));
+  document.querySelectorAll("[data-audience-metric]").forEach(button => button.addEventListener("click", event => {
+    audienceState.metricId = event.currentTarget.dataset.audienceMetric;
+    const total = audienceBuckets(audienceState.geoLevel, audienceState.metricId).length;
+    audienceState.geoVisibleCount = Math.min(10, Math.max(1, total));
+    hideChartTooltip();
+    renderAudience();
+  }));
+  document.querySelectorAll("[data-geo-level]").forEach(button => button.addEventListener("click", event => {
+    audienceState.geoLevel = event.currentTarget.dataset.geoLevel;
+    const total = audienceBuckets(audienceState.geoLevel, audienceState.metricId).length;
+    audienceState.geoVisibleCount = Math.min(10, Math.max(1, total));
+    hideChartTooltip();
+    renderGeography();
+  }));
+  document.getElementById("geo-visible-count").addEventListener("input", event => {
+    audienceState.geoVisibleCount = Number(event.currentTarget.value);
+    hideChartTooltip();
+    renderGeography();
+  });
+  renderAudience();
   search.addEventListener("input", event => { state.query = event.target.value; state.page = 1; render(); });
   document.getElementById("first").addEventListener("click", () => { state.page = 1; render(); });
   document.getElementById("previous").addEventListener("click", () => { state.page = Math.max(1, state.page - 1); render(); });

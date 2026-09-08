@@ -111,6 +111,47 @@ def _field(model, field_id):
     return next(item for item in model["fields"] if item["id"] == field_id)
 
 
+def _attach_audience_facts(run_dir):
+    diagnosis = run_dir / "rpa" / "diagnosis-records" / "m-1.json"
+    diagnosis.parent.mkdir(parents=True, exist_ok=True)
+    diagnosis.write_text('{"safe":"fixture"}', encoding="utf-8")
+    source_ref = {
+        "path": diagnosis.relative_to(run_dir).as_posix(),
+        "sha256": hashlib.sha256(diagnosis.read_bytes()).hexdigest(),
+        "sizeBytes": diagnosis.stat().st_size,
+    }
+    audience = []
+    for dimension_key, dimension_name, label in (
+        ("user_group_label_name", "八大人群", "精致妈妈"),
+        ("gender", "性别", "女"),
+        ("age", "年龄", "24-30"),
+        ("province_name", "省份", "浙江"),
+        ("city_name", "城市", "杭州"),
+    ):
+        audience.append({
+            "Dimensions": {dimension_key: {"Value": label, "ValueStr": label}},
+            "Metrics": {"live_show_count_for_roi2_v2": {"Value": 1}},
+            "audienceValue": {"Value": label, "ValueStr": label},
+            "dimensionKey": dimension_key,
+            "dimensionName": dimension_name,
+            "displayMetric": "SHOW_COUNT",
+            "displayMetricName": "整体展现次数",
+            "materialId": "m-1",
+            "metricValue": 1,
+            "sourceRef": dict(source_ref),
+        })
+    _write_json(run_dir / "fact-pack" / "audience.json", {
+        "audience": audience, "schemaVersion": 1, "sourceRefs": [source_ref], "status": "available",
+    })
+    manifest_path = run_dir / "fact-pack" / "manifest.json"
+    _write_json(manifest_path, {
+        "schemaVersion": 1,
+        "materialIds": ["m-1"],
+        "counts": {"audienceFacts": len(audience), "materials": 1},
+        "quality": {"categoryStatuses": {"audience": "available"}},
+    })
+
+
 class OverviewProjectionTests(unittest.TestCase):
     def test_build_overview_projects_all_source_rows_with_verified_field_labels(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -169,8 +210,124 @@ class OverviewProjectionTests(unittest.TestCase):
             with self.assertRaisesRegex(OverviewReportError, "material_id"):
                 build_overview_data(run_dir, REGISTRY_PATH)
 
+    def test_overview_model_includes_safe_aggregated_audience_section(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = _make_run(Path(temp_dir))
+            _attach_audience_facts(run_dir)
+            model = build_overview_data(run_dir, REGISTRY_PATH)
+
+        audience = model["audienceOverview"]
+        self.assertEqual(audience["status"], "available")
+        self.assertIn("SHOW_COUNT", [item["id"] for item in audience["metrics"]])
+        self.assertNotIn("shopId", json.dumps(audience, ensure_ascii=False))
+        self.assertNotIn("https://", json.dumps(audience, ensure_ascii=False))
+
 
 class OverviewHtmlTests(unittest.TestCase):
+    def test_rendered_html_has_audience_metric_linkage_and_accessible_chart_contracts(self):
+        model = {
+            "schemaVersion": 1,
+            "kind": "qianchuan_material_leaderboard_overview",
+            "runId": "run-test",
+            "source": {"path": "source-data/materials.csv.structured.json", "sha256": "a" * 64, "recordCount": 0},
+            "queryContext": {"period": {}, "filters": {}, "ranking": {}},
+            "fields": [], "rows": [],
+            "audienceOverview": {
+                "schemaVersion": 1, "status": "available",
+                "source": {"path": "fact-pack/audience.json", "sha256": "b" * 64, "recordCount": 12},
+                "materialScope": {"count": 2},
+                "metrics": [
+                    {"id": "SHOW_COUNT", "label": "整体展现次数", "sourceField": "show", "unit": "count"},
+                    {"id": "TRANSACTION_AMOUNT", "label": "整体成交金额", "sourceField": "amount", "unit": "currency"},
+                    {"id": "CLICK_COUNT", "label": "整体点击次数", "sourceField": "click", "unit": "count"},
+                ],
+                "dimensions": {
+                    "eight_groups": {"label": "八大人群分布", "chart": "bar", "bucketsByMetric": {"SHOW_COUNT": [{"label": "精致妈妈", "value": 1, "share": 1, "total": 1}]}},
+                    "gender": {"label": "性别分布", "chart": "donut", "bucketsByMetric": {"SHOW_COUNT": [{"label": "女", "value": 1, "share": 1, "total": 1}]}},
+                    "age": {"label": "年龄分布", "chart": "donut", "bucketsByMetric": {"SHOW_COUNT": [{"label": "24-30", "value": 1, "share": 1, "total": 1}]}},
+                    "geography": {"label": "地域分布", "chart": "bar", "levels": {
+                        "province": {"label": "省份分布", "chart": "bar", "bucketsByMetric": {"SHOW_COUNT": [{"label": "浙江", "value": 1, "share": 1, "total": 1}]}},
+                        "city": {"label": "城市分布", "chart": "bar", "bucketsByMetric": {"SHOW_COUNT": [{"label": "杭州", "value": 1, "share": 1, "total": 1}]}},
+                    }},
+                },
+                "coverage": {}, "gaps": [],
+            },
+        }
+        html = render_overview_html(model)
+
+        self.assertIn("整体展现次数", html)
+        self.assertIn("整体成交金额", html)
+        self.assertIn("整体点击次数", html)
+        self.assertIn("data-audience-metric", html)
+        self.assertIn('data-geo-level="province"', html)
+        self.assertIn('data-geo-level="city"', html)
+        self.assertIn('id="geo-visible-count"', html)
+        self.assertIn("renderAudience", html)
+        self.assertIn("showChartTooltip", html)
+        self.assertNotIn("fetch(", html)
+        self.assertNotIn('class="coverage-grid"', html)
+        self.assertNotIn('class="audience-header"', html)
+        self.assertNotIn("指标值按当前维度有效聚合记录汇总，占比以本维度总值为分母", html)
+        self.assertNotIn("人群数据汇总 / 指标值", html)
+        self.assertNotIn("省份和城市分别计算本维度占比", html)
+
+    def test_audience_charts_keep_height_when_width_changes_and_link_donut_selection(self):
+        model = {
+            "schemaVersion": 1,
+            "kind": "qianchuan_material_leaderboard_overview",
+            "runId": "run-test",
+            "source": {"path": "source-data/materials.csv.structured.json", "sha256": "a" * 64, "recordCount": 0},
+            "queryContext": {"period": {}, "filters": {}, "ranking": {}},
+            "fields": [], "rows": [],
+            "audienceOverview": {"status": "available", "metrics": [{"id": "SHOW_COUNT", "label": "整体展现次数", "unit": "count"}], "dimensions": {}, "gaps": []},
+        }
+        html = render_overview_html(model)
+
+        self.assertIn('preserveAspectRatio="none"', html)
+        self.assertIn('style="width:${width}px;height:${height}px"', html)
+        self.assertIn("setDonutSelection", html)
+        self.assertIn('data-donut-dimension', html)
+        self.assertIn('data-donut-angle', html)
+        self.assertIn('translate(', html)
+        self.assertIn('transition: transform', html)
+        self.assertNotIn('.donut-segment.active { stroke: #172033;', html)
+        self.assertIn('const nextIndex = currentIndex === Number(index) ? null : Number(index);', html)
+        self.assertIn('addEventListener("click"', html)
+
+    def test_audience_bar_labels_are_horizontal_and_width_isolated_to_cards(self):
+        model = {
+            "schemaVersion": 1,
+            "kind": "qianchuan_material_leaderboard_overview",
+            "runId": "run-test",
+            "source": {"path": "source-data/materials.csv.structured.json", "sha256": "a" * 64, "recordCount": 0},
+            "queryContext": {"period": {}, "filters": {}, "ranking": {}},
+            "fields": [], "rows": [],
+            "audienceOverview": {"status": "available", "metrics": [{"id": "SHOW_COUNT", "label": "整体展现次数", "unit": "count"}], "dimensions": {}, "gaps": []},
+        }
+        html = render_overview_html(model)
+
+        self.assertNotIn('rotate(-30', html)
+        self.assertIn('const barWidth = band * geoBarRatio;', html)
+        self.assertIn('.audience-card { width: 100%; min-width: 0;', html)
+        self.assertIn('overflow: hidden;', html)
+        self.assertIn('.chart-box { min-width: 0; max-width: 100%;', html)
+        self.assertIn('.chart-box svg { display: block; min-width: 0; max-width: 100%;', html)
+        self.assertIn('overflow-y: hidden;', html)
+        self.assertIn('#audience-content { min-width: 0; }', html)
+        self.assertIn('#audience-geography { display: block; width: 100%; max-width: 100%; overflow: hidden;', html)
+        self.assertIn('.geo-chart-scroll { width: 100%; max-width: 100%; overflow-x: auto;', html)
+        self.assertIn('.geo-chart-scroll svg { max-width: none; margin: 0 auto;', html)
+        self.assertIn('const geoBarRatio = isGeography ? (shown.length > 24 ? .68 : shown.length > 14 ? .62 : .52) : .52;', html)
+        self.assertIn('const barWidth = band * geoBarRatio;', html)
+        self.assertIn('const geoLabelStep = 1;', html)
+        self.assertIn('const geoValueStep = 1;', html)
+        self.assertIn('const labelLimit = 8;', html)
+        self.assertIn('geoLabelStep', html)
+        self.assertIn('geoValueStep', html)
+        self.assertIn('showAxisLabel', html)
+        self.assertIn('showValue', html)
+        self.assertIn('function renderGeography()', html)
+
     def test_rendered_html_has_title_id_search_field_drawer_and_ten_row_pagination(self):
         model = {
             "schemaVersion": 1,
