@@ -87,6 +87,11 @@ class ScriptFormulaOverviewTests(unittest.TestCase):
         self.assertEqual(_bucket(model["secondaryBucketsByPrimary"]["商品卖点"], "适用场景")["value"], 2)
         self.assertEqual(_bucket(model["primaryBuckets"], "商品卖点")["total"], 2)
         self.assertEqual(_bucket(model["secondaryBucketsByPrimary"]["商品卖点"], "适用场景")["total"], 2)
+        self.assertEqual(_bucket(model["primaryBuckets"], "价格优惠")["value"], 1)
+        self.assertEqual(
+            _bucket(model["secondaryBucketsByPrimary"]["价格优惠"], "降价/折扣")["total"],
+            1,
+        )
         self.assertEqual(model["gaps"], [{"code": "formula_labels_unavailable", "count": 1}])
 
     def test_projection_rejects_manifest_or_diagnostic_hash_mismatch(self):

@@ -205,7 +205,10 @@ def build_script_formula_overview(run_dir: Path) -> dict:
 
     script_hash = hashlib.sha256(fact_path.read_bytes()).hexdigest()
     primary_buckets = _bucket_list(primary_materials, len(set(material_id for material_id, _ in primary_pairs)))
-    primary_totals = {bucket["label"]: bucket["total"] for bucket in primary_buckets}
+    # The secondary distribution is scoped to the materials covered by its
+    # selected primary formula.  `value` is that primary's coverage; `total`
+    # is the global number of materials with any primary formula.
+    primary_totals = {bucket["label"]: bucket["value"] for bucket in primary_buckets}
     secondary_by_primary = {}
     for primary in (bucket["label"] for bucket in primary_buckets):
         secondary_by_primary[primary] = _bucket_list(secondary_materials.get(primary, {}), primary_totals[primary])
