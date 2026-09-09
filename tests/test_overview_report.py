@@ -333,6 +333,94 @@ class OverviewProjectionTests(unittest.TestCase):
 
 
 class OverviewHtmlTests(unittest.TestCase):
+    def test_single_material_section_has_scoped_selector_and_five_fact_panels(self):
+        model = {
+            "schemaVersion": 1, "kind": "qianchuan_material_leaderboard_overview", "runId": "run-test",
+            "source": {"path": "source-data/materials.csv.structured.json", "sha256": "a" * 64, "recordCount": 1},
+            "queryContext": {"period": {}, "filters": {}, "ranking": {}}, "fields": [], "rows": [],
+            "singleMaterialOverview": {"status": "available", "materialScope": {"count": 1, "materialIds": ["m-1"]}, "materials": [{
+                "materialId": "m-1", "rank": 1, "title": "素材标题", "leaderboard": {"fields": []},
+                "interactions": {"status": "unavailable", "metrics": []}, "script": {"status": "unavailable", "formula": []},
+                "audience": {"status": "unavailable", "dimensions": {}},
+                "highlights": {"status": "unavailable", "cards": [], "video": {"status": "unavailable", "message": "本次详情数据未保存可播放视频"}},
+            }]},
+        }
+        html = render_overview_html(model)
+
+        self.assertIn('data-section="single-material"', html)
+        self.assertIn('id="single-material-panel"', html)
+        self.assertIn('id="single-material-selector"', html)
+        self.assertIn('class="single-material-selector-shell"', html)
+        self.assertIn('class="single-material-detail-card"', html)
+        self.assertIn('id="single-material-video"', html)
+        self.assertIn('data-single-panel="delivery"', html)
+        self.assertIn('id="single-field-button"', html)
+        self.assertIn("deliveryFields: {}", html)
+        self.assertIn('data-single-panel="interactions"', html)
+        self.assertIn('data-single-panel="script"', html)
+        self.assertIn('data-single-panel="audience"', html)
+        self.assertIn('data-single-panel="highlights"', html)
+        self.assertIn("singleMaterialOverview", html)
+
+    def test_single_material_controls_keep_width_only_scaling_and_live_geo_window(self):
+        model = {
+            "schemaVersion": 1, "kind": "qianchuan_material_leaderboard_overview", "runId": "run-test",
+            "source": {"path": "source-data/materials.csv.structured.json", "sha256": "a" * 64, "recordCount": 1},
+            "queryContext": {"period": {}, "filters": {}, "ranking": {}}, "fields": [], "rows": [],
+            "singleMaterialOverview": {"status": "available", "materials": [{
+                "materialId": "m-1", "rank": 1, "title": "素材标题", "leaderboard": {"fields": [{"id": "f-1", "label": "指标一", "value": 1}]},
+                "interactions": {"status": "available", "metrics": [{"id": "CLICK_COUNT", "label": "整体点击次数", "points": [{"second": 0, "value": 1}]}]},
+                "script": {"status": "available", "formula": [{"primary": "商品卖点", "secondary": ["适用场景"]}], "text": "脚本"},
+                "audience": {"status": "unavailable", "dimensions": {}},
+                "highlights": {"status": "unavailable", "cards": [], "video": {"status": "unavailable", "message": "视频不可用"}},
+            }]},
+        }
+        html = render_overview_html(model)
+
+        self.assertIn('style="width:${scaledWidth}px;height:${height}px"', html)
+        self.assertIn('step="1"', html)
+        self.assertNotIn('scaledHeight', html)
+        self.assertIn('data-single-audience-geo-range', html)
+        self.assertIn('renderSingleAudienceGeography', html)
+        self.assertIn('single-audience-geo-chart', html)
+        self.assertIn('data-field-action="select-all"', html)
+        self.assertIn('data-field-action="clear-all"', html)
+        self.assertNotIn('data-field-action="reset"', html)
+        self.assertIn("const singleDefaultFieldIds", html)
+        self.assertIn("function defaultSingleFieldIds", html)
+        self.assertIn('const chartScroll = target.querySelector(".single-chart");', html)
+        self.assertIn("const scrollLeft = chartScroll.scrollLeft;", html)
+        self.assertIn("chartScroll.scrollLeft = scrollLeft;", html)
+        self.assertIn('single-formula-primary-row', html)
+        self.assertIn('single-formula-secondary-row', html)
+        self.assertNotIn('data-single-formula-level="primary"', html)
+        self.assertIn('data-single-formula-level="secondary"', html)
+        self.assertIn('点击二级内容公式可联动脚本证据', html)
+        self.assertIn('.single-audience-grid > .single-audience-subsection { padding: 0; background: transparent; border: 0;', html)
+        self.assertIn('max-width: 170px;', html)
+        self.assertIn('function singleRenderVideo(material)', html)
+
+    def test_single_material_highlights_use_four_by_two_grid_and_eight_card_pages(self):
+        model = {
+            "schemaVersion": 1, "kind": "qianchuan_material_leaderboard_overview", "runId": "run-test",
+            "source": {"path": "source-data/materials.csv.structured.json", "sha256": "a" * 64, "recordCount": 1},
+            "queryContext": {"period": {}, "filters": {}, "ranking": {}}, "fields": [], "rows": [],
+            "singleMaterialOverview": {"status": "available", "materials": [{
+                "materialId": "m-1", "rank": 1, "title": "素材标题", "leaderboard": {"fields": []},
+                "interactions": {"status": "unavailable", "metrics": []}, "script": {"status": "unavailable", "formula": []},
+                "audience": {"status": "unavailable", "dimensions": {}},
+                "highlights": {"status": "available", "cards": [{"second": index, "artifact": {"path": f"frame-{index}.jpg"}} for index in range(9)]},
+            }]},
+        }
+        html = render_overview_html(model)
+
+        self.assertIn(".single-highlight-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));", html)
+        self.assertIn("const singleHighlightPageSize = 8;", html)
+        self.assertIn("Math.ceil(cards.length / singleHighlightPageSize)", html)
+        self.assertIn("const start = (singleState.framePage - 1) * singleHighlightPageSize;", html)
+        self.assertIn("cards.slice(start, start + singleHighlightPageSize)", html)
+        self.assertIn(".single-highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }", html)
+
     def test_highlight_section_has_gallery_pagination_modal_and_material_jump_contracts(self):
         model = {
             "schemaVersion": 1,

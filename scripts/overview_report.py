@@ -23,6 +23,10 @@ try:
     from highlight_overview import HighlightOverviewError, build_highlight_overview
 except ImportError:  # pragma: no cover - supports package-style imports.
     from .highlight_overview import HighlightOverviewError, build_highlight_overview
+try:
+    from single_material_overview import SingleMaterialOverviewError, build_single_material_overview
+except ImportError:  # pragma: no cover - supports package-style imports.
+    from .single_material_overview import SingleMaterialOverviewError, build_single_material_overview
 
 
 SCHEMA_VERSION = 1
@@ -393,6 +397,21 @@ def build_overview_data(run_dir, registry_path):
             "status": "unavailable",
             "gaps": [{"code": "highlight_frames_unavailable"}],
         }
+    try:
+        model["singleMaterialOverview"] = build_single_material_overview(run_root)
+        for material in model["singleMaterialOverview"].get("materials", []):
+            for field in material.get("leaderboard", {}).get("fields", []):
+                registered = field_by_id.get(field.get("id"))
+                if registered:
+                    field["label"] = registered["label"]
+    except SingleMaterialOverviewError:
+        model["singleMaterialOverview"] = {
+            "schemaVersion": 1,
+            "status": "unavailable",
+            "materialScope": {"count": 0, "materialIds": []},
+            "materials": [],
+            "gaps": [{"code": "single_material_unavailable"}],
+        }
     return model
 
 
@@ -451,9 +470,10 @@ body.modal-open { overflow: hidden; }
 .field-option input { flex: 0 0 auto; width: 16px; height: 16px; margin: 1px 0 0; accent-color: var(--accent); }
 .field-modal-selected { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #fbfcfe; border-left: 1px solid var(--line); }
 .field-modal-selected-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 16px 12px; border-bottom: 1px solid var(--line); }
+.field-modal-selection-actions { display: flex; gap: 4px; }
 .field-modal-selected-header strong { font-size: 14px; }
 .field-modal-selected-header span { color: var(--muted); font-size: 12px; }
-.field-modal-selected-header button { min-height: 28px; padding: 4px 8px; border: 0; color: var(--accent); font-size: 12px; }
+.field-modal-selection-actions button { min-height: 28px; padding: 4px 7px; border: 0; color: var(--accent); font-size: 12px; }
 .field-modal-selected-list { min-height: 0; margin: 0; padding: 12px; overflow: auto; list-style: none; }
 .field-modal-selected-item { display: flex; align-items: center; gap: 8px; min-height: 38px; margin-bottom: 7px; padding: 7px 8px; background: #f1f3f7; border-radius: 7px; color: #34445e; font-size: 13px; }
 .field-modal-selected-item .field-drag-handle { color: #8a96a8; font-size: 16px; line-height: 1; }
@@ -531,6 +551,98 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 .script-formula-segment { transform-box: view-box; transform-origin: 116px 130px; transition: transform .24s cubic-bezier(.22, .61, .36, 1), filter .24s ease, stroke-width .24s ease; }
 .script-formula-segment.active { filter: brightness(.9); stroke-width: 3; }
 .highlight-section { display: grid; gap: 16px; }
+.single-material-section { display: grid; gap: 16px; }
+.single-material-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 16px; align-items: start; }
+.single-material-selector-shell { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: hidden; padding: 14px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
+.single-material-selector { max-height: calc(100vh - 60px); overflow: auto; }
+.single-material-selector-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 2px 10px; color: var(--text); font-size: 13px; }
+.single-material-selector-header span { color: var(--muted); font-size: 11px; }
+.single-material-items { display: grid; gap: 10px; }
+.single-material-selector button { display: block; width: 100%; min-height: 62px; padding: 9px 10px; text-align: left; }
+.single-material-selector button.active { border-color: var(--accent); background: var(--accent-soft); color: #1d4ed8; box-shadow: inset 3px 0 0 var(--accent); }
+.single-material-selector .single-material-rank { font-weight: 700; }
+.single-material-selector .single-material-id { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+.single-material-main { min-width: 0; }
+.single-material-detail-card { min-width: 0; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
+.single-material-topbar { display: grid; grid-template-columns: minmax(180px, .75fr) minmax(0, 1.25fr); gap: 14px; align-items: stretch; margin-bottom: 12px; }
+.single-material-header { display: flex; min-height: 96px; flex-direction: column; justify-content: center; margin: 0; padding: 14px 16px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 12px; }
+.single-material-header h2 { margin: 0; font-size: 22px; line-height: 1.35; overflow-wrap: anywhere; }
+.single-material-header p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.single-material-video-card { min-width: 0; min-height: 96px; overflow: hidden; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 12px; }
+.single-material-video-card video { display: block; width: 100%; height: 100%; min-height: 96px; object-fit: cover; background: #0f172a; }
+.single-material-video-card .single-video-unavailable { min-height: 96px; height: 100%; border: 0; border-radius: 0; background: transparent; }
+.single-material-tabs { position: sticky; top: 0; z-index: 8; display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; padding: 10px 0 12px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.single-material-tabs button.active { border-color: var(--accent); background: var(--accent); color: white; }
+.single-material-panel { scroll-margin-top: 76px; }
+.single-material-panel h3 { margin: 0 0 12px; font-size: 16px; }
+.single-delivery-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--muted); font-size: 12px; }
+.single-delivery-header h3 { color: var(--text); }
+.single-field-summary { margin-bottom: 8px; color: var(--muted); font-size: 12px; }
+.single-field-chooser { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); font-size: 12px; }
+.single-field-chooser label { display: inline-flex; gap: 5px; align-items: center; }
+.single-metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.single-metric-card { min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
+.single-metric-card small { display: block; color: var(--muted); overflow-wrap: anywhere; }
+.single-metric-card strong { display: block; margin-top: 8px; font-size: 18px; }
+.single-interaction-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.single-interaction-controls button.active, .single-formula-chip.active { border-color: var(--accent); background: var(--accent-soft); color: #1d4ed8; }
+.single-chart { min-height: 230px; overflow-x: auto; overflow-y: hidden; }
+.single-chart svg { display: block; min-width: 0; height: 210px; }
+.single-chart-line { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+.single-scale { display: flex; gap: 10px; align-items: center; margin-top: 10px; color: var(--muted); font-size: 12px; }
+.single-scale input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.single-scale output { min-width: 48px; color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+.single-formula-chips { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; }
+.single-formula-group { display: grid; gap: 6px; min-width: min(100%, 360px); padding: 7px 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); }
+.single-formula-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.single-formula-secondary-row { padding-left: 22px; }
+.single-formula-level { color: var(--muted); font-size: 11px; font-weight: 650; }
+.single-formula-connector { color: var(--muted); font-size: 13px; }
+.single-formula-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
+.single-formula-chip-primary { cursor: default; }
+.single-formula-chip-secondary { border-style: dashed; }
+.single-script-formula-header, .single-script-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.single-script-formula-header span, .single-script-heading span { color: var(--muted); font-size: 12px; }
+.single-formula-dot { width: 8px; height: 8px; border-radius: 2px; }
+.single-script-text { line-height: 2; white-space: pre-wrap; }
+.single-script-text mark { padding: 1px 2px; background: color-mix(in srgb, var(--single-script-highlight) 15%, transparent); border-bottom: 2px solid var(--single-script-highlight); border-radius: 3px; }
+.single-script-text mark:not(.active) { opacity: .56; }
+.single-audience-workspace { display: grid; gap: 16px; }
+.single-audience-metric-switcher { display: flex; gap: 8px; flex-wrap: wrap; }
+.single-audience-metric-switcher button.active { border-color: var(--accent); background: var(--accent-soft); color: #1d4ed8; font-weight: 650; }
+.single-audience-subsection { min-width: 0; padding: 14px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 10px; }
+.single-audience-subsection h4 { margin: 0 0 10px; font-size: 14px; }
+.single-audience-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.single-audience-grid > .single-audience-subsection { padding: 0; background: transparent; border: 0; border-radius: 0; }
+.single-audience-dimension { min-width: 0; padding: 0; }
+.single-audience-dimension h4 { margin: 0 0 10px; }
+.single-audience-chart-box { min-width: 0; max-width: 100%; min-height: 250px; overflow-x: auto; overflow-y: hidden; }
+.single-audience-chart-box svg { display: block; max-width: 100%; height: 290px; }
+.single-audience-donut-layout { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(150px, 1fr); align-items: center; gap: 12px; }
+.single-audience-donut-layout svg { min-width: 220px; height: 250px; }
+.single-audience-geo-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.single-audience-geo-switcher { display: flex; gap: 8px; flex-wrap: wrap; }
+.single-audience-geo-switcher button.active { border-color: var(--accent); background: var(--accent-soft); color: #1d4ed8; font-weight: 650; }
+.single-audience-geo-slider { display: flex; gap: 10px; align-items: center; margin-top: 12px; color: var(--muted); font-size: 12px; }
+.single-audience-geo-slider input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.single-audience-geo-slider output { min-width: 120px; text-align: right; }
+.single-audience-geo-chart { width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+.single-audience-geo-chart svg { display: block; max-width: none; }
+.single-audience-bucket { display: grid; grid-template-columns: minmax(90px, 1fr) 2fr auto; gap: 8px; align-items: center; margin-top: 7px; font-size: 12px; }
+.single-audience-bar { height: 8px; overflow: hidden; border-radius: 99px; background: #e6edf7; }
+.single-audience-bar span { display: block; height: 100%; background: #5b8def; }
+.single-highlight-layout { display: block; }
+.single-video-unavailable { display: grid; min-height: 260px; place-items: center; padding: 20px; color: var(--muted); text-align: center; border: 1px dashed var(--line-strong); border-radius: 12px; background: var(--surface-muted); }
+.single-highlight-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.single-highlight-card { min-width: 0; max-width: 170px; justify-self: center; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
+.single-highlight-card button { display: block; width: 100%; padding: 0; border: 0; background: transparent; }
+.single-highlight-card img { display: block; width: 100%; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 7px; }
+.single-highlight-card p { margin: 7px 2px 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.single-highlight-pager { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; color: var(--muted); font-size: 12px; }
+.single-lightbox[hidden] { display: none; }
+.single-lightbox { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; padding: 20px; background: rgba(15, 23, 42, .78); }
+.single-lightbox img { max-width: min(90vw, 900px); max-height: 85vh; object-fit: contain; }
+@media (max-width: 760px) { .single-material-layout { grid-template-columns: 1fr; } .single-material-selector-shell { position: static; max-height: 210px; } .single-material-selector { max-height: 180px; } .single-material-topbar { grid-template-columns: 1fr; } .single-material-video-card, .single-material-header { min-height: 96px; } .single-metric-grid, .single-audience-grid { grid-template-columns: 1fr; } .single-audience-donut-layout { grid-template-columns: 1fr; } .single-highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .single-highlight-card { max-width: 150px; } }
 .highlight-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
 .highlight-card { min-width: 0; overflow: hidden; padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
 .highlight-image-button { display: block; width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; }
@@ -566,17 +678,13 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   <button type="button" data-section="audience">人群数据</button>
   <button type="button" data-section="scripts">脚本内容公式</button>
   <button type="button" data-section="highlights">高光帧数据</button>
+  <button type="button" data-section="single-material">单素材数据</button>
 </nav>
-<section id="materials-panel" data-section-panel="materials">
-<div class="toolbar">
-  <input id="search" type="search" placeholder="输入素材标题或 ID" aria-label="输入素材标题或 ID">
-  <button id="field-button" type="button">自定义指标</button>
-</div>
 <section id="field-management" class="field-modal" role="dialog" aria-modal="true" aria-labelledby="field-management-title" hidden>
   <div class="field-modal-backdrop" data-field-action="cancel"></div>
   <div class="field-modal-panel">
     <header class="field-modal-header">
-      <div><h2 id="field-management-title">自定义指标</h2><p>选择后将按照自定义指标顺序呈现表格列</p></div>
+      <div><h2 id="field-management-title">自定义指标</h2><p id="field-management-description">选择后将按照自定义指标顺序呈现表格列</p></div>
       <button class="field-modal-close" type="button" data-field-action="cancel" aria-label="关闭自定义指标">×</button>
     </header>
     <div class="field-modal-body">
@@ -586,16 +694,21 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
         <div id="field-options" class="field-options"></div>
       </section>
       <aside class="field-modal-selected" aria-label="已选择指标">
-        <div class="field-modal-selected-header"><div><strong>已选择</strong> <span id="selected-count"></span></div><button type="button" data-field-action="reset">重置</button></div>
+        <div class="field-modal-selected-header"><div><strong>已选择</strong> <span id="selected-count"></span></div><div class="field-modal-selection-actions"><button type="button" data-field-action="select-all">全选</button><button type="button" data-field-action="clear-all">全不选</button></div></div>
         <ol id="selected-fields" class="field-modal-selected-list"></ol>
       </aside>
     </div>
     <footer class="field-modal-footer">
-      <p>素材名称为固定列，其他列按自定义指标顺序排列</p>
+      <p id="field-management-footer-note">素材名称为固定列，其他列按自定义指标顺序排列</p>
       <div class="field-modal-footer-actions"><button type="button" data-field-action="cancel">取消</button><button class="primary" type="button" data-field-action="confirm">确定</button></div>
     </footer>
   </div>
 </section>
+<section id="materials-panel" data-section-panel="materials">
+<div class="toolbar">
+  <input id="search" type="search" placeholder="输入素材标题或 ID" aria-label="输入素材标题或 ID">
+  <button id="field-button" type="button">自定义指标</button>
+</div>
 <div id="summary" class="summary"></div>
 <div id="table-container" class="table-wrap"></div>
 <div class="pager">
@@ -623,6 +736,25 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
         <button id="highlight-next" type="button">后</button>
         <button id="highlight-last" type="button">末</button>
       </span>
+    </div>
+</div>
+</section>
+<section id="single-material-panel" class="single-material-section" data-section-panel="single-material" hidden>
+  <div id="single-material-unavailable" class="audience-card empty" hidden>单素材详情数据不可用</div>
+  <div id="single-material-content" class="single-material-layout" hidden>
+    <aside class="single-material-selector-shell" aria-label="详情素材选择"><div id="single-material-selector" class="single-material-selector"></div></aside>
+    <div class="single-material-main">
+      <div class="single-material-detail-card">
+        <div class="single-material-topbar"><div id="single-material-video" class="single-material-video-card"></div><header class="single-material-header"><h2 id="single-material-title"></h2><p id="single-material-id"></p></header></div>
+        <nav id="single-material-tabs" class="single-material-tabs" aria-label="单素材数据板块">
+          <button type="button" data-single-anchor="delivery">投放数据</button><button type="button" data-single-anchor="interactions">互动时序分析</button><button type="button" data-single-anchor="script">脚本分析</button><button type="button" data-single-anchor="audience">人群分析</button><button type="button" data-single-anchor="highlights">高光帧数据</button>
+        </nav>
+        <section id="single-material-delivery" class="audience-card single-material-panel" data-single-panel="delivery"><div class="single-delivery-header"><h3>投放数据</h3><button id="single-field-button" type="button" aria-expanded="false">自定义指标</button></div><div id="single-delivery-content"></div></section>
+        <section id="single-material-interactions" class="audience-card single-material-panel" data-single-panel="interactions"><h3>互动时序分析</h3><div id="single-interaction-content"></div></section>
+        <section id="single-material-script" class="audience-card single-material-panel" data-single-panel="script"><h3>脚本分析</h3><div id="single-script-content"></div></section>
+        <section id="single-material-audience" class="audience-card single-material-panel" data-single-panel="audience"><h3>人群分析</h3><div id="single-audience-content"></div></section>
+        <section id="single-material-highlights" class="audience-card single-material-panel" data-single-panel="highlights"><h3>高光帧数据</h3><div id="single-highlights-content"></div></section>
+      </div>
     </div>
   </div>
 </section>
@@ -664,6 +796,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     <div class="highlight-modal-body"><img id="highlight-modal-image" alt=""></div>
   </div>
 </section>
+<section id="single-lightbox" class="single-lightbox" role="dialog" aria-modal="true" aria-labelledby="single-lightbox-title" hidden><div><h2 id="single-lightbox-title" class="sr-only">单素材高光帧预览</h2><button id="single-lightbox-close" type="button" aria-label="关闭单素材高光帧预览">关闭</button><img id="single-lightbox-image" alt=""></div></section>
 </main>
 <script id="overview-model" type="application/json">""" + embedded + r"""</script>
 <script>
@@ -715,6 +848,236 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   const highlightModal = document.getElementById("highlight-modal");
   const highlightModalImage = document.getElementById("highlight-modal-image");
   const highlightModalTitle = document.getElementById("highlight-modal-title");
+  const singleMaterialOverview = model.singleMaterialOverview || { status: "unavailable", materialScope: { count: 0, materialIds: [] }, materials: [] };
+  const singleMaterials = Array.isArray(singleMaterialOverview.materials) ? singleMaterialOverview.materials : [];
+  const singleMaterialById = Object.fromEntries(singleMaterials.map(item => [item.materialId, item]));
+  const singleState = { selectedMaterialId: singleMaterials[0]?.materialId || null, anchor: "delivery", interactionMetric: null, chartScale: 100, framePage: 1, selectedFormula: null, audienceMetricId: "SHOW_COUNT", audienceGeoLevel: "province", audienceGeoVisible: 10, audienceDonutSelection: { gender: null, age: null }, deliveryFields: {} };
+  const singleHighlightPageSize = 8;
+  const fieldDialog = { scope: "leaderboard", materialId: null };
+  let singleLightboxTrigger = null;
+  const singleMaterialUnavailable = document.getElementById("single-material-unavailable");
+  const singleMaterialContent = document.getElementById("single-material-content");
+  const singleMaterialSelector = document.getElementById("single-material-selector");
+  const singleMaterialVideo = document.getElementById("single-material-video");
+  const singleLightbox = document.getElementById("single-lightbox");
+  const singleLightboxImage = document.getElementById("single-lightbox-image");
+
+  function singleCurrentMaterial() {
+    if (!singleMaterialById[singleState.selectedMaterialId]) singleState.selectedMaterialId = singleMaterials[0]?.materialId || null;
+    return singleMaterialById[singleState.selectedMaterialId] || null;
+  }
+
+  function singleValue(value) {
+    if (value == null || value === "") return "—";
+    return typeof value === "number" ? new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 4 }).format(value) : escaped(value);
+  }
+
+  function singleEmpty(label) { return `<div class="empty">暂无${escaped(label)}有效数据</div>`; }
+
+  const singleDefaultFieldIds = [
+    "stat_cost_for_overall_roi2",
+    "stat_cost_for_roi2",
+    "total_pay_order_count_for_roi2",
+    "total_order_settle_amount_for_roi2_1h",
+    "total_prepay_and_pay_settle_roi2_1h",
+    "live_show_count_for_roi2_v2",
+    "live_watch_count_for_roi2_v2",
+    "live_cvr_rate_for_roi2_v2",
+  ];
+
+  function defaultSingleFieldIds(catalog) {
+    const available = new Set(catalog.map(field => field.id));
+    const preferred = singleDefaultFieldIds.filter(id => available.has(id));
+    return preferred.length ? preferred : catalog.slice(0, Math.min(8, catalog.length)).map(field => field.id);
+  }
+
+  function singleRenderDelivery(material) {
+    const target = document.getElementById("single-delivery-content");
+    const fields = material.leaderboard?.fields || [];
+    const selectedIds = Object.prototype.hasOwnProperty.call(singleState.deliveryFields, material.materialId)
+      ? singleState.deliveryFields[material.materialId]
+      : defaultSingleFieldIds(fields);
+    const visibleFields = fields.filter(field => selectedIds.includes(field.id));
+    target.innerHTML = fields.length ? `<div id="single-field-summary" class="single-field-summary">已展示指标 ${visibleFields.length} / ${fields.length}</div><div class="single-metric-grid">${visibleFields.map(field => `<div class="single-metric-card"><small>${escaped(field.label || field.id)}</small><strong>${singleValue(field.value)}</strong></div>`).join("") || singleEmpty("投放数据")}</div>` : singleEmpty("投放数据");
+  }
+
+  function singleRenderVideo(material) {
+    const video = material.highlights?.video || {};
+    if (video.status === "available" && video.path) {
+      singleMaterialVideo.innerHTML = `<video controls preload="metadata" src="${escaped(video.path)}" aria-label="${escaped(material.title)}视频预览"></video>`;
+      return;
+    }
+    singleMaterialVideo.innerHTML = `<div class="single-video-unavailable">${escaped(video.message || "本次详情数据未保存可播放视频")}</div>`;
+  }
+
+  function singleRenderInteractions(material) {
+    const target = document.getElementById("single-interaction-content");
+    const metrics = material.interactions?.metrics || [];
+    if (material.interactions?.status !== "available" || !metrics.length) { target.innerHTML = singleEmpty("互动时序"); return; }
+    if (!metrics.some(item => item.id === singleState.interactionMetric)) singleState.interactionMetric = metrics[0].id;
+    const metric = metrics.find(item => item.id === singleState.interactionMetric) || metrics[0];
+    const points = metric.points || [];
+    const minSecond = points.length ? Math.min(...points.map(item => Number(item.second))) : 0;
+    const maxSecond = points.length ? Math.max(...points.map(item => Number(item.second))) : 1;
+    const maxValue = Math.max(...points.map(item => Number(item.value)), 1);
+    const width = 760, height = 210, left = 40, top = 16, right = 16, bottom = 32;
+    const chartPoints = points.map(item => {
+      const x = left + Math.min(1, Math.max(0, (Number(item.second) - minSecond) / Math.max(1, maxSecond - minSecond))) * (width - left - right);
+      const y = height - bottom - (Number(item.value) / maxValue) * (height - top - bottom);
+      return { ...item, x, y };
+    });
+    const line = chartPoints.map((item, index) => `${index ? "L" : "M"} ${item.x.toFixed(2)} ${item.y.toFixed(2)}`).join(" ");
+    const dots = chartPoints.map(item => `<circle cx="${item.x.toFixed(2)}" cy="${item.y.toFixed(2)}" r="4" fill="var(--accent)" tabindex="0" data-single-point="${escaped(item.second)}" aria-label="${escaped(item.second)}秒，${escaped(item.value)}"><title>${escaped(item.second)}秒：${escaped(item.value)}</title></circle>`).join("");
+    const scaledWidth = Math.round(width * singleState.chartScale / 100);
+    target.innerHTML = `<div class="single-interaction-controls">${metrics.map(item => `<button type="button" class="${item.id === metric.id ? "active" : ""}" data-single-interaction="${escaped(item.id)}">${escaped(item.label)}</button>`).join("")}</div><div class="single-chart"><svg style="width:${scaledWidth}px;height:${height}px" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escaped(metric.label)}秒级折线图"><line class="chart-axis" x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line><path class="single-chart-line" d="${line}"></path>${dots}</svg></div><label class="single-scale"><span>图表比例</span><input type="range" min="70" max="150" step="1" value="${singleState.chartScale}" aria-label="互动图表比例" data-single-chart-scale><output>${singleState.chartScale}%</output></label>`;
+    target.querySelectorAll("[data-single-interaction]").forEach(button => button.addEventListener("click", () => { singleState.interactionMetric = button.dataset.singleInteraction; singleRenderInteractions(material); }));
+    const scaleInput = target.querySelector("[data-single-chart-scale]");
+    const scaleOutput = target.querySelector(".single-scale output");
+    const chartScroll = target.querySelector(".single-chart");
+    const chartSvg = target.querySelector(".single-chart svg");
+    scaleInput.addEventListener("input", event => { const scrollLeft = chartScroll.scrollLeft; singleState.chartScale = Number(event.currentTarget.value); chartSvg.style.width = `${Math.round(width * singleState.chartScale / 100)}px`; chartScroll.scrollLeft = scrollLeft; scaleOutput.textContent = `${singleState.chartScale}%`; });
+  }
+
+  function singleRenderScript(material) {
+    const target = document.getElementById("single-script-content");
+    const script = material.script || {};
+    if (script.status !== "available") { target.innerHTML = singleEmpty("脚本"); return; }
+    const formulas = Array.isArray(script.formula) ? script.formula : [];
+    const formulaGroups = formulas.map(item => ({ primary: item.primary, secondary: Array.isArray(item.secondary) ? item.secondary.filter(Boolean) : [] })).filter(item => item.primary);
+    const chips = formulaGroups.flatMap(item => [{ label: item.primary, kind: "一级公式", related: [item.primary, ...item.secondary] }, ...item.secondary.map(label => ({ label, kind: "二级公式", related: [label] }))]);
+    const selected = singleState.selectedFormula;
+    const segments = Array.isArray(script.segments) ? script.segments : [];
+    const palette = ["#16a34a", "#ef4444", "#f59e0b", "#2563eb", "#14b8a6", "#ec4899", "#8b5cf6"];
+    const labelColors = {};
+    chips.forEach((chip, index) => { if (!labelColors[chip.label]) labelColors[chip.label] = palette[index % palette.length]; });
+    const selectedChip = chips.find(chip => chip.label === selected);
+    const activeLabels = new Set(selectedChip?.related || []);
+    function linkedScriptText(text) {
+      const matches = [];
+      segments.forEach(segment => {
+        if (!segment.text) return;
+        let from = 0;
+        while (from < text.length) {
+          const start = text.indexOf(segment.text, from);
+          if (start < 0) break;
+          matches.push({ start, end: start + segment.text.length, label: segment.label });
+          from = start + segment.text.length;
+        }
+      });
+      matches.sort((left, right) => left.start - right.start || right.end - left.end);
+      const nonOverlapping = [];
+      matches.forEach(match => { if (!nonOverlapping.some(item => match.start < item.end && match.end > item.start)) nonOverlapping.push(match); });
+      let cursor = 0;
+      return nonOverlapping.map(match => { const before = escaped(text.slice(cursor, match.start)); const body = escaped(text.slice(match.start, match.end)); const active = !selected || activeLabels.has(match.label); const color = labelColors[match.label] || "#64748b"; cursor = match.end; return `${before}<mark class="single-script-highlight${active ? " active" : ""}" style="--single-script-highlight:${color}" title="${escaped(match.label)}">${body}</mark>`; }).join("") + escaped(text.slice(cursor));
+    }
+    const segmentMarkup = segments.length && !script.text ? segments.map(segment => { const active = !selected || activeLabels.has(segment.label); const color = labelColors[segment.label] || "#64748b"; return `<p><strong>${escaped(segment.label)}：</strong><mark class="single-script-highlight${active ? " active" : ""}" style="--single-script-highlight:${color}">${escaped(segment.text)}</mark></p>`; }).join("") : "";
+    const formulaMarkup = formulaGroups.map(group => `<div class="single-formula-group"><div class="single-formula-row single-formula-primary-row"><span class="single-formula-level">一级</span><span class="single-formula-chip single-formula-chip-primary"><span class="single-formula-dot" style="background:${labelColors[group.primary]}"></span>${escaped(group.primary)}</span></div><div class="single-formula-row single-formula-secondary-row"><span class="single-formula-level">二级</span>${group.secondary.length ? group.secondary.map(label => `<span class="single-formula-connector" aria-hidden="true">+</span><button type="button" class="single-formula-chip single-formula-chip-secondary ${selected === label ? "active" : ""}" data-single-formula="${escaped(label)}" data-single-formula-level="secondary"><span class="single-formula-dot" style="background:${labelColors[label]}"></span>${escaped(label)}</button>`).join("") : `<span class="single-formula-level">暂无二级内容公式</span>`}</div></div>`).join("");
+    target.innerHTML = `<div class="single-script-formula-header"><strong>本视频内容公式</strong><span>${selected ? `已联动：${escaped(selected)}` : "一级与二级内容公式已同时展示，点击二级内容公式可联动脚本证据"}</span></div><div class="single-formula-chips">${formulaMarkup || singleEmpty("内容公式")}</div>${script.text ? `<div class="single-script-heading"><strong>本视频脚本</strong><span>彩色片段对应已解析的脚本标签</span></div><div class="single-script-text">${linkedScriptText(script.text)}</div>` : ""}${segmentMarkup || (!script.text ? singleEmpty("脚本内容") : "")}`;
+    target.querySelectorAll("[data-single-formula]").forEach(button => button.addEventListener("click", () => { singleState.selectedFormula = singleState.selectedFormula === button.dataset.singleFormula ? null : button.dataset.singleFormula; singleRenderScript(material); }));
+  }
+
+  function singleRenderAudience(material) {
+    const target = document.getElementById("single-audience-content");
+    const audienceModel = material.audience || {};
+    const dimensions = audienceModel.dimensions || {};
+    const metrics = Array.isArray(audienceModel.metrics) && audienceModel.metrics.length ? audienceModel.metrics : (audience.metrics || []);
+    if (audienceModel.status !== "available" || !Object.keys(dimensions).length || !metrics.length) { target.innerHTML = singleEmpty("人群"); return; }
+    const metricMap = Object.fromEntries(metrics.map(item => [item.id, item]));
+    if (!metricMap[singleState.audienceMetricId]) singleState.audienceMetricId = metrics[0].id;
+    const metric = metricMap[singleState.audienceMetricId] || metrics[0];
+    const buckets = id => dimensions[id]?.bucketsByMetric?.[metric.id] || [];
+    const geography = buckets(singleState.audienceGeoLevel);
+    const count = Math.min(Math.max(1, singleState.audienceGeoVisible), Math.max(1, geography.length));
+    singleState.audienceGeoVisible = count;
+    target.innerHTML = `<div class="single-audience-workspace"><div class="single-audience-metric-switcher" aria-label="单素材人群指标">${metrics.map(item => `<button type="button" class="${item.id === metric.id ? "active" : ""}" data-single-audience-metric="${escaped(item.id)}">${escaped(item.label)}</button>`).join("")}</div><div class="single-audience-subsection"><h4>八大人群分布</h4><div id="single-audience-eight-groups" class="single-audience-chart-box"></div></div><div class="single-audience-grid"><div class="single-audience-subsection"><h4>性别分布</h4><div class="single-audience-donut-layout"><div id="single-audience-gender" class="single-audience-chart-box"></div><div id="single-audience-legend-gender" class="legend" aria-label="单素材性别图例"></div></div></div><div class="single-audience-subsection"><h4>年龄分布</h4><div class="single-audience-donut-layout"><div id="single-audience-age" class="single-audience-chart-box"></div><div id="single-audience-legend-age" class="legend" aria-label="单素材年龄图例"></div></div></div></div><div class="single-audience-subsection"><div class="single-audience-geo-controls"><h4>地域分布</h4><div class="single-audience-geo-switcher" aria-label="单素材地域层级">${["province", "city"].map(id => `<button type="button" class="${id === singleState.audienceGeoLevel ? "active" : ""}" data-single-audience-geo="${id}">${id === "province" ? "省份" : "城市"}</button>`).join("")}</div></div><div id="single-audience-geography" class="single-audience-geo-chart"></div><label class="single-audience-geo-slider"><span>数据窗口</span><input type="range" min="1" max="${Math.max(1, geography.length)}" value="${geography.length ? count : 1}" aria-label="地域数据窗口" data-single-audience-geo-range><output>${geography.length ? `显示前 ${count} / ${geography.length} 个` : "暂无地域数据"}</output></label></div></div>`;
+    const singleAudienceBars = (container, values, dimension, visibleCount) => {
+      if (!values.length) { container.innerHTML = chartEmpty(dimensions[dimension]?.label || "图表"); return; }
+      const shown = values.slice(0, visibleCount || values.length);
+      const isGeography = dimension === "province" || dimension === "city";
+      const band = isGeography ? (shown.length > 24 ? 56 : shown.length > 14 ? 64 : 74) : 74;
+      const width = dimension === "eight_groups" ? Math.max(760, (container.clientWidth || 900) - 8) : Math.max(560, shown.length * band);
+      const height = 290, left = 42, bottom = 72, plotHeight = height - bottom - 20;
+      const max = Math.max(...shown.map(item => Number(item.value)), 1);
+      const itemBand = (width - left - 18) / shown.length;
+      const barRatio = isGeography ? (shown.length > 24 ? .68 : shown.length > 14 ? .60 : .52) : .52;
+      const bars = shown.map((bucket, index) => { const barHeight = Math.max(2, Number(bucket.value) / max * plotHeight); const barWidth = itemBand * barRatio; const x = left + index * itemBand + (itemBand - barWidth) / 2; const y = height - bottom - barHeight; const center = x + barWidth / 2; const label = bucket.label.length > 8 ? `${bucket.label.slice(0, 8)}…` : bucket.label; return `<rect class="chart-bar" data-single-chart-index="${index}" data-chart-rank="${index + 1}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${barHeight.toFixed(2)}" rx="5" tabindex="0" role="img" aria-label="${escaped(bucket.label)} ${escaped(metric.label)} ${escaped(formatAudienceValue(bucket.value, metric))}"></rect><text class="chart-value" x="${center.toFixed(2)}" y="${Math.max(14, y - 6).toFixed(2)}" text-anchor="middle">${escaped(formatAudienceValue(bucket.value, metric))}</text><text class="chart-label" x="${center.toFixed(2)}" y="${height - 42}" text-anchor="middle">${escaped(label)}</text>`; }).join("");
+      const svgStyle = dimension === "eight_groups" ? `style="width:100%;height:${height}px"` : `style="width:${width}px;height:${height}px"`;
+      container.innerHTML = `<svg ${svgStyle} preserveAspectRatio="none" viewBox="0 0 ${width} ${height}" role="group" aria-label="${escaped(dimensions[dimension]?.label || "柱状图")}"><line class="chart-axis" x1="${left}" y1="${height - bottom}" x2="${width - 12}" y2="${height - bottom}"></line>${bars}</svg>`;
+      container.querySelectorAll("[data-single-chart-index]").forEach(element => { const bucket = shown[Number(element.dataset.singleChartIndex)]; const rank = Number(element.dataset.chartRank); element.addEventListener("pointerenter", event => showChartTooltip(event, bucket, metric, dimension, rank)); element.addEventListener("pointerleave", hideChartTooltip); element.addEventListener("focus", event => showChartTooltip(event, bucket, metric, dimension, rank)); element.addEventListener("blur", hideChartTooltip); });
+    };
+    const singleAudienceDonut = (container, legend, values, dimension) => {
+      if (!values.length) { container.innerHTML = chartEmpty(dimensions[dimension]?.label || "图表"); legend.innerHTML = ""; return; }
+      const colors = ["#2563eb", "#60a5fa", "#14b8a6", "#f59e0b", "#ef6a6a", "#8b5cf6", "#64748b", "#22c55e"]; let cursor = -Math.PI / 2;
+      const segments = values.map((bucket, index) => { const end = cursor + Math.max(0, bucket.share) * Math.PI * 2; const angle = (cursor + end) / 2; const path = donutPath(cursor, end, 92, 56, 116, 124); cursor = end; return `<path class="donut-segment" data-single-donut-dimension="${dimension}" data-single-donut-index="${index}" data-donut-angle="${angle.toFixed(6)}" d="${path}" fill="${colors[index % colors.length]}" tabindex="0" role="img" aria-label="${escaped(bucket.label)} ${escaped(metric.label)} ${escaped(formatAudienceValue(bucket.value, metric))}"></path>`; }).join("");
+      container.innerHTML = `<svg viewBox="0 0 232 250" role="group" aria-label="${escaped(dimensions[dimension]?.label || "环形图")}">${segments}<text class="donut-center-label" x="116" y="118">${escaped(metric.label)}</text><text class="donut-center-value" x="116" y="143">${escaped(formatAudienceValue(values[0].total, metric))}</text></svg>`;
+      legend.innerHTML = values.map((bucket, index) => `<button type="button" class="legend-item" data-single-donut-dimension="${dimension}" data-single-donut-index="${index}" tabindex="0" role="img" aria-pressed="false" aria-label="${escaped(bucket.label)} ${escaped(metric.label)} ${escaped(formatAudienceValue(bucket.value, metric))}"><span class="legend-swatch" style="background:${colors[index % colors.length]}"></span><span>${escaped(bucket.label)}<span class="legend-detail">${escaped(formatAudienceValue(bucket.value, metric))} · ${new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 2 }).format(bucket.share)}</span></span></button>`).join("");
+      const updateSelection = index => { singleState.audienceDonutSelection[dimension] = index == null ? null : Number(index); target.querySelectorAll(`[data-single-donut-dimension="${dimension}"]`).forEach(element => { const selected = Number(element.dataset.singleDonutIndex) === singleState.audienceDonutSelection[dimension]; element.classList.toggle("active", selected); element.setAttribute("aria-pressed", String(selected)); if (element.classList.contains("donut-segment")) { const angle = Number(element.dataset.donutAngle || 0); const distance = selected ? 8 : 0; element.style.transform = `translate(${(Math.cos(angle) * distance).toFixed(2)}px, ${(Math.sin(angle) * distance).toFixed(2)}px)`; } }); };
+      [...container.querySelectorAll("[data-single-donut-index]"), ...legend.querySelectorAll("[data-single-donut-index]")].forEach(element => { const bucket = values[Number(element.dataset.singleDonutIndex)]; element.addEventListener("pointerenter", event => showChartTooltip(event, bucket, metric, dimension, Number(element.dataset.singleDonutIndex) + 1)); element.addEventListener("pointerleave", hideChartTooltip); element.addEventListener("focus", event => showChartTooltip(event, bucket, metric, dimension, Number(element.dataset.singleDonutIndex) + 1)); element.addEventListener("blur", hideChartTooltip); element.addEventListener("click", () => updateSelection(singleState.audienceDonutSelection[dimension] === Number(element.dataset.singleDonutIndex) ? null : Number(element.dataset.singleDonutIndex))); });
+      updateSelection(singleState.audienceDonutSelection[dimension] != null && singleState.audienceDonutSelection[dimension] < values.length ? singleState.audienceDonutSelection[dimension] : null);
+    };
+    singleAudienceBars(document.getElementById("single-audience-eight-groups"), buckets("eight_groups"), "eight_groups");
+    singleAudienceDonut(document.getElementById("single-audience-gender"), document.getElementById("single-audience-legend-gender"), buckets("gender"), "gender");
+    singleAudienceDonut(document.getElementById("single-audience-age"), document.getElementById("single-audience-legend-age"), buckets("age"), "age");
+    const renderSingleAudienceGeography = () => {
+      const currentGeography = buckets(singleState.audienceGeoLevel);
+      const currentCount = Math.min(Math.max(1, singleState.audienceGeoVisible), Math.max(1, currentGeography.length));
+      singleState.audienceGeoVisible = currentCount;
+      const range = target.querySelector("[data-single-audience-geo-range]");
+      const output = target.querySelector(".single-audience-geo-slider output");
+      range.max = String(Math.max(1, currentGeography.length));
+      range.value = String(currentGeography.length ? currentCount : 1);
+      output.textContent = currentGeography.length ? `显示前 ${currentCount} / ${currentGeography.length} 个` : "暂无地域数据";
+      singleAudienceBars(document.getElementById("single-audience-geography"), currentGeography, singleState.audienceGeoLevel, currentCount);
+    };
+    renderSingleAudienceGeography();
+    target.querySelectorAll("[data-single-audience-metric]").forEach(button => button.addEventListener("click", () => { singleState.audienceMetricId = button.dataset.singleAudienceMetric; singleState.audienceGeoVisible = 10; hideChartTooltip(); singleRenderAudience(material); }));
+    target.querySelectorAll("[data-single-audience-geo]").forEach(button => button.addEventListener("click", () => { singleState.audienceGeoLevel = button.dataset.singleAudienceGeo; singleState.audienceGeoVisible = 10; hideChartTooltip(); singleRenderAudience(material); }));
+    target.querySelector("[data-single-audience-geo-range]").addEventListener("input", event => { singleState.audienceGeoVisible = Number(event.currentTarget.value); renderSingleAudienceGeography(); });
+  }
+
+  function singleOpenLightbox(card, trigger) {
+    singleLightboxTrigger = trigger;
+    singleLightboxImage.src = card.artifact.path;
+    singleLightboxImage.alt = `${singleValue(card.second)}秒，高光帧`;
+    singleLightbox.hidden = false;
+    document.body.classList.add("modal-open");
+    document.getElementById("single-lightbox-close").focus();
+  }
+
+  function singleCloseLightbox() {
+    singleLightbox.hidden = true;
+    document.body.classList.remove("modal-open");
+    if (singleLightboxTrigger) singleLightboxTrigger.focus();
+    singleLightboxTrigger = null;
+  }
+
+  function singleRenderHighlights(material) {
+    const target = document.getElementById("single-highlights-content");
+    const highlights = material.highlights || {};
+    const cards = Array.isArray(highlights.cards) ? highlights.cards : [];
+    if (highlights.status !== "available" || !cards.length) { target.innerHTML = singleEmpty("高光帧"); return; }
+    const pageCount = Math.max(1, Math.ceil(cards.length / singleHighlightPageSize));
+    singleState.framePage = Math.min(singleState.framePage, pageCount);
+    const start = (singleState.framePage - 1) * singleHighlightPageSize;
+    const shown = cards.slice(start, start + singleHighlightPageSize);
+    target.innerHTML = `<div class="single-highlight-layout"><div class="single-highlight-grid">${shown.map((card, index) => `<article class="single-highlight-card"><button type="button" data-single-frame-index="${start + index}" aria-label="放大查看${escaped(card.second)}秒高光帧"><img src="${escaped(card.artifact.path)}" alt="${escaped(card.second)}秒高光帧"></button><p>${escaped(card.description || card.role || "高光帧")} · ${escaped(card.second)}秒</p></article>`).join("")}</div><div class="single-highlight-pager"><span>第 ${singleState.framePage} / ${pageCount} 页 · 共 ${cards.length} 帧</span><span><button type="button" data-single-frame-page="previous" ${singleState.framePage <= 1 ? "disabled" : ""}>前</button><button type="button" data-single-frame-page="next" ${singleState.framePage >= pageCount ? "disabled" : ""}>后</button></span></div></div>`;
+    target.querySelectorAll("[data-single-frame-index]").forEach(button => button.addEventListener("click", () => singleOpenLightbox(cards[Number(button.dataset.singleFrameIndex)], button)));
+    target.querySelectorAll("[data-single-frame-page]").forEach(button => button.addEventListener("click", () => { singleState.framePage += button.dataset.singleFramePage === "next" ? 1 : -1; singleRenderHighlights(material); }));
+  }
+
+  function singleRender() {
+    const available = singleMaterialOverview.status === "available" && singleMaterials.length;
+    singleMaterialUnavailable.hidden = Boolean(available);
+    singleMaterialContent.hidden = !available;
+    if (!available) return;
+    const material = singleCurrentMaterial();
+    singleMaterialSelector.innerHTML = `<div class="single-material-selector-header"><strong>详情素材选择</strong><span>${singleMaterials.length} 个素材</span></div><div class="single-material-items">${singleMaterials.map(item => `<button type="button" class="${item.materialId === material.materialId ? "active" : ""}" data-single-material-id="${escaped(item.materialId)}" aria-label="第${escaped(item.rank)}名，${escaped(item.title)}"><span class="single-material-rank">#${escaped(item.rank)} ${escaped(item.title)}</span><span class="single-material-id">素材ID：${escaped(item.materialId)}</span></button>`).join("")}</div>`;
+    document.getElementById("single-material-title").textContent = material.title;
+    document.getElementById("single-material-id").textContent = `素材ID：${material.materialId} · 榜单第 ${material.rank} 名`;
+    singleRenderVideo(material); singleRenderDelivery(material); singleRenderInteractions(material); singleRenderScript(material); singleRenderAudience(material); singleRenderHighlights(material);
+    document.querySelectorAll("[data-single-anchor]").forEach(button => button.classList.toggle("active", button.dataset.singleAnchor === singleState.anchor));
+    singleMaterialSelector.querySelectorAll("[data-single-material-id]").forEach(button => button.addEventListener("click", () => { singleState.selectedMaterialId = button.dataset.singleMaterialId; singleState.framePage = 1; singleState.selectedFormula = null; singleState.interactionMetric = null; singleRender(); }));
+  }
 
   function normalize(value) {
     return String(value == null ? "" : value).normalize("NFKC").toLocaleLowerCase().trim();
@@ -1202,40 +1565,94 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     return !normalizedQuery || normalize(field.label).includes(normalizedQuery) || normalize(field.id).includes(normalizedQuery);
   }
 
+  function dialogCatalog() {
+    if (fieldDialog.scope !== "single") return orderedPresentationFields;
+    const material = singleMaterialById[fieldDialog.materialId];
+    const rawFields = material?.leaderboard?.fields || [];
+    const enriched = rawFields.map(field => ({ ...field, group: field.group || fieldMap[field.id]?.group || "其他指标", label: field.label && field.label !== field.id ? field.label : fieldMap[field.id]?.label || field.id }));
+    const rank = Object.fromEntries(orderedPresentationFields.map((field, index) => [field.id, index]));
+    return enriched.sort((left, right) => (rank[left.id] ?? orderedPresentationFields.length) - (rank[right.id] ?? orderedPresentationFields.length));
+  }
+
+  function dialogGroupNames(catalog) {
+    return [...new Set(catalog.map(field => field.group || "其他指标"))];
+  }
+
+  function dialogRequiredIds(catalog) {
+    return fieldDialog.scope === "single" ? [] : requiredFieldIds.filter(id => catalog.some(field => field.id === id));
+  }
+
+  function orderedDialogFieldIds(fieldIds, catalog) {
+    const selected = new Set(Array.isArray(fieldIds) ? fieldIds : []);
+    dialogRequiredIds(catalog).forEach(id => selected.add(id));
+    return catalog.map(field => field.id).filter(id => selected.has(id));
+  }
+
   function renderFieldDialog() {
-    state.draftFieldIds = orderedVisibleFieldIds(state.draftFieldIds || state.visibleFieldIds);
-    fieldGroups.innerHTML = fieldGroupNames.map(group => {
-      const count = orderedPresentationFields.filter(field => field.group === group).length;
+    const catalog = dialogCatalog();
+    const groups = dialogGroupNames(catalog);
+    const requiredIds = dialogRequiredIds(catalog);
+    const hasSingleSelection = fieldDialog.scope === "single" && Object.prototype.hasOwnProperty.call(singleState.deliveryFields, fieldDialog.materialId);
+    const initialIds = fieldDialog.scope === "single"
+      ? (Array.isArray(state.draftFieldIds) ? state.draftFieldIds : (hasSingleSelection ? singleState.deliveryFields[fieldDialog.materialId] : defaultSingleFieldIds(catalog)))
+      : (Array.isArray(state.draftFieldIds) ? state.draftFieldIds : state.visibleFieldIds);
+    state.draftFieldIds = orderedDialogFieldIds(initialIds, catalog);
+    fieldGroups.innerHTML = groups.map(group => {
+      const count = catalog.filter(field => field.group === group).length;
       const active = !state.fieldSearch && state.activeFieldGroup === group ? " active" : "";
       return `<button type="button" class="${active.trim()}" data-field-group="${escaped(group)}">${escaped(group)}<span>${count}</span></button>`;
     }).join("");
 
     const searchQuery = normalize(state.fieldSearch);
     const visibleFields = searchQuery
-      ? orderedPresentationFields.filter(field => fieldMatches(field, searchQuery))
-      : orderedPresentationFields.filter(field => field.group === state.activeFieldGroup);
+      ? catalog.filter(field => fieldMatches(field, searchQuery))
+      : catalog.filter(field => field.group === state.activeFieldGroup);
     const grouped = {};
     visibleFields.forEach(field => (grouped[field.group] ||= []).push(field));
     fieldOptions.innerHTML = Object.entries(grouped).map(([group, fields]) => `<section class="field-option-section"><h3>${escaped(group)}</h3><div class="field-option-grid">${fields.map(field => {
       const checked = state.draftFieldIds.includes(field.id) ? " checked" : "";
-      const disabled = requiredFieldIds.includes(field.id) ? " disabled" : "";
+      const disabled = requiredIds.includes(field.id) ? " disabled" : "";
       return `<label class="field-option"><input type="checkbox" data-field-id="${escaped(field.id)}"${checked}${disabled}><span>${escaped(field.label)}</span></label>`;
     }).join("")}</div></section>`).join("") || '<div class="empty">没有匹配字段</div>';
 
-    const selected = state.draftFieldIds.map(id => fieldMap[id]).filter(Boolean);
+    const selected = state.draftFieldIds.map(id => catalog.find(field => field.id === id)).filter(Boolean);
     selectedCount.textContent = `（${selected.length}）`;
     selectedFields.innerHTML = selected.map(field => {
-      const required = requiredFieldIds.includes(field.id);
+      const required = requiredIds.includes(field.id);
       return `<li class="field-modal-selected-item"><span class="field-drag-handle" aria-hidden="true">☷</span><span class="field-selected-label" title="${escaped(field.label)}">${escaped(field.label)}</span>${required ? '<span class="field-required">固定</span>' : `<button type="button" data-remove-field-id="${escaped(field.id)}" aria-label="移除${escaped(field.label)}">×</button>`}</li>`;
     }).join("");
   }
 
   function openFieldDialog() {
+    fieldDialog.scope = "leaderboard";
+    fieldDialog.materialId = null;
     state.draftFieldIds = orderedVisibleFieldIds(state.visibleFieldIds);
     state.fieldSearch = "";
     state.activeFieldGroup = fieldGroupNames[0] || "";
     fieldSearch.value = "";
+    document.getElementById("field-management-title").textContent = "自定义指标";
+    document.getElementById("field-management-description").textContent = "选择后将按照自定义指标顺序呈现表格列";
+    document.getElementById("field-management-footer-note").textContent = "素材名称为固定列，其他列按自定义指标顺序排列";
     fieldModal.hidden = false;
+    document.body.classList.add("modal-open");
+    renderFieldDialog();
+    fieldSearch.focus();
+  }
+
+  function openSingleFieldDialog(material) {
+    fieldDialog.scope = "single";
+    fieldDialog.materialId = material.materialId;
+    const catalog = dialogCatalog();
+    const hasSingleSelection = Object.prototype.hasOwnProperty.call(singleState.deliveryFields, material.materialId);
+    state.draftFieldIds = orderedDialogFieldIds(hasSingleSelection ? singleState.deliveryFields[material.materialId] : defaultSingleFieldIds(catalog), catalog);
+    state.fieldSearch = "";
+    state.activeFieldGroup = dialogGroupNames(catalog)[0] || "";
+    fieldSearch.value = "";
+    document.getElementById("field-management-title").textContent = "自定义指标";
+    document.getElementById("field-management-description").textContent = "选择后将按照自定义指标顺序呈现当前素材的投放指标";
+    document.getElementById("field-management-footer-note").textContent = "当前素材名称已在详情标题中固定展示，其他指标按自定义顺序排列";
+    fieldModal.hidden = false;
+    document.getElementById("single-field-button").setAttribute("aria-expanded", "true");
     document.body.classList.add("modal-open");
     renderFieldDialog();
     fieldSearch.focus();
@@ -1243,12 +1660,22 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 
   function closeFieldDialog() {
     fieldModal.hidden = true;
+    document.getElementById("single-field-button").setAttribute("aria-expanded", "false");
     state.draftFieldIds = null;
     state.fieldSearch = "";
+    fieldDialog.scope = "leaderboard";
+    fieldDialog.materialId = null;
     document.body.classList.remove("modal-open");
   }
 
   function confirmFieldDialog() {
+    if (fieldDialog.scope === "single") {
+      const material = singleMaterialById[fieldDialog.materialId];
+      if (material) singleState.deliveryFields[material.materialId] = [...state.draftFieldIds];
+      closeFieldDialog();
+      if (material) singleRenderDelivery(material);
+      return;
+    }
     state.visibleFieldIds = orderedVisibleFieldIds(state.draftFieldIds || state.visibleFieldIds);
     state.page = 1;
     saveVisibleFields();
@@ -1307,12 +1734,17 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 
   loadVisibleFields();
   document.getElementById("field-button").addEventListener("click", openFieldDialog);
+  document.getElementById("single-field-button").addEventListener("click", () => {
+    const material = singleCurrentMaterial();
+    if (material) openSingleFieldDialog(material);
+  });
   fieldModal.addEventListener("click", event => {
     const action = event.target.closest("[data-field-action]")?.dataset.fieldAction;
     if (action === "cancel") closeFieldDialog();
     if (action === "confirm") confirmFieldDialog();
-    if (action === "reset") {
-      state.draftFieldIds = orderedVisibleFieldIds(defaultFieldIds);
+    if (action === "select-all" || action === "clear-all") {
+      const catalog = dialogCatalog();
+      state.draftFieldIds = orderedDialogFieldIds(action === "select-all" ? catalog.map(field => field.id) : [], catalog);
       renderFieldDialog();
     }
     const group = event.target.closest("[data-field-group]")?.dataset.fieldGroup;
@@ -1323,16 +1755,19 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
       renderFieldDialog();
     }
     const removeId = event.target.closest("[data-remove-field-id]")?.dataset.removeFieldId;
-    if (removeId && !requiredFieldIds.includes(removeId)) {
-      state.draftFieldIds = orderedVisibleFieldIds(state.draftFieldIds.filter(id => id !== removeId));
+    const requiredIds = dialogRequiredIds(dialogCatalog());
+    if (removeId && !requiredIds.includes(removeId)) {
+      state.draftFieldIds = orderedDialogFieldIds(state.draftFieldIds.filter(id => id !== removeId), dialogCatalog());
       renderFieldDialog();
     }
   });
   fieldModal.addEventListener("change", event => {
     const input = event.target.closest("input[data-field-id]");
     if (!input) return;
-    const selected = input.checked ? [...state.draftFieldIds, input.dataset.fieldId] : state.draftFieldIds.filter(id => id !== input.dataset.fieldId);
-    state.draftFieldIds = orderedVisibleFieldIds(selected);
+    const selected = new Set(state.draftFieldIds);
+    if (input.checked) selected.add(input.dataset.fieldId);
+    else selected.delete(input.dataset.fieldId);
+    state.draftFieldIds = orderedDialogFieldIds([...selected], dialogCatalog());
     renderFieldDialog();
   });
   fieldSearch.addEventListener("input", event => {
@@ -1344,12 +1779,28 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   document.addEventListener("keydown", event => {
     if (event.key === "Escape" && !fieldModal.hidden) closeFieldDialog();
     if (event.key === "Escape" && !highlightModal.hidden) closeHighlightModal();
+    if (event.key === "Escape" && !singleLightbox.hidden) singleCloseLightbox();
     if (event.key === "Escape") hideChartTooltip();
     if (event.key === "Escape") hideScriptFormulaTooltip();
   });
   highlightModal.addEventListener("click", event => {
     if (event.target.closest("[data-highlight-action='close']")) closeHighlightModal();
   });
+  document.getElementById("single-lightbox-close").addEventListener("click", singleCloseLightbox);
+  singleLightbox.addEventListener("click", event => { if (event.target === singleLightbox) singleCloseLightbox(); });
+  document.querySelectorAll("[data-single-anchor]").forEach(button => button.addEventListener("click", () => {
+    singleState.anchor = button.dataset.singleAnchor;
+    document.getElementById(`single-material-${singleState.anchor}`).scrollIntoView({ behavior: "smooth", block: "start" });
+    document.querySelectorAll("[data-single-anchor]").forEach(item => item.classList.toggle("active", item === button));
+  }));
+  if ("IntersectionObserver" in window) {
+    const singleObserver = new IntersectionObserver(entries => entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      singleState.anchor = entry.target.dataset.singlePanel;
+      document.querySelectorAll("[data-single-anchor]").forEach(item => item.classList.toggle("active", item.dataset.singleAnchor === singleState.anchor));
+    }), { rootMargin: "-15% 0px -70% 0px" });
+    document.querySelectorAll("[data-single-panel]").forEach(panel => singleObserver.observe(panel));
+  }
   document.querySelectorAll("[data-section]").forEach(button => button.addEventListener("click", event => {
     const section = event.currentTarget.dataset.section;
     document.querySelectorAll("[data-section]").forEach(item => item.classList.toggle("active", item.dataset.section === section));
@@ -1357,6 +1808,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     if (section === "audience") renderAudience();
     if (section === "scripts") renderScriptFormula();
     if (section === "highlights") renderHighlights();
+    if (section === "single-material") singleRender();
     if (section !== "scripts") hideScriptFormulaTooltip();
     if (section !== "audience") hideChartTooltip();
   }));
@@ -1390,6 +1842,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   renderAudience();
   renderScriptFormula();
   renderHighlights();
+  singleRender();
   search.addEventListener("input", event => { state.query = event.target.value; state.page = 1; render(); });
   document.getElementById("first").addEventListener("click", () => { state.page = 1; render(); });
   document.getElementById("previous").addEventListener("click", () => { state.page = Math.max(1, state.page - 1); render(); });
@@ -1453,6 +1906,55 @@ def _copy_highlight_assets(model, run_dir, output_dir):
         artifact.update({"path": (Path("assets") / "highlights" / destination.name).as_posix(), "sha256": actual_hash, "sizeBytes": len(actual_bytes)})
 
 
+def _copy_single_material_assets(model, run_dir, output_dir):
+    overview = model.get("singleMaterialOverview")
+    if not isinstance(overview, dict) or overview.get("status") != "available":
+        return
+    run_root = Path(run_dir).resolve()
+    base_output = Path(output_dir)
+
+    def copy_artifact(artifact, folder, suffixes):
+        if not isinstance(artifact, dict):
+            raise OverviewReportError("single-material artifact is missing")
+        path_text = artifact.get("path")
+        relative = PurePosixPath(path_text) if isinstance(path_text, str) else None
+        if relative is None or relative.is_absolute() or "\\" in path_text or any(part in {"", ".", ".."} for part in relative.parts):
+            raise OverviewReportError("single-material artifact path is unsafe")
+        source = (run_root / Path(*relative.parts)).resolve()
+        try:
+            source.relative_to(run_root)
+        except ValueError as exc:
+            raise OverviewReportError("single-material artifact path escapes run") from exc
+        if source.suffix.lower() not in suffixes or not source.is_file():
+            raise OverviewReportError("single-material artifact is unavailable")
+        expected_hash, expected_size = artifact.get("sha256"), artifact.get("sizeBytes")
+        data = source.read_bytes()
+        actual_hash = hashlib.sha256(data).hexdigest()
+        if actual_hash != expected_hash or len(data) != expected_size:
+            raise OverviewReportError("single-material artifact hash or size mismatch")
+        destination_dir = base_output / "assets" / folder
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = destination_dir / (actual_hash + source.suffix.lower())
+        shutil.copyfile(source, destination)
+        copied = destination.read_bytes()
+        if hashlib.sha256(copied).hexdigest() != actual_hash or len(copied) != len(data):
+            raise OverviewReportError("single-material preview asset hash or size mismatch")
+        artifact.update({"path": (Path("assets") / folder / destination.name).as_posix(), "sha256": actual_hash, "sizeBytes": len(copied)})
+
+    for material in overview.get("materials", []):
+        if not isinstance(material, dict):
+            continue
+        highlights = material.get("highlights")
+        if not isinstance(highlights, dict):
+            continue
+        for card in highlights.get("cards", []):
+            if isinstance(card, dict):
+                copy_artifact(card.get("artifact"), "single-material/highlights", {".jpg", ".jpeg", ".png", ".webp"})
+        video = highlights.get("video")
+        if isinstance(video, dict) and video.get("status") == "available":
+            copy_artifact(video, "single-material/videos", {".mp4", ".webm"})
+
+
 def write_overview(run_dir, output_dir, registry_path):
     model = build_overview_data(run_dir, registry_path)
     output_path = Path(output_dir)
@@ -1460,6 +1962,7 @@ def write_overview(run_dir, output_dir, registry_path):
     data_path = output_path / "overview-data.json"
     html_path = output_path / "index.html"
     _copy_highlight_assets(model, run_dir, output_path)
+    _copy_single_material_assets(model, run_dir, output_path)
     data_text = json.dumps(model, ensure_ascii=False, indent=2) + "\n"
     html_text = render_overview_html(model)
     _write_atomic(data_path, data_text)
