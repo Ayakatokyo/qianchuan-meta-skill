@@ -189,6 +189,42 @@ def _attach_script_facts(run_dir):
     })
 
 
+def _attach_highlight_facts(run_dir, *, valid=True):
+    artifact = run_dir / "rpa" / "peak-frames" / "m-1" / "01_0s.jpg"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"highlight-jpeg")
+    artifact_ref = {
+        "path": artifact.relative_to(run_dir).as_posix(),
+        "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "sizeBytes": artifact.stat().st_size,
+    }
+    frame = {
+        "materialId": "m-1",
+        "durationSec": 0.0,
+        "frameSequence": 1,
+        "artifact": artifact_ref,
+        "selectionEvidence": [{
+            "metric": "SHARE_COUNT", "metricValue": 0.0, "mode": "global_top_values", "policyRank": 1, "selectionRank": 1,
+        }],
+    }
+    if not valid:
+        frame["artifact"]["sha256"] = "0" * 64
+    _write_json(run_dir / "fact-pack" / "material-leaderboard.json", {
+        "schemaVersion": 1, "materials": [{"materialId": "m-1", "materialName": "素材标题", "rank": 1}], "sourceRefs": [],
+    })
+    _write_json(run_dir / "fact-pack" / "highlight-frames.json", {
+        "schemaVersion": 1, "status": "available", "highlightFrames": [frame], "sourceRefs": [],
+    })
+    _write_json(run_dir / "fact-pack" / "manifest.json", {
+        "schemaVersion": 1,
+        "materialIds": ["m-1"],
+        "counts": {"materials": 1, "highlightFrames": 1},
+        "files": ["manifest.json", "material-leaderboard.json", "highlight-frames.json"],
+        "sourceFiles": [artifact_ref],
+        "quality": {"status": "built", "categoryStatuses": {"highlightFrames": "available", "materialLeaderboard": "available"}},
+    })
+
+
 class OverviewProjectionTests(unittest.TestCase):
     def test_build_overview_projects_all_source_rows_with_verified_field_labels(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -272,8 +308,86 @@ class OverviewProjectionTests(unittest.TestCase):
         self.assertNotIn("detail", serialized)
         self.assertNotIn("https://", serialized)
 
+    def test_overview_model_degrades_highlights_without_leaking_unverified_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = _make_run(Path(temp_dir))
+            _attach_highlight_facts(run_dir, valid=False)
+            model = build_overview_data(run_dir, REGISTRY_PATH)
+
+        self.assertEqual(model["highlightOverview"]["status"], "unavailable")
+        self.assertNotIn("peak-frames", json.dumps(model["highlightOverview"], ensure_ascii=False))
+
+    def test_write_overview_copies_only_verified_highlight_images_to_relative_assets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = _make_run(Path(temp_dir))
+            _attach_highlight_facts(run_dir)
+            output_dir = run_dir / "overview-preview"
+            write_overview(run_dir, output_dir, REGISTRY_PATH)
+            model = json.loads((output_dir / "overview-data.json").read_text(encoding="utf-8"))
+            card = model["highlightOverview"]["cards"][0]
+            output_asset = output_dir / card["artifact"]["path"]
+            self.assertEqual(model["highlightOverview"]["status"], "available")
+            self.assertTrue(output_asset.is_file())
+            self.assertEqual(hashlib.sha256(output_asset.read_bytes()).hexdigest(), card["artifact"]["sha256"])
+            self.assertNotIn("peak-frames", json.dumps(model, ensure_ascii=False))
+
 
 class OverviewHtmlTests(unittest.TestCase):
+    def test_highlight_section_has_gallery_pagination_modal_and_material_jump_contracts(self):
+        model = {
+            "schemaVersion": 1,
+            "kind": "qianchuan_material_leaderboard_overview",
+            "runId": "run-test",
+            "source": {"path": "source-data/materials.csv.structured.json", "sha256": "a" * 64, "recordCount": 1},
+            "queryContext": {"period": {}, "filters": {}, "ranking": {}},
+            "fields": [], "rows": [],
+            "highlightOverview": {"schemaVersion": 1, "status": "available", "source": {"recordCount": 1}, "cards": [{
+                "id": "m-1:1", "materialId": "m-1", "materialRank": 1, "second": 0, "frameSequence": 1,
+                "role": "视频开场画面", "description": "封面画面", "selectionConditions": ["封面画面", "转发次数数值 Top1"], "materialTitle": "素材标题", "selectionEvidence": [{
+                    "metric": "SHARE_COUNT", "metricLabel": "整体转发次数", "value": 0, "mode": "global_top_values", "rank": 1, "policyRank": 1,
+                }], "artifact": {"path": "assets/highlights/hash.jpg", "sha256": "b" * 64, "sizeBytes": 1},
+            }]},
+        }
+        html = render_overview_html(model)
+
+        self.assertIn("高光帧数据", html)
+        self.assertIn('data-section="highlights"', html)
+        self.assertIn('id="highlights-panel"', html)
+        self.assertIn(".highlight-grid { display: grid;", html)
+        self.assertIn("grid-template-columns: repeat(6, minmax(0, 1fr));", html)
+        self.assertIn("aspect-ratio: 9 / 16", html)
+        self.assertIn("highlightMetricLabel", html)
+        self.assertIn("highlight-conditions", html)
+        self.assertIn("highlight-values", html)
+        self.assertIn("conditions.map", html)
+        self.assertIn(".highlight-conditions { color: var(--muted); font-size: 12px; font-weight: 700;", html)
+        self.assertIn(".highlight-material { display: block; width: 100%; margin-top: 12px; color: var(--accent); font-size: 12px;", html)
+        self.assertIn("data-highlight-material-id", html)
+        self.assertIn("highlight-material-detail", html)
+        self.assertIn("requestHighlightMaterialDetail", html)
+        self.assertIn("s ·", html)
+        self.assertIn("整体点击次数", html)
+        self.assertIn("整体流失数", html)
+        self.assertIn("整体点赞次数", html)
+        self.assertIn("整体评论次数", html)
+        self.assertIn("整体转发次数", html)
+        self.assertIn("整体新增粉丝数", html)
+        self.assertIn("description", html)
+        self.assertNotIn("角色：", html)
+        self.assertIn("const highlightPageSize = 12;", html)
+        self.assertIn("renderHighlights", html)
+        self.assertIn("highlight-modal", html)
+        self.assertIn("Escape", html)
+        self.assertIn("Enter", html)
+        self.assertIn("Space", html)
+        self.assertIn("state.page = 1", html)
+        self.assertNotIn('button class="highlight-material"', html)
+        self.assertNotIn("state.query = row.materialId", html)
+        self.assertNotIn("对应指标：</li>", html)
+        self.assertNotIn("escaped(item.metric)", html)
+        self.assertNotIn("highlight-description", html)
+        self.assertNotIn("fetch(", html)
+
     def test_html_has_script_formula_navigation_and_same_card_drilldown_contract(self):
         model = {
             "schemaVersion": 1,

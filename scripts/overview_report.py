@@ -4,8 +4,9 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
+import shutil
 import tempfile
 
 from field_registry import FieldRegistryError, load_field_registry
@@ -18,6 +19,10 @@ try:
     from script_formula_overview import ScriptFormulaOverviewError, build_script_formula_overview
 except ImportError:  # pragma: no cover - supports package-style imports.
     from .script_formula_overview import ScriptFormulaOverviewError, build_script_formula_overview
+try:
+    from highlight_overview import HighlightOverviewError, build_highlight_overview
+except ImportError:  # pragma: no cover - supports package-style imports.
+    from .highlight_overview import HighlightOverviewError, build_highlight_overview
 
 
 SCHEMA_VERSION = 1
@@ -380,6 +385,14 @@ def build_overview_data(run_dir, registry_path):
             "status": "unavailable",
             "gaps": [{"code": "script_formula_unavailable"}],
         }
+    try:
+        model["highlightOverview"] = build_highlight_overview(run_root)
+    except HighlightOverviewError:
+        model["highlightOverview"] = {
+            "schemaVersion": 1,
+            "status": "unavailable",
+            "gaps": [{"code": "highlight_frames_unavailable"}],
+        }
     return model
 
 
@@ -517,10 +530,32 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 .script-formula-bar:hover, .script-formula-bar:focus { fill: #2563eb; outline: none; }
 .script-formula-segment { transform-box: view-box; transform-origin: 116px 130px; transition: transform .24s cubic-bezier(.22, .61, .36, 1), filter .24s ease, stroke-width .24s ease; }
 .script-formula-segment.active { filter: brightness(.9); stroke-width: 3; }
+.highlight-section { display: grid; gap: 16px; }
+.highlight-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
+.highlight-card { min-width: 0; overflow: hidden; padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
+.highlight-image-button { display: block; width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; }
+.highlight-image-button img { display: block; width: 100%; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 9px; background: #e9eef6; }
+.highlight-conditions, .highlight-values { margin: 11px 0 0; padding: 0; list-style: none; text-align: center; }
+.highlight-conditions { color: var(--muted); font-size: 12px; font-weight: 700; line-height: 1.55; }
+.highlight-conditions li + li, .highlight-values li + li { margin-top: 4px; }
+.highlight-values { margin-bottom: 12px; color: #34445e; font-size: 12px; line-height: 1.55; }
+.highlight-material { display: block; width: 100%; margin-top: 12px; color: var(--accent); font-size: 12px; line-height: 1.55; text-align: center; overflow-wrap: anywhere; word-break: break-word; text-decoration: none; cursor: pointer; }
+.highlight-material:hover, .highlight-material:focus-visible { text-decoration: underline; }
+.highlight-pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
+.highlight-modal[hidden] { display: none; }
+.highlight-modal { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; }
+.highlight-modal-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, .72); }
+.highlight-modal-panel { position: relative; display: flex; flex-direction: column; width: min(980px, 100%); max-height: calc(100vh - 48px); overflow: hidden; background: var(--surface); border-radius: 16px; box-shadow: 0 24px 70px rgba(15, 23, 42, .35); }
+.highlight-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.highlight-modal-header h2 { margin: 0; font-size: 16px; }
+.highlight-modal-close { min-width: 36px; min-height: 36px; padding: 0; border: 0; border-radius: 50%; font-size: 24px; line-height: 1; }
+.highlight-modal-body { display: grid; place-items: center; min-height: 0; padding: 18px; overflow: auto; }
+.highlight-modal-body img { display: block; max-width: 100%; max-height: calc(100vh - 150px); object-fit: contain; }
 .chart-tooltip { position: fixed; z-index: 30; max-width: 280px; padding: 10px 12px; pointer-events: none; background: #172033; color: white; border-radius: 8px; box-shadow: 0 8px 24px rgba(15, 23, 42, .2); font-size: 12px; line-height: 1.65; }
 .chart-tooltip[hidden] { display: none; }
 @media (max-width: 900px) { .field-modal-body { grid-template-columns: 160px minmax(0, 1fr); } .field-modal-selected { grid-column: 2; max-height: 190px; border-top: 1px solid var(--line); } }
-@media (max-width: 700px) { body { padding: 18px 12px; } h1 { font-size: 24px; } input[type=search] { min-width: 0; } .field-modal { padding: 10px; } .field-modal-panel { height: calc(100vh - 20px); } .field-modal-body { display: flex; flex-direction: column; } .field-modal-groups { display: flex; gap: 6px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); } .field-modal-groups button { flex: 0 0 auto; width: auto; margin: 0; white-space: nowrap; } .field-modal-selected { max-height: 190px; border-top: 1px solid var(--line); border-left: 0; } .field-option-grid { grid-template-columns: 1fr; } .field-modal-footer { align-items: flex-end; flex-direction: column; } .field-modal-footer-actions { width: 100%; } .field-modal-footer-actions button { flex: 1; } .field-modal-footer p { align-self: flex-start; } .material-name-column { min-width: 300px; width: 300px; } .chart-grid { grid-template-columns: 1fr; } .donut-layout, .script-formula-donut { grid-template-columns: 1fr; } .donut-layout svg, .script-formula-donut svg { margin: 0 auto; } }
+@media (max-width: 1100px) { .highlight-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 700px) { body { padding: 18px 12px; } h1 { font-size: 24px; } input[type=search] { min-width: 0; } .field-modal { padding: 10px; } .field-modal-panel { height: calc(100vh - 20px); } .field-modal-body { display: flex; flex-direction: column; } .field-modal-groups { display: flex; gap: 6px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); } .field-modal-groups button { flex: 0 0 auto; width: auto; margin: 0; white-space: nowrap; } .field-modal-selected { max-height: 190px; border-top: 1px solid var(--line); border-left: 0; } .field-option-grid { grid-template-columns: 1fr; } .field-modal-footer { align-items: flex-end; flex-direction: column; } .field-modal-footer-actions { width: 100%; } .field-modal-footer-actions button { flex: 1; } .field-modal-footer p { align-self: flex-start; } .material-name-column { min-width: 300px; width: 300px; } .chart-grid { grid-template-columns: 1fr; } .donut-layout, .script-formula-donut { grid-template-columns: 1fr; } .donut-layout svg, .script-formula-donut svg { margin: 0 auto; } .highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>
 </head>
 <body>
@@ -530,6 +565,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   <button type="button" class="active" data-section="materials">素材榜单</button>
   <button type="button" data-section="audience">人群数据</button>
   <button type="button" data-section="scripts">脚本内容公式</button>
+  <button type="button" data-section="highlights">高光帧数据</button>
 </nav>
 <section id="materials-panel" data-section-panel="materials">
 <div class="toolbar">
@@ -572,7 +608,24 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     <button id="last" type="button">末</button>
   </span>
 </div>
- </section>
+</section>
+<section id="highlights-panel" class="highlight-section" data-section-panel="highlights" hidden>
+  <div id="highlights-unavailable" class="audience-card empty" hidden>高光帧数据不可用</div>
+  <div id="highlights-content">
+    <div id="highlight-summary" class="summary"></div>
+    <div id="highlight-grid" class="highlight-grid"></div>
+    <div class="highlight-pager">
+      <span id="highlight-range"></span>
+      <span>
+        <button id="highlight-first" type="button">首</button>
+        <button id="highlight-previous" type="button">前</button>
+        <span id="highlight-pages"></span>
+        <button id="highlight-next" type="button">后</button>
+        <button id="highlight-last" type="button">末</button>
+      </span>
+    </div>
+  </div>
+</section>
 <section id="audience-panel" class="audience-section" data-section-panel="audience" hidden>
   <div id="audience-unavailable" class="audience-card empty" hidden>人群数据不可用</div>
   <div id="audience-content">
@@ -604,6 +657,13 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   </div>
 </section>
 <div id="chart-tooltip" class="chart-tooltip" role="status" aria-live="polite" hidden></div>
+<section id="highlight-modal" class="highlight-modal" role="dialog" aria-modal="true" aria-labelledby="highlight-modal-title" hidden>
+  <div class="highlight-modal-backdrop" data-highlight-action="close"></div>
+  <div class="highlight-modal-panel">
+    <header class="highlight-modal-header"><h2 id="highlight-modal-title">高光帧预览</h2><button id="highlight-modal-close" class="highlight-modal-close" type="button" data-highlight-action="close" aria-label="关闭高光帧预览">×</button></header>
+    <div class="highlight-modal-body"><img id="highlight-modal-image" alt=""></div>
+  </div>
+</section>
 </main>
 <script id="overview-model" type="application/json">""" + embedded + r"""</script>
 <script>
@@ -646,6 +706,15 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   const metricMap = Object.fromEntries((audience.metrics || []).map(metric => [metric.id, metric]));
   const scriptFormula = model.scriptFormulaOverview || { status: "unavailable", gaps: [{ code: "script_formula_unavailable" }] };
   const scriptFormulaState = { selectedPrimary: null, selectedSecondary: null, tooltip: null };
+  const highlightOverview = model.highlightOverview || { status: "unavailable", gaps: [{ code: "highlight_frames_unavailable" }] };
+  const highlightPageSize = 12;
+  const highlightState = { page: 1, modalCard: null, modalTrigger: null };
+  const highlightGrid = document.getElementById("highlight-grid");
+  const highlightsContent = document.getElementById("highlights-content");
+  const highlightsUnavailable = document.getElementById("highlights-unavailable");
+  const highlightModal = document.getElementById("highlight-modal");
+  const highlightModalImage = document.getElementById("highlight-modal-image");
+  const highlightModalTitle = document.getElementById("highlight-modal-title");
 
   function normalize(value) {
     return String(value == null ? "" : value).normalize("NFKC").toLocaleLowerCase().trim();
@@ -708,6 +777,105 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     if (missing(value)) return "—";
     if (typeof value === "number") return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 4 }).format(value);
     return escaped(value);
+  }
+
+  function highlightSecond(value) {
+    const number = Number(value);
+    return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+  }
+
+  function highlightMetricLabel(metric) {
+    return ({
+      CLICK_COUNT: "整体点击次数",
+      LOSE_COUNT: "整体流失数",
+      LIKE_COUNT: "整体点赞次数",
+      COMMENT_COUNT: "整体评论次数",
+      SHARE_COUNT: "整体转发次数",
+      NEW_FOLLOWER_COUNT: "整体新增粉丝数",
+    })[metric] || "指标";
+  }
+
+  function highlightMetricDisplayLabel(item) {
+    const label = item && item.metricLabel ? item.metricLabel : highlightMetricLabel(item && item.metric);
+    return String(label).replace(/^整体/, "");
+  }
+
+  function highlightConditions(row) {
+    const conditions = Array.isArray(row.selectionConditions) ? row.selectionConditions.filter(Boolean) : [];
+    return conditions.length ? conditions : [row.description || `高光帧 ${highlightSecond(row.second)}s`];
+  }
+
+  function renderHighlights() {
+    const available = highlightOverview.status === "available";
+    highlightsUnavailable.hidden = available;
+    highlightsContent.hidden = !available;
+    if (!available) return;
+    const cards = Array.isArray(highlightOverview.cards) ? highlightOverview.cards : [];
+    const pageCount = Math.max(1, Math.ceil(cards.length / highlightPageSize));
+    highlightState.page = Math.min(highlightState.page, pageCount);
+    const pageCards = cards.slice((highlightState.page - 1) * highlightPageSize, highlightState.page * highlightPageSize);
+    if (!cards.length) {
+      highlightGrid.innerHTML = '<div class="empty">暂无可展示的高光帧</div>';
+    } else {
+      highlightGrid.innerHTML = pageCards.map((row, index) => {
+        const cardIndex = (highlightState.page - 1) * highlightPageSize + index;
+        const conditions = highlightConditions(row);
+        const alt = `${conditions.join("、")}，${row.materialTitle}`;
+        const conditionMarkup = conditions.map(condition => `<li>${escaped(condition)}</li>`).join("");
+        const values = (Array.isArray(row.selectionEvidence) ? row.selectionEvidence : []).map(item => `<li>${escaped(highlightSecond(row.second))}s · ${escaped(highlightMetricDisplayLabel(item))} ${escaped(item.value)}</li>`).join("");
+        return `<article class="highlight-card"><button class="highlight-image-button" type="button" data-highlight-index="${cardIndex}" aria-label="点击放大查看：${escaped(alt)}"><img src="${escaped(row.artifact.path)}" alt="${escaped(alt)}"></button><ul class="highlight-conditions" aria-label="筛选条件">${conditionMarkup}</ul><ul class="highlight-values" aria-label="高光帧数值">${values}</ul><a href="#single-material-data" class="highlight-material" data-highlight-material-id="${escaped(row.materialId)}" aria-label="查看素材详情：${escaped(row.materialTitle)}">${escaped(row.materialTitle)}</a></article>`;
+      }).join("");
+      highlightGrid.querySelectorAll("button[data-highlight-index]").forEach(button => {
+        const open = () => openHighlightModal(Number(button.dataset.highlightIndex), button);
+        button.addEventListener("click", open);
+        button.addEventListener("keydown", event => {
+          if (event.key === "Enter" || event.key === " " || event.key === "Space") { event.preventDefault(); open(); }
+        });
+      });
+      highlightGrid.querySelectorAll("[data-highlight-material-id]").forEach(link => {
+        link.addEventListener("click", event => {
+          event.preventDefault();
+          requestHighlightMaterialDetail(event.currentTarget.dataset.highlightMaterialId);
+        });
+      });
+    }
+    const start = cards.length ? (highlightState.page - 1) * highlightPageSize + 1 : 0;
+    const end = Math.min(highlightState.page * highlightPageSize, cards.length);
+    document.getElementById("highlight-summary").textContent = `共 ${cards.length} 张`;
+    document.getElementById("highlight-range").textContent = cards.length ? `当前 ${start}–${end} / ${cards.length}` : "暂无记录";
+    document.getElementById("highlight-pages").textContent = `${highlightState.page} / ${pageCount}`;
+    document.getElementById("highlight-first").disabled = highlightState.page <= 1;
+    document.getElementById("highlight-previous").disabled = highlightState.page <= 1;
+    document.getElementById("highlight-next").disabled = highlightState.page >= pageCount;
+    document.getElementById("highlight-last").disabled = highlightState.page >= pageCount;
+  }
+
+  function openHighlightModal(index, trigger) {
+    const card = highlightOverview.cards?.[index];
+    if (!card) return;
+    const conditions = highlightConditions(card);
+    highlightState.modalCard = card;
+    highlightState.modalTrigger = trigger;
+    highlightModalTitle.textContent = `${conditions.join("、")} · ${card.materialTitle}`;
+    highlightModalImage.src = card.artifact.path;
+    highlightModalImage.alt = `${conditions.join("、")}，${card.materialTitle}`;
+    highlightModal.hidden = false;
+    document.body.classList.add("modal-open");
+    document.getElementById("highlight-modal-close").focus();
+  }
+
+  function requestHighlightMaterialDetail(materialId) {
+    // Keep the fifth-section navigation contract without changing tabs until that section exists.
+    document.dispatchEvent(new CustomEvent("highlight-material-detail", { detail: { materialId } }));
+  }
+
+  function closeHighlightModal() {
+    highlightModal.hidden = true;
+    document.body.classList.remove("modal-open");
+    const trigger = highlightState.modalTrigger;
+    highlightState.modalCard = null;
+    highlightState.modalTrigger = null;
+    if (trigger) trigger.focus();
   }
 
   function formatAudienceValue(value, metric) {
@@ -1175,8 +1343,12 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   });
   document.addEventListener("keydown", event => {
     if (event.key === "Escape" && !fieldModal.hidden) closeFieldDialog();
+    if (event.key === "Escape" && !highlightModal.hidden) closeHighlightModal();
     if (event.key === "Escape") hideChartTooltip();
     if (event.key === "Escape") hideScriptFormulaTooltip();
+  });
+  highlightModal.addEventListener("click", event => {
+    if (event.target.closest("[data-highlight-action='close']")) closeHighlightModal();
   });
   document.querySelectorAll("[data-section]").forEach(button => button.addEventListener("click", event => {
     const section = event.currentTarget.dataset.section;
@@ -1184,6 +1356,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     document.querySelectorAll("[data-section-panel]").forEach(panel => { panel.hidden = panel.dataset.sectionPanel !== section; });
     if (section === "audience") renderAudience();
     if (section === "scripts") renderScriptFormula();
+    if (section === "highlights") renderHighlights();
     if (section !== "scripts") hideScriptFormulaTooltip();
     if (section !== "audience") hideChartTooltip();
   }));
@@ -1210,8 +1383,13 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     hideChartTooltip();
     renderGeography();
   });
+  document.getElementById("highlight-first").addEventListener("click", () => { highlightState.page = 1; renderHighlights(); });
+  document.getElementById("highlight-previous").addEventListener("click", () => { highlightState.page = Math.max(1, highlightState.page - 1); renderHighlights(); });
+  document.getElementById("highlight-next").addEventListener("click", () => { highlightState.page += 1; renderHighlights(); });
+  document.getElementById("highlight-last").addEventListener("click", () => { highlightState.page = Math.max(1, Math.ceil((highlightOverview.cards || []).length / highlightPageSize)); renderHighlights(); });
   renderAudience();
   renderScriptFormula();
+  renderHighlights();
   search.addEventListener("input", event => { state.query = event.target.value; state.page = 1; render(); });
   document.getElementById("first").addEventListener("click", () => { state.page = 1; render(); });
   document.getElementById("previous").addEventListener("click", () => { state.page = Math.max(1, state.page - 1); render(); });
@@ -1241,12 +1419,47 @@ def _write_atomic(path, content):
         raise
 
 
+def _copy_highlight_assets(model, run_dir, output_dir):
+    overview = model.get("highlightOverview")
+    if not isinstance(overview, dict) or overview.get("status") != "available":
+        return
+    cards = overview.get("cards")
+    if not isinstance(cards, list) or not cards:
+        return
+    run_root = Path(run_dir).resolve()
+    asset_dir = Path(output_dir) / "assets" / "highlights"
+    asset_dir.mkdir(parents=True, exist_ok=True)
+    for card in cards:
+        artifact = card.get("artifact") if isinstance(card, dict) else None
+        if not isinstance(artifact, dict):
+            raise OverviewReportError("highlight artifact is missing")
+        source = (run_root / Path(*PurePosixPath(artifact["path"]).parts)).resolve()
+        try:
+            source.relative_to(run_root)
+        except ValueError as exc:
+            raise OverviewReportError("highlight artifact path escapes run") from exc
+        suffix = source.suffix.lower()
+        if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+            raise OverviewReportError("highlight artifact extension is invalid")
+        expected_hash = artifact.get("sha256")
+        expected_size = artifact.get("sizeBytes")
+        destination = asset_dir / (expected_hash + suffix)
+        shutil.copyfile(source, destination)
+        actual_bytes = destination.read_bytes()
+        actual_hash = hashlib.sha256(actual_bytes).hexdigest()
+        if actual_hash != expected_hash or len(actual_bytes) != expected_size:
+            raise OverviewReportError("highlight preview asset hash or size mismatch")
+        artifact.clear()
+        artifact.update({"path": (Path("assets") / "highlights" / destination.name).as_posix(), "sha256": actual_hash, "sizeBytes": len(actual_bytes)})
+
+
 def write_overview(run_dir, output_dir, registry_path):
     model = build_overview_data(run_dir, registry_path)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     data_path = output_path / "overview-data.json"
     html_path = output_path / "index.html"
+    _copy_highlight_assets(model, run_dir, output_path)
     data_text = json.dumps(model, ensure_ascii=False, indent=2) + "\n"
     html_text = render_overview_html(model)
     _write_atomic(data_path, data_text)
