@@ -1,14 +1,14 @@
 ---
 name: qianchuan-meta-skill
-description: 适用于按店铺、广告主和日期范围筛选千川素材并执行受控 RPA 诊断；高光帧只在第一阶段明确请求时生成，商业分析只读取已落盘证据。
+description: 适用于按店铺、广告主和日期范围筛选千川素材并执行受控 RPA 诊断；阶段一取数和事实包校验完成后生成离线素材总览报告，高光帧只在第一阶段明确请求时生成，商业分析只读取已落盘证据。
 argument_hint: 输入查询范围、指标筛选和详情数量；高光帧默认不生成，仅在第一阶段需要时补充现有规则。
 metadata:
-  pre_input: 请采集千川素材及相关诊断数据。授权店铺ID是 ____（必填）；广告主ID是 ____（必填）；时间范围是 ____（填写起止日期）；素材筛选条件是 ____（可选）；排序指标是 ____（必填）；排序方向是 ____（升序或降序）；需要获取详情的素材数是 ____（正整数）。是否同时生成高光帧图片：____（可选，默认否）。仅选择是时，填写封面设置，以及需要的高光指标、提取策略和帧数。请在第一阶段完成取数和已选择的图片提取，整理实际可用数据后停止，等待我输入商业分析思路。
+  pre_input: 请采集千川素材及相关诊断数据。授权店铺ID是 ____（必填）；广告主ID是 ____（必填）；时间范围是 ____（填写起止日期）；素材筛选条件是 ____（可选）；排序指标是 ____（必填）；排序方向是 ____（升序或降序）；需要获取详情的素材数是 ____（正整数）。是否同时生成高光帧图片：____（可选，默认否）。仅选择是时，填写封面设置，以及需要的高光指标、提取策略和帧数。请在第一阶段完成取数、已选择的图片提取、事实包校验和阶段一素材总览报告生成，整理实际可用数据后停止，等待我输入商业分析思路。
 ---
 
 # 千川素材分析元技能
 
-该技能负责受控素材查询、RPA 诊断、临时视频下载、高光帧资产，以及在完整事实包上的可审计商业分析准备与验收。整个流程只有一个 `qianchuan-meta-skill` 入口，并严格分两次调用：第一次只做外部取数和事实包落盘；第二次才接收用户自然语言商业分析思路，将其转换为 `FactRetrievalSpec`，只读取已落盘事实包，再交给模型分析。脚本负责确定性校验、事实切片、脱敏、结果验收与报告落盘；当前项目没有外部模型调用通道，不会擅自增加凭证或网络依赖。
+该技能负责受控素材查询、RPA 诊断、临时视频下载、高光帧资产、阶段一离线素材总览报告，以及在完整事实包上的可审计商业分析准备与验收。整个流程只有一个 `qianchuan-meta-skill` 入口，并严格分两阶段：第一阶段做外部取数、事实包落盘与校验，再从已完成运行目录生成素材总览报告；第二阶段才接收用户自然语言商业分析思路，将其转换为 `FactRetrievalSpec`，只读取已落盘事实包，再交给模型分析。脚本负责确定性校验、事实切片、脱敏、结果验收与报告落盘；当前项目没有外部模型调用通道，不会擅自增加凭证或网络依赖。
 
 ## 输入
 
@@ -95,6 +95,11 @@ uv run --with-requirements requirements.txt python scripts/run_meta_skill.py wor
   --execute-rpa \
   --output-dir /path/to/new-run
 
+# 阶段一取数、事实包构建和校验成功后，生成阶段一离线素材总览报告
+uv run --with-requirements requirements.txt python scripts/run_meta_skill.py render-overview \
+  --run-dir /path/to/completed-run \
+  --output-dir /path/to/completed-run/overview
+
 uv run --with-requirements requirements.txt python scripts/run_meta_skill.py verify-run \
   --output-dir /path/to/completed-run
 
@@ -119,13 +124,15 @@ uv run --with-requirements requirements.txt python scripts/run_meta_skill.py ver
 
 只有 `run --execute-rpa` 在 RPA、records、抽帧和批量验证均成功后，才会自动生成 `fact-pack/`；成功回执的 `factPack` 阶段会记录 manifest 路径、`targetTopN` 和分类计数。仅 `query` 或未授权的 `run` 不会创建或声称完成事实包。也可以对已有完成目录显式执行 `build-fact-pack`，但 query-only、RPA 部分失败或工件不完整时命令会非零退出。
 
+阶段一取数成功并通过事实包校验后，必须继续执行 `render-overview` 生成阶段一素材总览报告。该命令只读取当前运行目录中的已校验素材汇总、事实包和可用详情证据，不重新查询、不重跑 RPA、不调用模型；默认输出 `overview/overview-data.json` 和 `overview/index.html`。报告是事实投影工作台，包含素材榜单、查询上下文、可选字段，以及在证据可用时展示的人群、脚本、高光帧和单素材详情；不可用数据必须保留明确的 unavailable/gap 状态，不得补零或生成商业结论。命令返回 `status=succeeded` 且两个文件均存在后，阶段一报告才算完成；来源文件缺失、记录数不一致、字段未注册或写入失败时必须阻断阶段一交接。
+
 事实包按 `targetTopN` 生成以下文件：`material-leaderboard.json`（素材榜单与平台维度字段）、`audience.json`（人群事实）、`scripts.json`（脚本事实）、`highlight-frames.json`（高光帧事实）以及 `manifest.json`/`README.md`。候选池大于目标时，只纳入 RPA 成功选中的目标素材；`scripts.json` 使用 `parseStatus=parsed|missing|failed` 和对应错误码，`highlight-frames.json` 在没有选中帧时使用 `status=no_highlight_frames`，不会把缺失推断为事实。
 
 事实包只保留可追溯事实，不生成商业结论。所有 `sourceRef`/`artifact` 都是运行目录内的相对 POSIX 路径并带 SHA-256 与大小；同一文件的来源引用按文件聚合，记录定位使用 `recordIndexes`，读取时兼容旧版单 `recordIndex`。文件哈希在一次进程运行内按规范化绝对路径缓存，避免对大 records 文件重复计算。签名媒体 URL、绝对路径、账号、会话和凭证字段会被移除。`verify-fact-pack` 完全离线校验 TopN、分类计数、来源哈希、JPEG 及敏感字段。
 
 ## 商业分析交接
 
-采集与商业分析分为两个阶段。阶段一完成查询、RPA、四类事实包和离线校验后，运行状态为 `fact_pack_ready`，阶段一成功后必须停止并提示用户进入阶段二；随后状态为 `awaiting_analysis_input`，不自动生成商业结论。状态链路为：`awaiting_query_input → querying → rpa_processing → fact_pack_building → fact_pack_verifying → fact_pack_ready → awaiting_analysis_input → analysis_preparing → awaiting_model → analysis_verifying → analysis_verified → report_ready`；长阶段回执持续记录开始/结束时间、进度和当前素材，失败时保留 `query_failed`、`fact_pack_failed` 或 `analysis_failed` 及可重试原因。
+采集、阶段一报告和商业分析分为两个阶段。阶段一完成查询、RPA、四类事实包和离线校验后，先执行 `render-overview` 生成素材总览报告；总览报告生成成功即代表阶段一成功，阶段一成功后必须停止并提示用户进入阶段二，运行状态按交接协议进入 `awaiting_analysis_input`。阶段一报告只呈现已落盘事实，不自动生成商业结论。状态链路为：`awaiting_query_input → querying → rpa_processing → fact_pack_building → fact_pack_verifying → fact_pack_ready → [render-overview] → awaiting_analysis_input → analysis_preparing → awaiting_model → analysis_verifying → analysis_verified → report_ready`；`render-overview` 是离线报告产物步骤，不改变事实包或分析交接文件。长阶段回执持续记录开始/结束时间、进度和当前素材，失败时保留 `query_failed`、`fact_pack_failed` 或 `analysis_failed` 及可重试原因。
 
 阶段一的交接文件为 `analysis-handoff.json`，至少包含 `runId`、`factPackPath`、`factPackManifestSha256`、四类计数、`missingItems` 和 `sourceRefs`。阶段二由用户选择一个或多个 `material_leaderboard`、`audience`、`scripts`、`highlight_frames` 分区，指定全部、TopN 或素材 ID 范围，并用自然语言描述分析目标、关注指标、比较维度、输出形式和深度。
 

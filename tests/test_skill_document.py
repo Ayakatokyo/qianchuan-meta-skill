@@ -58,6 +58,11 @@ class SkillDocumentTests(unittest.TestCase):
     def test_skill_body_describes_two_stage_analysis_handoff(self):
         _, body = load_skill_document()
 
+        self.assertIn("阶段一素材总览报告", body)
+        self.assertIn("render-overview", body)
+        self.assertIn("overview/overview-data.json", body)
+        self.assertIn("overview/index.html", body)
+        self.assertIn("不重新查询、不重跑 RPA、不调用模型", body)
         self.assertIn("awaiting_analysis_input", body)
         self.assertIn("factPackManifestSha256", body)
         self.assertIn("materialScope", body)
