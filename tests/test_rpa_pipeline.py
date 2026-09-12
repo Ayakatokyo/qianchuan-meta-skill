@@ -27,7 +27,7 @@ class RpaPipelineTests(unittest.TestCase):
                 period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
                 options={"rpaConcurrency": 1},
                 fetch_diagnosis=lambda entry, _paths: {"records": [{"materialId": entry["materialId"]}], "csvPath": self._csv(root)},
-                postprocess=lambda _entry, _records, _paths: {"frames": []},
+                postprocess=self._video_postprocess,
                 progress_callback=lambda phase, progress, current: events.append((phase, progress, current)),
             )
 
@@ -54,7 +54,7 @@ class RpaPipelineTests(unittest.TestCase):
                 period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
                 options={"rpaConcurrency": 1, "recoveryAttempts": 1},
                 fetch_diagnosis=fetch,
-                postprocess=lambda entry, _records, _paths: {"frames": []},
+                postprocess=self._video_postprocess,
             )
 
             ready = json.loads((root / "rpa" / "top_materials_rpa_ready.json").read_text(encoding="utf-8"))
@@ -77,7 +77,7 @@ class RpaPipelineTests(unittest.TestCase):
                 period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
                 options={"rpaConcurrency": 3, "recoveryAttempts": 1},
                 fetch_diagnosis=fetch,
-                postprocess=lambda _entry, _records, _paths: {"frames": []},
+                postprocess=self._video_postprocess,
             )
             ready = json.loads((root / "rpa" / "top_materials_rpa_ready.json").read_text(encoding="utf-8"))
         self.assertTrue(result["succeeded"])
@@ -125,7 +125,7 @@ class RpaPipelineTests(unittest.TestCase):
                 "period": {"startDate": "2026-08-01", "endDate": "2026-08-02"},
                 "options": {"rpaConcurrency": 1},
                 "fetch_diagnosis": fetch,
-                "postprocess": lambda _entry, _records, _paths: {"frames": []},
+                "postprocess": self._video_postprocess,
             }
             payload = {"materials": [candidate("m-1", 1)], "collection": {"candidateTopN": 1, "targetTopN": 1}}
             run_rpa_pipeline(root, payload, **arguments)
@@ -149,7 +149,7 @@ class RpaPipelineTests(unittest.TestCase):
                 "period": {"startDate": "2026-08-01", "endDate": "2026-08-02"},
                 "options": {"rpaConcurrency": 1},
                 "fetch_diagnosis": fetch,
-                "postprocess": lambda _entry, _records, _paths: {"frames": []},
+                "postprocess": self._video_postprocess,
             }
             payload = {"materials": [candidate("m-1", 1)], "collection": {"candidateTopN": 1, "targetTopN": 1}}
             run_rpa_pipeline(root, payload, **arguments)
@@ -177,7 +177,7 @@ class RpaPipelineTests(unittest.TestCase):
                     postprocess=lambda *_args: self.fail("must not postprocess"),
                 )
 
-    def test_postprocessor_deletes_temporary_video_and_returns_verified_jpegs(self):
+    def test_postprocessor_retains_verified_video_and_returns_verified_jpegs(self):
         downloaded = []
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -215,6 +215,10 @@ class RpaPipelineTests(unittest.TestCase):
         self.assertEqual(ready["materials"][0]["highlightFrames"][0]["durationSec"], 0)
         self.assertTrue(downloaded)
         self.assertFalse(downloaded[0].exists())
+        video = ready["materials"][0]["videoArtifact"]
+        self.assertEqual(video["artifactPath"], "rpa/videos/m-1.mp4")
+        self.assertEqual(video["sizeBytes"], len(b"temporary-video"))
+        self.assertRegex(video["sha256"], r"^[0-9a-f]{64}$")
 
     def test_ready_artifacts_use_relative_paths_and_integrity_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -261,6 +265,13 @@ class RpaPipelineTests(unittest.TestCase):
             self.assertNotIn("..", Path(artifact["artifactPath"]).parts)
             self.assertRegex(artifact["sha256"], r"^[0-9a-f]{64}$")
             self.assertGreater(artifact["sizeBytes"], 0)
+
+    @staticmethod
+    def _video_postprocess(entry, _records, paths):
+        video_path = Path(paths["videos"]) / (entry["materialId"] + ".mp4")
+        video_path.parent.mkdir(parents=True, exist_ok=True)
+        video_path.write_bytes(b"fixture-video")
+        return {"frames": [], "videoPath": str(video_path)}
 
     @staticmethod
     def _csv(root):

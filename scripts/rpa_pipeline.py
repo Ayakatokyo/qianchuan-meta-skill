@@ -106,6 +106,7 @@ def _paths(output_dir):
         "records": root / "diagnosis-records",
         "receipts": root / "rpa-receipts",
         "frames": root / "peak-frames",
+        "videos": root / "videos",
         "ready": root / "top_materials_rpa_ready.json",
         "verification": root / "batch-verification.json",
     }
@@ -172,6 +173,11 @@ def _completed_artifacts_are_valid(entry, paths):
         frame_path = frame.get("framePath")
         if frame_path and (not within(paths["frames"], Path(frame_path)) or not _is_jpeg(frame_path)):
             return False
+    video_path = entry.get("videoPath")
+    if entry.get("postprocessStatus") == "succeeded" and (
+        not video_path or not within(paths["videos"], Path(video_path)) or not Path(video_path).is_file() or Path(video_path).stat().st_size <= 0
+    ):
+        return False
     return (
         (not csv_path or (csv_path.is_file() and csv_path.stat().st_size > 0))
         and receipt.get("state") == "records_persisted"
@@ -283,6 +289,9 @@ def _ready_payload(entries, fingerprint):
             "diagnosisRecordsArtifact": _artifact_metadata(root, records_path),
             "highlightFrames": frames,
         }
+        video_path = item.get("videoPath")
+        if video_path and Path(video_path).is_file():
+            payload["videoArtifact"] = _artifact_metadata(root, video_path)
         summary_path = item.get("highlightSummaryPath")
         if summary_path and Path(summary_path).is_file():
             payload["highlightSummaryArtifact"] = _artifact_metadata(root, summary_path)
@@ -310,31 +319,35 @@ def _is_jpeg(path):
 
 
 def build_postprocessor(policy, options, *, download_video=download_file, extract_frames=extract_highlight_frames):
-    """Create a postprocessor that never retains the downloaded source video."""
+    """Create a postprocessor that retains a verified local video for the report."""
     normalized_options = resolve_rpa_options(options)
 
     def postprocess(entry, records, paths):
         video_url = _video_url(records, entry["materialId"])
-        with tempfile.TemporaryDirectory(prefix="qianchuan-rpa-video-") as temporary_dir:
-            video_path = Path(temporary_dir) / (entry["materialId"] + ".mp4")
-            try:
-                download_video(
-                    video_url,
-                    video_path,
-                    max_bytes=normalized_options.get("videoMaxBytes", DEFAULT_VIDEO_MAX_BYTES),
-                    deadline_sec=normalized_options.get("downloadDeadlineSec", DEFAULT_DOWNLOAD_DEADLINE_SEC),
-                )
-            except Exception as exc:
-                raise RpaPipelineError("video_download_failed: %s" % exc, "video_download_failed") from exc
+        video_path = artifact_path(paths["videos"], entry["materialId"], ".mp4")
+        video_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            download_video(
+                video_url,
+                video_path,
+                max_bytes=normalized_options.get("videoMaxBytes", DEFAULT_VIDEO_MAX_BYTES),
+                deadline_sec=normalized_options.get("downloadDeadlineSec", DEFAULT_DOWNLOAD_DEADLINE_SEC),
+            )
+        except Exception as exc:
+            raise RpaPipelineError("video_download_failed: %s" % exc, "video_download_failed") from exc
+        if not video_path.is_file() or video_path.stat().st_size <= 0:
+            raise RpaPipelineError("video_download_failed: downloaded video is missing or empty", "video_download_failed")
+        if policy is not None:
             output_dir = paths["frames"] / entry["materialId"]
             try:
                 summary = extract_frames(records, policy, video_path, output_dir)
             except Exception as exc:
                 raise RpaPipelineError("frame_extraction_failed: %s" % exc, "frame_extraction_failed") from exc
-        frames = summary.get("frames") if isinstance(summary, dict) else None
-        if not isinstance(frames, list) or any(not _is_jpeg(item.get("framePath")) for item in frames if isinstance(item, dict)):
-            raise RpaPipelineError("frame_verification_failed: extracted JPEG is missing or invalid", "frame_verification_failed")
-        return {"frames": frames, "summaryPath": str(output_dir / "summary.json")}
+            frames = summary.get("frames") if isinstance(summary, dict) else None
+            if not isinstance(frames, list) or any(not _is_jpeg(item.get("framePath")) for item in frames if isinstance(item, dict)):
+                raise RpaPipelineError("frame_verification_failed: extracted JPEG is missing or invalid", "frame_verification_failed")
+            return {"frames": frames, "summaryPath": str(output_dir / "summary.json"), "videoPath": str(video_path)}
+        return {"frames": [], "videoPath": str(video_path)}
 
     return postprocess
 
@@ -352,6 +365,9 @@ def _verify(paths, entries, fingerprint, target_top_n):
         for frame in entry.get("highlightFrames", []):
             if not isinstance(frame, dict) or not _is_jpeg(frame.get("framePath")):
                 errors.append("invalid highlight frame for %s" % entry["materialId"])
+        video_path = Path(entry.get("videoPath") or "")
+        if not video_path.is_file() or video_path.stat().st_size <= 0:
+            errors.append("videoPath missing for %s" % entry["materialId"])
     asset_statuses = [entry.get("postprocessStatus") for entry in selected]
     payload = {
         "schemaVersion": 1, "configurationFingerprint": fingerprint, "targetTopN": target_top_n,
@@ -442,20 +458,18 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
         for entry, records in sorted(wave_results, key=lambda value: value[0]["rank"]):
             if records is None:
                 continue
-            if not highlights_enabled:
-                entry.update({"postprocessStatus": "not_requested", "status": "succeeded", "highlightFrames": []})
-            else:
-                entry["postprocessAttemptCount"] += 1
-                entry["postprocessStatus"] = "running"
-                try:
-                    postprocessed = postprocess(entry, records, paths)
-                    frames = postprocessed.get("frames") if isinstance(postprocessed, dict) else None
-                    if not isinstance(frames, list):
-                        raise RpaPipelineError("frame_verification_failed: postprocess did not return frames", "frame_verification_failed")
-                    entry.update({"postprocessStatus": "succeeded", "status": "succeeded", "highlightFrames": frames})
-                    entry["highlightSummaryPath"] = postprocessed.get("summaryPath")
-                except Exception as exc:
-                    entry.update({"postprocessStatus": "failed", "status": "partial", "failureReason": getattr(exc, "error_type", "frame_extraction_failed"), "errorType": type(exc).__name__, "errorMessage": str(exc)})
+            entry["postprocessAttemptCount"] += 1
+            entry["postprocessStatus"] = "running"
+            try:
+                postprocessed = postprocess(entry, records, paths)
+                frames = postprocessed.get("frames") if isinstance(postprocessed, dict) else None
+                video_path = postprocessed.get("videoPath") if isinstance(postprocessed, dict) else None
+                if not isinstance(frames, list) or not video_path:
+                    raise RpaPipelineError("video_download_failed: postprocess did not return a retained video", "video_download_failed")
+                entry.update({"postprocessStatus": "succeeded", "status": "succeeded", "highlightFrames": frames, "videoPath": video_path})
+                entry["highlightSummaryPath"] = postprocessed.get("summaryPath")
+            except Exception as exc:
+                entry.update({"postprocessStatus": "failed", "status": "partial", "failureReason": getattr(exc, "error_type", "frame_extraction_failed"), "errorType": type(exc).__name__, "errorMessage": str(exc)})
             _persist(paths, entries, configuration_fingerprint, period, options, account)
             if progress_callback:
                 try:

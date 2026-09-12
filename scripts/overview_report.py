@@ -564,12 +564,12 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 .single-material-selector .single-material-id { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
 .single-material-main { min-width: 0; }
 .single-material-detail-card { min-width: 0; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
-.single-material-topbar { display: grid; grid-template-columns: minmax(180px, .75fr) minmax(0, 1.25fr); gap: 14px; align-items: stretch; margin-bottom: 12px; }
-.single-material-header { display: flex; min-height: 96px; flex-direction: column; justify-content: center; margin: 0; padding: 14px 16px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 12px; }
+.single-material-topbar { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 14px; align-items: start; margin: -16px -16px 12px 0; }
+.single-material-header { display: flex; min-width: 0; flex-direction: column; justify-content: center; margin: 0; padding: 20px 16px 20px 0; }
 .single-material-header h2 { margin: 0; font-size: 22px; line-height: 1.35; overflow-wrap: anywhere; }
 .single-material-header p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
-.single-material-video-card { min-width: 0; min-height: 96px; overflow: hidden; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 12px; }
-.single-material-video-card video { display: block; width: 100%; height: 100%; min-height: 96px; object-fit: cover; background: #0f172a; }
+.single-material-video-card { aspect-ratio: 9 / 16; width: min(100%, 160px); min-width: 0; overflow: hidden; justify-self: start; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 12px; }
+.single-material-video-card video { display: block; width: 100%; height: 100%; object-fit: cover; background: #0f172a; }
 .single-material-video-card .single-video-unavailable { min-height: 96px; height: 100%; border: 0; border-radius: 0; background: transparent; }
 .single-material-tabs { position: sticky; top: 0; z-index: 8; display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; padding: 10px 0 12px; background: var(--bg); border-bottom: 1px solid var(--line); }
 .single-material-tabs button.active { border-color: var(--accent); background: var(--accent); color: white; }

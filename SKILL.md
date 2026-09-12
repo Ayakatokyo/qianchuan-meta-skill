@@ -1,14 +1,14 @@
 ---
 name: qianchuan-meta-skill
 description: 适用于按店铺、广告主和日期范围筛选千川素材并执行受控 RPA 诊断；阶段一取数和事实包校验完成后生成离线素材总览报告，高光帧只在第一阶段明确请求时生成，商业分析只读取已落盘证据。
-argument_hint: 输入查询范围、指标筛选和详情数量；高光帧默认不生成，仅在第一阶段需要时补充现有规则。
 metadata:
+  argument_hint: 输入查询范围、指标筛选和详情数量；高光帧默认不生成，仅在第一阶段需要时补充现有规则。
   pre_input: 请采集千川素材及相关诊断数据。授权店铺ID是 ____（必填）；广告主ID是 ____（必填）；时间范围是 ____（填写起止日期）；素材筛选条件是 ____（可选）；排序指标是 ____（必填）；排序方向是 ____（升序或降序）；需要获取详情的素材数是 ____（正整数）。是否同时生成高光帧图片：____（可选，默认否）。仅选择是时，填写封面设置，以及需要的高光指标、提取策略和帧数。请在第一阶段完成取数、已选择的图片提取、事实包校验和阶段一素材总览报告生成，整理实际可用数据后停止，等待我输入商业分析思路。
 ---
 
 # 千川素材分析元技能
 
-该技能负责受控素材查询、RPA 诊断、临时视频下载、高光帧资产、阶段一离线素材总览报告，以及在完整事实包上的可审计商业分析准备与验收。整个流程只有一个 `qianchuan-meta-skill` 入口，并严格分两阶段：第一阶段做外部取数、事实包落盘与校验，再从已完成运行目录生成素材总览报告；第二阶段才接收用户自然语言商业分析思路，将其转换为 `FactRetrievalSpec`，只读取已落盘事实包，再交给模型分析。脚本负责确定性校验、事实切片、脱敏、结果验收与报告落盘；当前项目没有外部模型调用通道，不会擅自增加凭证或网络依赖。
+该技能负责受控素材查询、RPA 诊断、视频与高光帧资产、阶段一离线素材总览报告，以及在完整事实包上的可审计商业分析准备与验收。整个流程只有一个 `qianchuan-meta-skill` 入口，并严格分两阶段：第一阶段做外部取数、事实包落盘与校验，再从已完成运行目录生成素材总览报告；第二阶段才接收用户自然语言商业分析思路，将其转换为 `FactRetrievalSpec`，只读取已落盘事实包，再交给模型分析。脚本负责确定性校验、事实切片、脱敏、结果验收与报告落盘；当前项目没有外部模型调用通道，不会擅自增加凭证或网络依赖。
 
 ## 输入
 
@@ -120,15 +120,15 @@ uv run --with-requirements requirements.txt python scripts/run_meta_skill.py ver
   --analysis-dir /path/to/completed-run/analysis
 ```
 
-`query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认同样只查询或复用候选工件，并写入 `run-receipt.json`；只有显式传入 `--execute-rpa` 才会解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复，临时下载视频并按 `HighlightSpec` 抽帧。
+`query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认同样只查询或复用候选工件，并写入 `run-receipt.json`；只有显式传入 `--execute-rpa` 才会解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复。每个成功详情素材的视频下载至运行目录的 `rpa/videos/`，并以相对路径、大小和 SHA-256 纳入 RPA 回执与事实包清单；高光帧仍只在提供 `HighlightSpec` 时抽取。
 
 只有 `run --execute-rpa` 在 RPA、records、抽帧和批量验证均成功后，才会自动生成 `fact-pack/`；成功回执的 `factPack` 阶段会记录 manifest 路径、`targetTopN` 和分类计数。仅 `query` 或未授权的 `run` 不会创建或声称完成事实包。也可以对已有完成目录显式执行 `build-fact-pack`，但 query-only、RPA 部分失败或工件不完整时命令会非零退出。
 
-阶段一取数成功并通过事实包校验后，必须继续执行 `render-overview` 生成阶段一素材总览报告。该命令只读取当前运行目录中的已校验素材汇总、事实包和可用详情证据，不重新查询、不重跑 RPA、不调用模型；默认输出 `overview/overview-data.json` 和 `overview/index.html`。报告是事实投影工作台，包含素材榜单、查询上下文、可选字段，以及在证据可用时展示的人群、脚本、高光帧和单素材详情；不可用数据必须保留明确的 unavailable/gap 状态，不得补零或生成商业结论。命令返回 `status=succeeded` 且两个文件均存在后，阶段一报告才算完成；来源文件缺失、记录数不一致、字段未注册或写入失败时必须阻断阶段一交接。
+阶段一取数成功并通过事实包校验后，必须继续执行 `render-overview` 生成阶段一素材总览报告。该命令只读取当前运行目录中的已校验素材汇总、事实包和可用详情证据，不重新查询、不重跑 RPA、不调用模型；默认输出 `overview/overview-data.json` 和 `overview/index.html`。报告是事实投影工作台，包含素材榜单、查询上下文、可选字段，以及在证据可用时展示的人群、脚本、高光帧、9:16 单素材视频预览和单素材详情；报告会把已验证视频复制到相对 `assets/single-material/videos/`。不可用数据必须保留明确的 unavailable/gap 状态，不得补零或生成商业结论。命令返回 `status=succeeded` 且两个文件均存在后，阶段一报告才算完成；来源文件缺失、记录数不一致、字段未注册或写入失败时必须阻断阶段一交接。
 
 事实包按 `targetTopN` 生成以下文件：`material-leaderboard.json`（素材榜单与平台维度字段）、`audience.json`（人群事实）、`scripts.json`（脚本事实）、`highlight-frames.json`（高光帧事实）以及 `manifest.json`/`README.md`。候选池大于目标时，只纳入 RPA 成功选中的目标素材；`scripts.json` 使用 `parseStatus=parsed|missing|failed` 和对应错误码，`highlight-frames.json` 在没有选中帧时使用 `status=no_highlight_frames`，不会把缺失推断为事实。
 
-事实包只保留可追溯事实，不生成商业结论。所有 `sourceRef`/`artifact` 都是运行目录内的相对 POSIX 路径并带 SHA-256 与大小；同一文件的来源引用按文件聚合，记录定位使用 `recordIndexes`，读取时兼容旧版单 `recordIndex`。文件哈希在一次进程运行内按规范化绝对路径缓存，避免对大 records 文件重复计算。签名媒体 URL、绝对路径、账号、会话和凭证字段会被移除。`verify-fact-pack` 完全离线校验 TopN、分类计数、来源哈希、JPEG 及敏感字段。
+事实包只保留可追溯事实，不生成商业结论。所有 `sourceRef`/`artifact` 都是运行目录内的相对 POSIX 路径并带 SHA-256 与大小；视频以 `manifest.json.videoArtifacts` 按素材 ID 绑定，只有已在 `sourceFiles` 中声明且通过哈希校验的 MP4/WebM 才可进入报告。文件哈希在一次进程运行内按规范化绝对路径缓存，避免对大 records 文件重复计算。签名媒体 URL、绝对路径、账号、会话和凭证字段会被移除。`verify-fact-pack` 完全离线校验 TopN、分类计数、来源哈希、JPEG、已声明视频及敏感字段。
 
 ## 商业分析交接
 
@@ -198,6 +198,6 @@ uv run --with-requirements requirements.txt python scripts/run_meta_skill.py sel
 
 ## 产物与恢复
 
-运行目录保存解析后的配置、`source-data/`、候选素材、脱敏查询回执和 `run-receipt.json`；RPA 运行另保存诊断 CSV、records、JPEG 和 `top_materials_rpa_ready.json`。配置、查询范围或高光帧规则变化时必须使用新的输出目录。
+运行目录保存解析后的配置、`source-data/`、候选素材、脱敏查询回执和 `run-receipt.json`；RPA 运行另保存诊断 CSV、records、`rpa/videos/` 中的原视频、可选 JPEG 和 `top_materials_rpa_ready.json`。配置、查询范围或高光帧规则变化时必须使用新的输出目录。
 
-`query` 成功不代表 RPA 已完成。RPA 仅在目标数量的素材均成功处理后才完整；失败素材会按保存的排名顺序由后续候选补位，仍不会超过 `targetTopN`。临时视频在高光帧验证后删除，长期工件不保存凭证。`verify-run` 完全离线，可校验已完成目录的相对路径、哈希、JSON 与 JPEG 工件，不读取凭证也不调用外部服务。
+`query` 成功不代表 RPA 已完成。RPA 仅在目标数量的素材均成功处理并保存视频后才完整；失败素材会按保存的排名顺序由后续候选补位，仍不会超过 `targetTopN`。当前保留经下载上限校验的原视频，不做隐式压缩；如需压缩，后续必须显式声明目标编码、码率/尺寸上限、保留源文件还是替换源文件，并为压缩产物另写入路径、大小和 SHA-256。长期工件不保存凭证。`verify-run` 完全离线，可校验已完成目录的相对路径、哈希、JSON、视频与 JPEG 工件，不读取凭证也不调用外部服务。

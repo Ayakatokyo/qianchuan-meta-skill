@@ -25,12 +25,20 @@ class OptionalHighlightTests(unittest.TestCase):
                 "SHARE_COUNT": {"enabled": False}, "NEW_FOLLOWER_COUNT": {"enabled": False},
             }}, enabled=False)
 
-    def test_source_rpa_succeeds_without_postprocessing_or_media_assets(self):
+    def test_disabled_highlights_still_retain_a_video_asset(self):
         postprocess_calls = []
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             csv_path = root / "input.csv"
             csv_path.write_text("data", encoding="utf-8")
+
+            def postprocess(entry, _records, paths):
+                video_path = paths["videos"] / (entry["materialId"] + ".mp4")
+                video_path.parent.mkdir(parents=True, exist_ok=True)
+                video_path.write_bytes(b"fixture-video")
+                postprocess_calls.append(True)
+                return {"frames": [], "videoPath": str(video_path)}
+
             result = run_rpa_pipeline(
                 root,
                 {"materials": [{"materialId": "m-1", "materialName": "素材"}], "collection": {"candidateTopN": 1, "targetTopN": 1}},
@@ -38,10 +46,11 @@ class OptionalHighlightTests(unittest.TestCase):
                 period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
                 options={"rpaConcurrency": 1},
                 fetch_diagnosis=lambda entry, _paths: {"records": [{"materialId": entry["materialId"]}], "csvPath": csv_path},
-                postprocess=lambda *_args: postprocess_calls.append(True),
+                postprocess=postprocess,
                 highlights_enabled=False,
             )
+            self.assertTrue((root / "rpa" / "videos" / "m-1.mp4").is_file())
 
         self.assertTrue(result["succeeded"])
-        self.assertEqual(postprocess_calls, [])
-        self.assertEqual(result["entries"][0]["postprocessStatus"], "not_requested")
+        self.assertEqual(postprocess_calls, [True])
+        self.assertEqual(result["entries"][0]["postprocessStatus"], "succeeded")

@@ -604,7 +604,7 @@ def main(argv=None):
             options=options,
             account={"accountId": account["accountId"], "platform": account["platform"]},
             fetch_diagnosis=fetch,
-            postprocess=build_postprocessor(policy, options) if highlight_spec is not None else None,
+            postprocess=build_postprocessor(policy if highlight_spec is not None else None, options),
             highlights_enabled=highlight_spec is not None,
             progress_callback=lambda phase, progress, current: _set_run_phase(
                 output_dir, phase, progress=progress, currentObject=current

@@ -394,6 +394,34 @@ def _build_highlights(run_dir: Path, material_ids: list[str], diagnosis: dict[st
     return {"schemaVersion": SCHEMA_VERSION, "status": status, "highlightFrames": frames, "sourceRefs": _aggregate_refs(refs)}, refs
 
 
+def _video_artifacts(run_dir: Path, material_ids: list[str]) -> list[dict[str, Any]]:
+    ready = _load_json(run_dir / "rpa" / "top_materials_rpa_ready.json")
+    materials = ready.get("materials") if isinstance(ready, dict) else None
+    if not isinstance(materials, list):
+        raise FactPackError("RPA ready materials are invalid")
+    selected = {material_id: None for material_id in material_ids}
+    for item in materials:
+        if not isinstance(item, dict):
+            continue
+        material_id = str(item.get("materialId") or "").strip()
+        if material_id not in selected:
+            continue
+        artifact = item.get("videoArtifact")
+        if artifact is None:
+            continue
+        if not isinstance(artifact, dict):
+            raise FactPackError(f"video artifact is invalid for {material_id}")
+        path = artifact.get("artifactPath")
+        if not isinstance(path, str):
+            raise FactPackError(f"video artifact path is invalid for {material_id}")
+        ref = {"path": path, "sha256": artifact.get("sha256"), "sizeBytes": artifact.get("sizeBytes")}
+        _verify_file_ref(run_dir, ref, f"video artifact {material_id}")
+        if Path(path).suffix.lower() not in {".mp4", ".webm"}:
+            raise FactPackError(f"video artifact extension is invalid for {material_id}")
+        selected[material_id] = {"materialId": material_id, **ref}
+    return [selected[material_id] for material_id in material_ids if selected[material_id] is not None]
+
+
 def _assert_no_sensitive(value: Any, location: str = "root") -> None:
     if isinstance(value, dict):
         for key, item in value.items():
@@ -428,6 +456,7 @@ def build_fact_pack(run_dir: Path, output_dir: Path | None = None) -> dict[str, 
     scripts, script_refs = _build_scripts(run_dir, material_ids, diagnosis)
     highlights_requested = any((run_dir / "rpa" / "peak-frames" / material_id / "summary.json").is_file() for material_id in material_ids)
     highlights, highlight_refs = _build_highlights(run_dir, material_ids, diagnosis, requested=highlights_requested)
+    video_artifacts = _video_artifacts(run_dir, material_ids)
     category_payloads = (
         ("material-leaderboard.json", materials), ("audience.json", audience),
         ("scripts.json", scripts), ("highlight-frames.json", highlights),
@@ -450,6 +479,7 @@ def build_fact_pack(run_dir: Path, output_dir: Path | None = None) -> dict[str, 
     source_files = [_file_ref(run_dir, path) for path in source_manifest_paths if path.is_file()]
     for payload in (materials, audience, scripts, highlights):
         _collect_source_refs(payload, source_files)
+    source_files.extend(video_artifacts)
     unique_sources = _aggregate_refs(source_files)
     manifest = {
         "schemaVersion": SCHEMA_VERSION,
@@ -463,6 +493,7 @@ def build_fact_pack(run_dir: Path, output_dir: Path | None = None) -> dict[str, 
         },
         "files": ["manifest.json", "material-leaderboard.json", "audience.json", "scripts.json", "highlight-frames.json", "README.md"],
         "sourceFiles": unique_sources,
+        "videoArtifacts": video_artifacts,
         "redactions": ["signed media URLs", "absolute paths", "RPA account and credential fields"],
         "quality": {
             "status": "built_with_warnings" if errors or any(item["parseStatus"] != "parsed" for item in scripts["scripts"]) else "built",
@@ -545,6 +576,28 @@ def verify_fact_pack(run_dir: Path, fact_pack_dir: Path) -> dict[str, Any]:
         scripts = payloads["scripts.json"]["scripts"]
         highlights_payload = payloads["highlight-frames.json"]
         highlights = highlights_payload["highlightFrames"]
+        manifest_sources = manifest.get("sourceFiles")
+        if not isinstance(manifest_sources, list):
+            errors.append("manifest sourceFiles are invalid")
+            manifest_sources = []
+        source_paths = set()
+        for index, source in enumerate(manifest_sources):
+            _verify_file_ref(run_dir, source, f"manifest sourceFiles[{index}]")
+            source_paths.add(source["path"])
+        video_artifacts = manifest.get("videoArtifacts", [])
+        if not isinstance(video_artifacts, list):
+            errors.append("manifest videoArtifacts are invalid")
+            video_artifacts = []
+        seen_video_ids = set()
+        for index, video in enumerate(video_artifacts):
+            material_id = str(video.get("materialId") or "") if isinstance(video, dict) else ""
+            if material_id not in expected_ids or material_id in seen_video_ids:
+                errors.append(f"video artifact material is invalid at index {index}")
+                continue
+            _verify_file_ref(run_dir, video, f"manifest videoArtifacts[{index}]")
+            if Path(video["path"]).suffix.lower() not in {".mp4", ".webm"} or video["path"] not in source_paths:
+                errors.append(f"video artifact is not a declared media source at index {index}")
+            seen_video_ids.add(material_id)
         if manifest.get("targetTopN") != target_top_n:
             errors.append("manifest targetTopN does not match completed RPA")
         if {str(item["materialId"]) for item in materials} != expected_ids or len(materials) != target_top_n:

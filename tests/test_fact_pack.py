@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sys
@@ -20,7 +21,7 @@ def _write_json(path, payload):
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def make_run(root, target_top_n, *, no_highlight=False, script_modes=None):
+def make_run(root, target_top_n, *, no_highlight=False, script_modes=None, include_video=False):
     root = Path(root)
     script_modes = script_modes or {}
     material_ids = [f"m-{index}" for index in range(1, target_top_n + 1)]
@@ -60,12 +61,24 @@ def make_run(root, target_top_n, *, no_highlight=False, script_modes=None):
         "succeededCount": target_top_n,
         "configurationFingerprint": "f" * 64,
     })
+    ready_materials = [{"rank": rank, "materialId": material_id} for rank, material_id in enumerate(material_ids, start=1)]
+    if include_video:
+        for material in ready_materials:
+            video = rpa_root / "videos" / f"{material['materialId']}.mp4"
+            video.parent.mkdir(parents=True, exist_ok=True)
+            video.write_bytes(b"fixture-video-" + material["materialId"].encode("utf-8"))
+            payload = video.read_bytes()
+            material["videoArtifact"] = {
+                "artifactPath": video.relative_to(root).as_posix(),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "sizeBytes": len(payload),
+            }
     _write_json(rpa_root / "top_materials_rpa_ready.json", {
         "schemaVersion": 1,
         "configurationFingerprint": "f" * 64,
         "targetTopN": target_top_n,
         "materialCount": target_top_n,
-        "materials": [{"rank": rank, "materialId": material_id} for rank, material_id in enumerate(material_ids, start=1)],
+        "materials": ready_materials,
     })
     for rank, material_id in enumerate(material_ids, start=1):
         record_dir = rpa_root / "diagnosis-records"
@@ -107,6 +120,18 @@ def make_run(root, target_top_n, *, no_highlight=False, script_modes=None):
 
 
 class FactPackTests(unittest.TestCase):
+    def test_manifest_binds_retained_video_artifacts_to_selected_materials(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            make_run(run_dir, 1, include_video=True)
+            manifest = build_fact_pack(run_dir)
+            self.assertEqual(verify_fact_pack(run_dir, run_dir / "fact-pack")["status"], "succeeded")
+            (run_dir / "rpa" / "videos" / "m-1.mp4").write_bytes(b"changed-video")
+            self.assertEqual(verify_fact_pack(run_dir, run_dir / "fact-pack")["status"], "failed")
+
+        self.assertEqual(manifest["videoArtifacts"][0]["materialId"], "m-1")
+        self.assertEqual(manifest["videoArtifacts"][0]["path"], "rpa/videos/m-1.mp4")
+        self.assertTrue(any(ref["path"] == "rpa/videos/m-1.mp4" for ref in manifest["sourceFiles"]))
     def test_verification_reuses_file_hash_and_invalidates_after_file_change(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

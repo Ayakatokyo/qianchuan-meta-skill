@@ -130,6 +130,14 @@ def _make_run(root, *, tamper=None, include_video=False):
 
 
 class SingleMaterialOverviewTests(unittest.TestCase):
+    def test_projects_a_verified_manifest_video_for_the_single_material_player(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model = build_single_material_overview(_make_run(Path(temp_dir), include_video=True))
+
+        video = model["materials"][0]["highlights"]["video"]
+        self.assertEqual(video["status"], "available")
+        self.assertEqual(video["path"], "rpa/videos/m-1.mp4")
+
     def test_projects_only_manifest_detail_material_and_fact_scoped_modules(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             model = build_single_material_overview(_make_run(Path(temp_dir)))

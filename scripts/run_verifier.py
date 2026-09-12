@@ -87,9 +87,15 @@ def verify_completed_run(output_dir):
         records_path = _artifact_path(run_root, material.get("diagnosisRecordsArtifact"))
         _verify_records(records_path, material["materialId"])
         verified_files += 1
-        summary_path = _artifact_path(run_root, material.get("highlightSummaryArtifact"))
-        _verify_summary(summary_path)
-        verified_files += 1
+        video_artifact = material.get("videoArtifact")
+        if video_artifact is not None:
+            _artifact_path(run_root, video_artifact)
+            verified_files += 1
+        summary_artifact = material.get("highlightSummaryArtifact")
+        if summary_artifact is not None:
+            summary_path = _artifact_path(run_root, summary_artifact)
+            _verify_summary(summary_path)
+            verified_files += 1
         frames = material.get("highlightFrames")
         if not isinstance(frames, list):
             raise RunVerificationError("highlight frames are invalid")
