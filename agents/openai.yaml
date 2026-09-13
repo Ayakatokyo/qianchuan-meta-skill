@@ -1,0 +1,3 @@
+interface:
+  display_name: "千川素材全景诊断"
+  short_description: "采集并诊断千川素材、脚本、人群与高光帧数据"
