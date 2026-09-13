@@ -586,9 +586,12 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 .single-metric-card strong { display: block; margin-top: 8px; font-size: 18px; }
 .single-interaction-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .single-interaction-controls button.active, .single-formula-chip.active { border-color: var(--accent); background: var(--accent-soft); color: #1d4ed8; }
-.single-chart { min-height: 230px; overflow-x: auto; overflow-y: hidden; }
-.single-chart svg { display: block; min-width: 0; height: 210px; }
+.single-interaction-content { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; }
+.single-chart { position: relative; width: 100%; min-width: 0; max-width: 100%; min-height: 230px; overflow: hidden; contain: inline-size; }
+.single-chart svg { display: block; width: 100%; max-width: 100%; height: 210px; overflow: hidden; }
 .single-chart-line { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+.single-chart-tooltip { position: absolute; z-index: 2; max-width: 220px; padding: 7px 9px; pointer-events: none; background: #172033; color: white; border-radius: 7px; box-shadow: 0 6px 18px rgba(15, 23, 42, .2); font-size: 12px; line-height: 1.45; white-space: nowrap; }
+.single-chart-tooltip[hidden] { display: none; }
 .single-scale { display: flex; gap: 10px; align-items: center; margin-top: 10px; color: var(--muted); font-size: 12px; }
 .single-scale input { flex: 1; min-width: 0; accent-color: var(--accent); }
 .single-scale output { min-width: 48px; color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
@@ -917,25 +920,50 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     if (!metrics.some(item => item.id === singleState.interactionMetric)) singleState.interactionMetric = metrics[0].id;
     const metric = metrics.find(item => item.id === singleState.interactionMetric) || metrics[0];
     const points = metric.points || [];
-    const minSecond = points.length ? Math.min(...points.map(item => Number(item.second))) : 0;
-    const maxSecond = points.length ? Math.max(...points.map(item => Number(item.second))) : 1;
-    const maxValue = Math.max(...points.map(item => Number(item.value)), 1);
     const width = 760, height = 210, left = 40, top = 16, right = 16, bottom = 32;
-    const chartPoints = points.map(item => {
-      const x = left + Math.min(1, Math.max(0, (Number(item.second) - minSecond) / Math.max(1, maxSecond - minSecond))) * (width - left - right);
-      const y = height - bottom - (Number(item.value) / maxValue) * (height - top - bottom);
-      return { ...item, x, y };
-    });
-    const line = chartPoints.map((item, index) => `${index ? "L" : "M"} ${item.x.toFixed(2)} ${item.y.toFixed(2)}`).join(" ");
-    const dots = chartPoints.map(item => `<circle cx="${item.x.toFixed(2)}" cy="${item.y.toFixed(2)}" r="4" fill="var(--accent)" tabindex="0" data-single-point="${escaped(item.second)}" aria-label="${escaped(item.second)}秒，${escaped(item.value)}"><title>${escaped(item.second)}秒：${escaped(item.value)}</title></circle>`).join("");
-    const scaledWidth = Math.round(width * singleState.chartScale / 100);
-    target.innerHTML = `<div class="single-interaction-controls">${metrics.map(item => `<button type="button" class="${item.id === metric.id ? "active" : ""}" data-single-interaction="${escaped(item.id)}">${escaped(item.label)}</button>`).join("")}</div><div class="single-chart"><svg style="width:${scaledWidth}px;height:${height}px" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escaped(metric.label)}秒级折线图"><line class="chart-axis" x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line><path class="single-chart-line" d="${line}"></path>${dots}</svg></div><label class="single-scale"><span>图表比例</span><input type="range" min="70" max="150" step="1" value="${singleState.chartScale}" aria-label="互动图表比例" data-single-chart-scale><output>${singleState.chartScale}%</output></label>`;
+    target.innerHTML = `<div class="single-interaction-controls">${metrics.map(item => `<button type="button" class="${item.id === metric.id ? "active" : ""}" data-single-interaction="${escaped(item.id)}">${escaped(item.label)}</button>`).join("")}</div><div class="single-chart"><svg style="width:100%;height:${height}px" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escaped(metric.label)}秒级折线图"></svg><div class="single-chart-tooltip" role="tooltip" aria-live="polite" hidden></div></div><label class="single-scale"><span>图表展示比例</span><input type="range" min="20" max="100" step="1" value="${singleState.chartScale}" aria-label="图表展示比例" data-single-chart-scale><output>${singleState.chartScale}%</output></label>`;
     target.querySelectorAll("[data-single-interaction]").forEach(button => button.addEventListener("click", () => { singleState.interactionMetric = button.dataset.singleInteraction; singleRenderInteractions(material); }));
+    const chartContainer = target.querySelector(".single-chart");
+    const chartTooltip = target.querySelector(".single-chart-tooltip");
+    const showPointTooltip = event => {
+      const point = event.currentTarget;
+      chartTooltip.textContent = `${metric.label}：${point.dataset.singleValue}（${point.dataset.singlePoint}秒）`;
+      chartTooltip.hidden = false;
+      const chartRect = chartContainer.getBoundingClientRect();
+      const pointRect = point.getBoundingClientRect();
+      const maxLeft = Math.max(8, chartRect.width - chartTooltip.offsetWidth - 8);
+      const leftPosition = Math.min(maxLeft, Math.max(8, pointRect.left - chartRect.left));
+      const topPosition = Math.max(8, pointRect.top - chartRect.top - chartTooltip.offsetHeight - 8);
+      chartTooltip.style.left = `${leftPosition}px`;
+      chartTooltip.style.top = `${topPosition}px`;
+    };
+    const hidePointTooltip = () => { chartTooltip.hidden = true; };
+    const chartSvg = target.querySelector(".single-chart svg");
+    function updateSingleInteractionChart() {
+      const endIndex = Math.max(0, Math.ceil((points.length - 1) * singleState.chartScale / 100));
+      const visiblePoints = points.slice(0, endIndex + 1);
+      const maxValue = Math.max(...visiblePoints.map(item => Number(item.value)), 1);
+      const x = index => left + (visiblePoints.length === 1 ? 0 : index * (width - left - right) / (visiblePoints.length - 1));
+      const chartPoints = visiblePoints.map((item, index) => {
+        const xValue = x(index);
+        const y = height - bottom - (Number(item.value) / maxValue) * (height - top - bottom);
+        return { ...item, x: xValue, y };
+      });
+      const line = chartPoints.map((item, index) => `${index ? "L" : "M"} ${item.x.toFixed(2)} ${item.y.toFixed(2)}`).join(" ");
+      const dots = chartPoints.map(item => `<circle cx="${item.x.toFixed(2)}" cy="${item.y.toFixed(2)}" r="4" fill="var(--accent)" tabindex="0" data-single-point="${escaped(item.second)}" data-single-value="${escaped(item.value)}" aria-label="${escaped(metric.label)}，${escaped(item.second)}秒，${escaped(item.value)}"><title>${escaped(metric.label)}：${escaped(item.value)}（${escaped(item.second)}秒）</title></circle>`).join("");
+      const endpointLabels = visiblePoints.length ? `<text class="chart-label" x="${left}" y="${height - 10}">${escaped(visiblePoints[0].second)}s</text><text class="chart-label" x="${width - right}" y="${height - 10}" text-anchor="end">${escaped(visiblePoints[visiblePoints.length - 1].second)}s</text>` : "";
+      chartSvg.innerHTML = `<line class="chart-axis" x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line><path class="single-chart-line" d="${line}"></path>${dots}${endpointLabels}`;
+      chartSvg.querySelectorAll("[data-single-point]").forEach(point => {
+        point.addEventListener("pointerenter", showPointTooltip);
+        point.addEventListener("pointerleave", hidePointTooltip);
+        point.addEventListener("focus", showPointTooltip);
+        point.addEventListener("blur", hidePointTooltip);
+      });
+    }
     const scaleInput = target.querySelector("[data-single-chart-scale]");
     const scaleOutput = target.querySelector(".single-scale output");
-    const chartScroll = target.querySelector(".single-chart");
-    const chartSvg = target.querySelector(".single-chart svg");
-    scaleInput.addEventListener("input", event => { const scrollLeft = chartScroll.scrollLeft; singleState.chartScale = Number(event.currentTarget.value); chartSvg.style.width = `${Math.round(width * singleState.chartScale / 100)}px`; chartScroll.scrollLeft = scrollLeft; scaleOutput.textContent = `${singleState.chartScale}%`; });
+    updateSingleInteractionChart();
+    scaleInput.addEventListener("input", event => { singleState.chartScale = Math.min(100, Math.max(20, Number(event.currentTarget.value))); scaleOutput.textContent = `${singleState.chartScale}%`; updateSingleInteractionChart(); });
   }
 
   function singleRenderScript(material) {
