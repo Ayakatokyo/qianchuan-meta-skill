@@ -14,7 +14,7 @@ def load_skill_document():
 
 
 class SkillDocumentTests(unittest.TestCase):
-    def test_pre_input_orders_scope_metrics_and_highlights(self):
+    def test_pre_input_documents_conditional_highlight_rules_and_metrics(self):
         metadata, _ = load_skill_document()
         pre_input = metadata.get("metadata", {}).get("pre_input", "")
 
@@ -22,16 +22,24 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("授权店铺ID", pre_input)
         self.assertIn("广告主ID", pre_input)
         self.assertIn("时间范围", pre_input)
-        self.assertIn("筛选条件", pre_input)
-        self.assertIn("排序指标", pre_input)
-        self.assertIn("排序方向", pre_input)
+        self.assertIn("素材筛选及排序条件", pre_input)
+        self.assertIn("筛选“整体消耗”>=10000，再按“净成交ROI”降序", pre_input)
+        self.assertNotIn("排序指标是 ____（必填）", pre_input)
+        self.assertNotIn("排序方向是 ____（升序或降序）", pre_input)
         self.assertIn("需要获取详情的素材数", pre_input)
         self.assertIn("是否同时生成高光帧图片", pre_input)
         self.assertIn("默认否", pre_input)
-        self.assertIn("仅选择是时", pre_input)
-        self.assertLess(pre_input.index("授权店铺ID"), pre_input.index("筛选条件"))
-        self.assertLess(pre_input.index("筛选条件"), pre_input.index("是否同时生成高光帧图片"))
-        self.assertNotIn("素材类型", pre_input)
+        self.assertIn("选择否时，以下全部留空", pre_input)
+        self.assertIn("选择是时，按需逐项填写", pre_input)
+        self.assertIn("封面帧是否保留", pre_input)
+        for metric in (
+            "整体点击次数", "整体流失数", "整体点赞次数", "整体评论次数", "整体转发次数", "整体新增粉丝数",
+        ):
+            self.assertIn(metric, pre_input)
+        self.assertIn("局部峰值/最高值", pre_input)
+        self.assertIn("帧数", pre_input)
+        self.assertLess(pre_input.index("授权店铺ID"), pre_input.index("素材筛选及排序条件"))
+        self.assertLess(pre_input.index("素材筛选及排序条件"), pre_input.index("是否同时生成高光帧图片"))
         self.assertNotIn("candidateTopN", pre_input)
 
     def test_skill_body_preserves_api_field_and_recovery_contract(self):
@@ -44,6 +52,7 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("102 个指标", body)
         self.assertIn("metricFilters", body)
         self.assertIn("ranking.field", body)
+        self.assertIn("未提供排序条件时按连接器返回的原始顺序输出", body)
 
     def test_skill_body_describes_analysis_handoff_and_completion_gate(self):
         _, body = load_skill_document()

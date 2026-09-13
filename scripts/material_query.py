@@ -117,19 +117,21 @@ def parse_query_config(raw, registry):
     dimension_filters = [_normalize_filter(item, registry, "dimension") for item in raw.get("dimensionFilters", [])]
     metric_filters = [_normalize_filter(item, registry, "metric") for item in raw.get("metricFilters", [])]
     sort = raw.get("sort")
-    if not isinstance(sort, dict):
-        raise MaterialQueryError("sort must be an object")
-    field_id = _text(sort.get("field"))
-    try:
-        entry = registry.require(field_id)
-    except FieldRegistryError as exc:
-        raise MaterialQueryError(str(exc)) from exc
-    field_id = entry["id"]
-    if entry["kind"] != "metric" or not entry.get("sortable"):
-        raise MaterialQueryError("sort field must be a sortable metric")
-    direction = _text(sort.get("direction")).lower()
-    if direction not in {"asc", "desc"}:
-        raise MaterialQueryError("sort direction must be asc or desc")
+    if sort is not None:
+        if not isinstance(sort, dict):
+            raise MaterialQueryError("sort must be an object")
+        field_id = _text(sort.get("field"))
+        try:
+            entry = registry.require(field_id)
+        except FieldRegistryError as exc:
+            raise MaterialQueryError(str(exc)) from exc
+        field_id = entry["id"]
+        if entry["kind"] != "metric" or not entry.get("sortable"):
+            raise MaterialQueryError("sort field must be a sortable metric")
+        direction = _text(sort.get("direction")).lower()
+        if direction not in {"asc", "desc"}:
+            raise MaterialQueryError("sort direction must be asc or desc")
+        sort = {"field": field_id, "direction": direction}
     return {
         "schemaVersion": 1,
         "period": _validate_period(raw.get("period")),
@@ -138,7 +140,7 @@ def parse_query_config(raw, registry):
         "topN": top_n,
         "dimensionFilters": dimension_filters,
         "metricFilters": metric_filters,
-        "sort": {"field": field_id, "direction": direction},
+        "sort": sort,
     }
 
 
@@ -229,8 +231,8 @@ def execute_material_query(raw_rows, raw_query, registry):
         if unavailable or any(not _matches(metrics[item["field"]], item) for item in query["metricFilters"]):
             excluded.append({"materialId": material_id, "reason": "unavailable_metric_value" if unavailable else "metric_filter"})
             continue
-        sort_value = metrics.get(query["sort"]["field"])
-        if sort_value is None:
+        sort_value = metrics.get(query["sort"]["field"]) if query.get("sort") else None
+        if query.get("sort") and sort_value is None:
             excluded.append({"materialId": material_id, "reason": "unavailable_sort_value"})
             continue
         candidates.append({"materialId": material_id, "dimensions": dimensions, "metrics": metrics, "sortValue": sort_value})
@@ -242,7 +244,8 @@ def execute_material_query(raw_rows, raw_query, registry):
             "sourceRowCount": aigc_source_row_count,
         })
 
-    candidates.sort(key=lambda item: (item["sortValue"], item["materialId"]), reverse=query["sort"]["direction"] == "desc")
+    if query.get("sort"):
+        candidates.sort(key=lambda item: (item["sortValue"], item["materialId"]), reverse=query["sort"]["direction"] == "desc")
     materials = []
     for rank, candidate in enumerate(candidates[:query["topN"]], start=1):
         materials.append({
@@ -251,8 +254,8 @@ def execute_material_query(raw_rows, raw_query, registry):
             "materialName": candidate["dimensions"].get("roi2_material_video_name", ""),
             "materialType": candidate["dimensions"].get("roi2_material_type_v3", ""),
             "videoType": candidate["dimensions"].get("roi2_material_video_type", ""),
-            "rankingMetric": query["sort"]["field"],
-            "sortValue": _decimal_text(candidate["sortValue"]),
+            "rankingMetric": query["sort"]["field"] if query.get("sort") else None,
+            "sortValue": _decimal_text(candidate["sortValue"]) if candidate["sortValue"] is not None else None,
             "metrics": {key: _decimal_text(value) if value is not None else None for key, value in candidate["metrics"].items()},
         })
     receipt = {

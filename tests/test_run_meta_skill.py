@@ -295,6 +295,8 @@ class MetaSkillCliTests(unittest.TestCase):
             [{"field": "total_prepay_and_pay_settle_roi2_1h", "type": 2}],
         )
 
+        self.assertIsNone(run_meta_skill._connector_order_by({"sort": None}, registry))
+
     def write_config(self, directory):
         path = directory / "config.json"
         path.write_text(

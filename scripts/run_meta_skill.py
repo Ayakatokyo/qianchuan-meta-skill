@@ -260,6 +260,8 @@ def continue_analysis(run_dir, analysis_request, output_dir=None):
 
 
 def _connector_order_by(query, registry):
+    if not query.get("sort"):
+        return None
     entry = registry.require(query["sort"]["field"])
     source = entry.get("source")
     if not isinstance(source, list) or len(source) < 2 or source[0] != "metrics":
@@ -288,7 +290,7 @@ def _top_materials_payload(result, query):
             "candidateTopN": query["candidateTopN"],
             "targetTopN": query["targetTopN"],
         },
-        "rankingMetric": query["sort"]["field"],
+        "rankingMetric": query["sort"]["field"] if query.get("sort") else None,
         "filters": {"advertiserId": query["advertiserId"], "dimensionFilters": query["dimensionFilters"], "metricFilters": query["metricFilters"]},
         "materials": result["materials"],
     }

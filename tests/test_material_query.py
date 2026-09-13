@@ -60,6 +60,34 @@ class MaterialQueryTests(unittest.TestCase):
         self.assertEqual(result["materials"][0]["metrics"]["total_prepay_and_pay_settle_roi2_1h"], "2")
         self.assertEqual(result["receipt"]["excluded"][0]["materialId"], "m-3")
 
+    def test_preserves_source_order_when_sort_is_not_configured(self):
+        query = parse_query_config(
+            {
+                "schemaVersion": 1,
+                "period": {"startDate": "2026-08-01", "endDate": "2026-08-07"},
+                "shopId": "shop-1",
+                "advertiserId": "1770096415226951",
+                "topN": 2,
+                "dimensionFilters": [],
+                "metricFilters": [],
+            },
+            self.registry,
+        )
+
+        result = execute_material_query(
+            [
+                origin_row("m-2", "素材二", "直播素材", 20, 40, 2),
+                origin_row("m-1", "素材一", "直播素材", 10, 10, 1.5),
+            ],
+            query,
+            self.registry,
+        )
+
+        self.assertEqual([item["materialId"] for item in result["materials"]], ["m-2", "m-1"])
+        self.assertIsNone(result["receipt"]["sort"])
+        self.assertIsNone(result["materials"][0]["rankingMetric"])
+        self.assertIsNone(result["materials"][0]["sortValue"])
+
     def test_rejects_business_aliases_and_uses_direct_zero_values(self):
         invalid = dict(self.query)
         invalid["sort"] = {"field": "net_settlement_roi", "direction": "desc"}

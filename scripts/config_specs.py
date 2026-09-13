@@ -57,8 +57,10 @@ def resolve_query_spec(payload, registry):
     _keys(period, {"startDate", "endDate"}, "QuerySpec.period")
     filters = _object(payload.get("filters", {}), "QuerySpec.filters")
     _keys(filters, {"dimensionFilters", "metricFilters"}, "QuerySpec.filters")
-    ranking = _object(payload.get("ranking"), "QuerySpec.ranking")
-    _keys(ranking, {"field", "direction"}, "QuerySpec.ranking")
+    ranking = payload.get("ranking")
+    if ranking is not None:
+        ranking = _object(ranking, "QuerySpec.ranking")
+        _keys(ranking, {"field", "direction"}, "QuerySpec.ranking")
     collection = _object(payload.get("collection"), "QuerySpec.collection")
     _keys(collection, {"candidateTopN", "targetTopN"}, "QuerySpec.collection")
 
@@ -69,7 +71,7 @@ def resolve_query_spec(payload, registry):
         "period": {"startDate": period.get("startDate"), "endDate": period.get("endDate")},
         "dimensionFilters": filters.get("dimensionFilters", []),
         "metricFilters": filters.get("metricFilters", []),
-        "sort": {"field": ranking.get("field"), "direction": ranking.get("direction")},
+        "sort": ({"field": ranking.get("field"), "direction": ranking.get("direction")} if ranking is not None else None),
         "topN": collection.get("targetTopN"),
     }
     try:

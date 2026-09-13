@@ -238,7 +238,7 @@ def _query_context(receipt):
             result.append({"field": field, "operator": operator, "value": value})
         return result
 
-    ranking = receipt.get("sort") if isinstance(receipt.get("sort"), dict) else query.get("sort", {})
+    ranking = receipt.get("sort") if isinstance(receipt.get("sort"), dict) else (query.get("sort") or {})
     safe_ranking = {
         key: _safe_scalar(ranking.get(key))
         for key in ("field", "direction")
