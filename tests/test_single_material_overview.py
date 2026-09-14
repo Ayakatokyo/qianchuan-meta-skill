@@ -177,7 +177,7 @@ class SingleMaterialOverviewTests(unittest.TestCase):
             run_dir = _make_run(Path(temp_dir))
             diagnosis = run_dir / "rpa" / "diagnosis-records" / "m-1.json"
             records = json.loads(diagnosis.read_text(encoding="utf-8"))
-            aliases = [("CLICK_COUNT", "整体点击次数"), ("LOSE_COUNT", "整体流失数"), ("LIKE_COUNT", "整体点赞次数"), ("COMMENT_COUNT", "整体评论次数"), ("SHARE_COUNT", "整体转发次数"), ("FOLLOW_COUNT", "整体新增粉丝数")]
+            aliases = [("CLICK_COUNT", "整体点击次数"), ("LOSE_COUNT", "整体流失数"), ("LIKE_COUNT", "整体点赞次数"), ("COMMENT_COUNT", "整体评论次数"), ("SHARE_COUNT", "整体转发次数"), ("NEW_FOLLOWER_COUNT", "整体新增粉丝数")]
             records.extend({"recordType": "interaction_series", "materialId": "m-1", "durationSec": index + 2, "interactionMetric": metric, "interactionMetricName": label, "metricValue": index + 0.5} for index, (metric, label) in enumerate(aliases[1:], 1))
             diagnosis.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
             # Update every fact-pack reference after the intentional fixture rewrite.
@@ -200,6 +200,32 @@ class SingleMaterialOverviewTests(unittest.TestCase):
         metrics = {item["id"]: item for item in model["materials"][0]["interactions"]["metrics"]}
         self.assertEqual(set(metrics), {"CLICK_COUNT", "LOSE_COUNT", "LIKE_COUNT", "COMMENT_COUNT", "SHARE_COUNT", "FOLLOW_COUNT"})
         self.assertEqual(metrics["FOLLOW_COUNT"]["points"][0]["value"], 5.5)
+
+    def test_keeps_legacy_follow_count_alias_for_existing_fact_packs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = _make_run(Path(temp_dir))
+            diagnosis = run_dir / "rpa" / "diagnosis-records" / "m-1.json"
+            records = json.loads(diagnosis.read_text(encoding="utf-8"))
+            records.append({"recordType": "interaction_series", "materialId": "m-1", "durationSec": 2, "interactionMetric": "FOLLOW_COUNT", "interactionMetricName": "整体新增粉丝数", "metricValue": 5.5})
+            diagnosis.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+            ref = _ref(run_dir, diagnosis)
+            for name in ("audience.json", "scripts.json", "highlight-frames.json"):
+                path = run_dir / "fact-pack" / name
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload["sourceRefs"] = [ref]
+                collection = payload.get("audience") or payload.get("scripts") or payload.get("highlightFrames")
+                collection[0]["sourceRef"] = ref
+                if name == "highlight-frames.json":
+                    collection[0]["interactionSeries"]["sourceRef"] = ref
+                _write_json(path, payload)
+            manifest_path = run_dir / "fact-pack" / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["sourceFiles"][0] = ref
+            _write_json(manifest_path, manifest)
+            model = build_single_material_overview(run_dir)
+
+        metrics = {item["id"]: item for item in model["materials"][0]["interactions"]["metrics"]}
+        self.assertEqual(metrics["FOLLOW_COUNT"]["points"], [{"second": 2, "value": 5.5}])
 
     def test_missing_dimension_is_a_local_gap_and_video_artifact_is_not_guessed(self):
         with tempfile.TemporaryDirectory() as temp_dir:

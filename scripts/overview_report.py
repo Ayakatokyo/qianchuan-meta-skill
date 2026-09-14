@@ -1369,9 +1369,31 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     document.getElementById("highlight-modal-close").focus();
   }
 
+  function activateSection(section) {
+    document.querySelectorAll("[data-section]").forEach(item => item.classList.toggle("active", item.dataset.section === section));
+    document.querySelectorAll("[data-section-panel]").forEach(panel => { panel.hidden = panel.dataset.sectionPanel !== section; });
+    if (section === "filters") renderFilterConfig();
+    if (section === "audience") renderAudience();
+    if (section === "scripts") renderScriptFormula();
+    if (section === "highlights") renderHighlights();
+    if (section === "single-material") singleRender();
+    if (section !== "scripts") hideScriptFormulaTooltip();
+    if (section !== "audience") hideChartTooltip();
+  }
+
+  function openSingleMaterialDetail(materialId) {
+    if (!singleMaterialById[materialId]) return;
+    singleState.selectedMaterialId = materialId;
+    singleState.anchor = "delivery";
+    singleState.framePage = 1;
+    singleState.selectedFormula = null;
+    singleState.interactionMetric = null;
+    activateSection("single-material");
+    document.getElementById("single-material-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   function requestHighlightMaterialDetail(materialId) {
-    // Keep the fifth-section navigation contract without changing tabs until that section exists.
-    document.dispatchEvent(new CustomEvent("highlight-material-detail", { detail: { materialId } }));
+    openSingleMaterialDetail(materialId);
   }
 
   function closeHighlightModal() {
@@ -1945,15 +1967,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   }
   document.querySelectorAll("[data-section]").forEach(button => button.addEventListener("click", event => {
     const section = event.currentTarget.dataset.section;
-    document.querySelectorAll("[data-section]").forEach(item => item.classList.toggle("active", item.dataset.section === section));
-    document.querySelectorAll("[data-section-panel]").forEach(panel => { panel.hidden = panel.dataset.sectionPanel !== section; });
-    if (section === "filters") renderFilterConfig();
-    if (section === "audience") renderAudience();
-    if (section === "scripts") renderScriptFormula();
-    if (section === "highlights") renderHighlights();
-    if (section === "single-material") singleRender();
-    if (section !== "scripts") hideScriptFormulaTooltip();
-    if (section !== "audience") hideChartTooltip();
+    activateSection(section);
   }));
   document.getElementById("script-formula-secondary-back").addEventListener("click", () => {
     scriptFormulaState.selectedPrimary = null;

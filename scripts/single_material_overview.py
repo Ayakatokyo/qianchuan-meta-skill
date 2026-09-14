@@ -26,6 +26,15 @@ _INTERACTION_METRICS = {
     "SHARE_COUNT": ("整体转发次数", "转发"),
     "FOLLOW_COUNT": ("整体新增粉丝数", "新增粉丝"),
 }
+_INTERACTION_METRIC_ALIASES = {
+    "CLICK_COUNT": "CLICK_COUNT",
+    "LOSE_COUNT": "LOSE_COUNT",
+    "LIKE_COUNT": "LIKE_COUNT",
+    "COMMENT_COUNT": "COMMENT_COUNT",
+    "SHARE_COUNT": "SHARE_COUNT",
+    "FOLLOW_COUNT": "FOLLOW_COUNT",
+    "NEW_FOLLOWER_COUNT": "FOLLOW_COUNT",
+}
 _FACT_FILES = (
     "material-leaderboard.json",
     "audience.json",
@@ -206,7 +215,7 @@ def _interactions(run_root, frame_records, allowed, material_id):
                 continue
             if str(record.get("materialId", "")).strip() != material_id:
                 raise SingleMaterialOverviewError("interaction record material association mismatch")
-            metric_id = record.get("interactionMetric")
+            metric_id = _INTERACTION_METRIC_ALIASES.get(record.get("interactionMetric"))
             value = _safe_number(record.get("metricValue"))
             second = _safe_number(record.get("durationSec"))
             if metric_id in buckets and value is not None and second is not None:
