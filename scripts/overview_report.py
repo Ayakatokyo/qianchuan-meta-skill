@@ -254,6 +254,48 @@ def _query_context(receipt):
     }
 
 
+_HIGHLIGHT_METRIC_LABELS = {
+    "CLICK_COUNT": "整体点击次数",
+    "LOSE_COUNT": "整体流失数",
+    "LIKE_COUNT": "整体点赞次数",
+    "COMMENT_COUNT": "整体评论次数",
+    "SHARE_COUNT": "整体转发次数",
+    "NEW_FOLLOWER_COUNT": "整体新增粉丝数",
+}
+_HIGHLIGHT_STRATEGY_LABELS = {
+    "local_peaks": "局部峰值",
+    "global_top_values": "数值 Top",
+    "global_maximum": "数值 Top",
+}
+
+
+def _highlight_filter_context(run_root):
+    path = run_root / "resolved-highlight-spec.json"
+    if not path.is_file():
+        return []
+    try:
+        spec = _read_json(path, "resolved highlight spec", dict)
+    except OverviewReportError:
+        return []
+    entries = []
+    include_zero = spec.get("includeZeroSecond")
+    if type(include_zero) is bool:
+        entries.append({"label": "0秒画面", "value": "包含" if include_zero else "不包含"})
+    metrics = spec.get("metrics")
+    if isinstance(metrics, dict):
+        for metric, config in metrics.items():
+            if not isinstance(config, dict) or config.get("enabled") is not True:
+                continue
+            label = _HIGHLIGHT_METRIC_LABELS.get(metric, "未找到中文映射：%s" % metric)
+            strategy = _HIGHLIGHT_STRATEGY_LABELS.get(config.get("strategy"), "未找到中文映射：%s" % config.get("strategy"))
+            max_frames = config.get("maxFrames")
+            value = strategy
+            if type(max_frames) is int:
+                value = "%s，%d 帧" % (strategy, max_frames)
+            entries.append({"label": label, "value": value})
+    return entries
+
+
 def _play_info(record):
     value = _source_value(record, ["dimensions", "roi2_material_video_play_info"])
     if isinstance(value, dict):
@@ -369,6 +411,7 @@ def build_overview_data(run_dir, registry_path):
             "recordCount": len(rows),
         },
         "queryContext": _query_context(query_receipt),
+        "highlightFilterContext": _highlight_filter_context(run_root),
         "fields": fields,
         "defaultFieldIds": default_field_ids,
         "rows": rows,
@@ -552,38 +595,48 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 .script-formula-segment.active { filter: brightness(.9); stroke-width: 3; }
 .highlight-section { display: grid; gap: 16px; }
 .single-material-section { display: grid; gap: 16px; }
-.single-material-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 16px; align-items: start; }
-.single-material-selector-shell { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: hidden; padding: 14px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
-.single-material-selector { max-height: calc(100vh - 60px); overflow: auto; }
-.single-material-selector-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 2px 10px; color: var(--text); font-size: 13px; }
-.single-material-selector-header span { color: var(--muted); font-size: 11px; }
-.single-material-items { display: grid; gap: 10px; }
-.single-material-selector button { display: block; width: 100%; min-height: 62px; padding: 9px 10px; text-align: left; }
-.single-material-selector button.active { border-color: var(--accent); background: var(--accent-soft); color: #1d4ed8; box-shadow: inset 3px 0 0 var(--accent); }
-.single-material-selector .single-material-rank { font-weight: 700; }
-.single-material-selector .single-material-id { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
-.single-material-main { min-width: 0; }
-.single-material-detail-card { min-width: 0; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
-.single-material-topbar { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 14px; align-items: start; margin: -16px -16px 12px 0; }
-.single-material-header { display: flex; min-width: 0; flex-direction: column; justify-content: center; margin: 0; padding: 20px 16px 20px 0; }
-.single-material-header h2 { margin: 0; font-size: 22px; line-height: 1.35; overflow-wrap: anywhere; }
+.single-material-shell { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 16px; align-items: start; }
+.single-material-selector, .single-material-main { min-width: 0; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .05); }
+.single-material-selector { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
+.single-material-selector h2 { margin: 0 0 5px; font-size: 18px; }
+.single-material-selector p { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.single-material-selector-list { display: grid; gap: 6px; }
+.single-material-selector-list button { width: 100%; min-height: 44px; padding: 7px 9px; text-align: left; }
+.single-material-selector-list button.active { border-color: var(--accent); background: var(--accent-soft); color: #1d4ed8; }
+.single-material-selector-list strong { display: block; overflow-wrap: anywhere; word-break: break-word; font-size: 12px; line-height: 1.4; }
+.single-material-selector-list span { display: block; margin-top: 3px; overflow-wrap: anywhere; word-break: break-word; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.single-material-overview { display: grid; grid-template-columns: minmax(140px, 18%) minmax(0, 1fr); gap: 16px; align-items: stretch; margin-bottom: 14px; }
+.single-material-video { display: flex; width: 100%; min-height: 0; aspect-ratio: 9 / 16; align-items: center; justify-content: center; overflow: hidden; border: 1px dashed var(--line-strong); border-radius: 12px; background: #0f172a; color: var(--muted); text-align: center; }
+.single-material-video video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.single-material-meta { display: flex; min-width: 0; align-items: center; }
+.single-material-header { width: 100%; }
+.single-material-header h2 { margin: 0; font-size: 20px; line-height: 1.35; overflow-wrap: anywhere; }
 .single-material-header p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
-.single-material-video-card { aspect-ratio: 9 / 16; width: min(100%, 160px); min-width: 0; overflow: hidden; justify-self: start; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 12px; }
-.single-material-video-card video { display: block; width: 100%; height: 100%; object-fit: cover; background: #0f172a; }
-.single-material-video-card .single-video-unavailable { min-height: 96px; height: 100%; border: 0; border-radius: 0; background: transparent; }
-.single-material-tabs { position: sticky; top: 0; z-index: 8; display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; padding: 10px 0 12px; background: var(--bg); border-bottom: 1px solid var(--line); }
-.single-material-tabs button.active { border-color: var(--accent); background: var(--accent); color: white; }
-.single-material-panel { scroll-margin-top: 76px; }
-.single-material-panel h3 { margin: 0 0 12px; font-size: 16px; }
-.single-delivery-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--muted); font-size: 12px; }
-.single-delivery-header h3 { color: var(--text); }
+.single-material-tabs { position: sticky; top: 0; z-index: 10; display: flex; gap: 7px; overflow: auto; margin: 0 -16px 18px; padding: 10px 16px 12px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.96); backdrop-filter: blur(8px); scroll-behavior: smooth; }
+.single-material-tabs button { flex: 0 0 auto; min-height: 36px; padding: 6px 10px; }
+.single-material-tabs button.active { border-color: var(--accent); background: var(--accent); color: #fff; }
+.single-material-panel { scroll-margin-top: 74px; padding: 16px 0 22px; border-bottom: 1px solid var(--line); }
+.single-material-panel:last-child { border-bottom: 0; }
+.single-panel-heading { display: flex; align-items: center; min-height: 34px; margin: 0 0 14px; padding-left: 12px; border-left: 4px solid var(--accent); }
+.single-panel-heading h2 { margin: 0; color: #1f2f49; font-size: 18px; line-height: 1.35; }
+.single-panel-heading-with-action { justify-content: space-between; gap: 12px; padding-right: 0; }
+.filter-config-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.filter-config-shell { width: 100%; min-width: 0; overflow: hidden; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
+.filter-config-shell h2 { margin: 0 0 14px; font-size: 20px; }
+.filter-config-column { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.filter-config-column h3 { margin: 0 0 6px; font-size: 16px; }
+.filter-config-note { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.filter-config-list { display: grid; gap: 10px; margin: 0; }
+.filter-config-item { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
+.filter-config-item dt { color: var(--muted); font-size: 12px; }
+.filter-config-item dd { margin: 6px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.55; }
 .single-field-summary { margin-bottom: 8px; color: var(--muted); font-size: 12px; }
 .single-field-chooser { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); font-size: 12px; }
 .single-field-chooser label { display: inline-flex; gap: 5px; align-items: center; }
-.single-metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.single-metric-card { min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
-.single-metric-card small { display: block; color: var(--muted); overflow-wrap: anywhere; }
-.single-metric-card strong { display: block; margin-top: 8px; font-size: 18px; }
+.single-material-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.metric-card { min-width: 0; min-height: 104px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fbfdff; }
+.metric-card span { display: block; color: var(--muted); overflow-wrap: anywhere; }
+.metric-card strong { display: block; margin-top: 8px; font-size: 24px; font-variant-numeric: tabular-nums; }
 .single-interaction-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .single-interaction-controls button.active, .single-formula-chip.active { border-color: var(--accent); background: var(--accent-soft); color: #1d4ed8; }
 .single-interaction-content { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; }
@@ -645,7 +698,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 .single-lightbox[hidden] { display: none; }
 .single-lightbox { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; padding: 20px; background: rgba(15, 23, 42, .78); }
 .single-lightbox img { max-width: min(90vw, 900px); max-height: 85vh; object-fit: contain; }
-@media (max-width: 760px) { .single-material-layout { grid-template-columns: 1fr; } .single-material-selector-shell { position: static; max-height: 210px; } .single-material-selector { max-height: 180px; } .single-material-topbar { grid-template-columns: 1fr; } .single-material-video-card, .single-material-header { min-height: 96px; } .single-metric-grid, .single-audience-grid { grid-template-columns: 1fr; } .single-audience-donut-layout { grid-template-columns: 1fr; } .single-highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .single-highlight-card { max-width: 150px; } }
+@media (max-width: 760px) { .single-material-shell { grid-template-columns: 1fr; } .single-material-selector { position: static; max-height: none; } .single-material-overview { grid-template-columns: 1fr; } .single-material-video, .single-material-header { min-height: 96px; } .single-material-metrics, .single-audience-grid { grid-template-columns: 1fr; } .single-audience-donut-layout { grid-template-columns: 1fr; } .single-highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .single-highlight-card { max-width: 150px; } }
 .highlight-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
 .highlight-card { min-width: 0; overflow: hidden; padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
 .highlight-image-button { display: block; width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; }
@@ -670,19 +723,45 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 .chart-tooltip[hidden] { display: none; }
 @media (max-width: 900px) { .field-modal-body { grid-template-columns: 160px minmax(0, 1fr); } .field-modal-selected { grid-column: 2; max-height: 190px; border-top: 1px solid var(--line); } }
 @media (max-width: 1100px) { .highlight-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-@media (max-width: 700px) { body { padding: 18px 12px; } h1 { font-size: 24px; } input[type=search] { min-width: 0; } .field-modal { padding: 10px; } .field-modal-panel { height: calc(100vh - 20px); } .field-modal-body { display: flex; flex-direction: column; } .field-modal-groups { display: flex; gap: 6px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); } .field-modal-groups button { flex: 0 0 auto; width: auto; margin: 0; white-space: nowrap; } .field-modal-selected { max-height: 190px; border-top: 1px solid var(--line); border-left: 0; } .field-option-grid { grid-template-columns: 1fr; } .field-modal-footer { align-items: flex-end; flex-direction: column; } .field-modal-footer-actions { width: 100%; } .field-modal-footer-actions button { flex: 1; } .field-modal-footer p { align-self: flex-start; } .material-name-column { min-width: 300px; width: 300px; } .chart-grid { grid-template-columns: 1fr; } .donut-layout, .script-formula-donut { grid-template-columns: 1fr; } .donut-layout svg, .script-formula-donut svg { margin: 0 auto; } .highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { body { padding: 18px 12px; } h1 { font-size: 24px; } input[type=search] { min-width: 0; } .field-modal { padding: 10px; } .field-modal-panel { height: calc(100vh - 20px); } .field-modal-body { display: flex; flex-direction: column; } .field-modal-groups { display: flex; gap: 6px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); } .field-modal-groups button { flex: 0 0 auto; width: auto; margin: 0; white-space: nowrap; } .field-modal-selected { max-height: 190px; border-top: 1px solid var(--line); border-left: 0; } .field-option-grid { grid-template-columns: 1fr; } .field-modal-footer { align-items: flex-end; flex-direction: column; } .field-modal-footer-actions { width: 100%; } .field-modal-footer-actions button { flex: 1; } .field-modal-footer p { align-self: flex-start; } .material-name-column { min-width: 300px; width: 300px; } .chart-grid { grid-template-columns: 1fr; } .donut-layout, .script-formula-donut, .filter-config-layout { grid-template-columns: 1fr; } .donut-layout svg, .script-formula-donut svg { margin: 0 auto; } .highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+ .single-formula-workspace { display: grid; gap: 14px; }
+ .single-formula-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+ .single-formula-toolbar h3 { margin: 0; font-size: 18px; }
+ .single-formula-toolbar span { color: var(--muted); font-size: 12px; }
+ .single-formula-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 12px; }
+ .single-formula-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+ .single-formula-legend-dot { width: 9px; height: 9px; border-radius: 2px; }
+ .single-formula-flow { display: flex; align-items: stretch; gap: 10px; overflow-x: auto; padding-bottom: 2px; }
+ .single-formula-flow-group { display: grid; grid-template-rows: auto 1fr; flex: 1 1 0; gap: 8px; min-width: 180px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: #fbfdff; }
+ .single-formula-node { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--single-formula-color) 55%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--single-formula-color) 10%, white); color: var(--text); text-align: left; }
+ .single-formula-node:hover, .single-formula-node:focus-visible, .single-formula-node.active { border-color: var(--single-formula-color); background: color-mix(in srgb, var(--single-formula-color) 20%, white); color: var(--single-formula-color); outline: none; }
+ .single-formula-node .single-formula-level { display: block; margin-bottom: 3px; color: var(--muted); font-size: 10px; }
+ .single-formula-node strong { display: block; overflow-wrap: anywhere; line-height: 1.45; }
+ .single-formula-primary { min-height: 54px; text-align: center; }
+ .single-formula-secondary-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 6px; align-content: start; }
+ .single-formula-secondary { min-height: 44px; padding: 6px 8px; }
+ .single-formula-empty { display: flex; align-items: center; justify-content: center; min-height: 44px; color: var(--muted); font-size: 12px; }
+ .single-formula-flow-arrow { display: flex; flex: 0 0 22px; align-items: center; justify-content: center; color: var(--muted); font-size: 20px; }
+ .single-script-text { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fbfdff; line-height: 2; white-space: pre-wrap; }
+ .single-script-highlight { cursor: pointer; }
+ .single-script-highlight:not(.active) { opacity: .42; }
+ @media (max-width: 760px) { .single-formula-toolbar { align-items: flex-start; flex-direction: column; } .single-formula-flow { flex-direction: column; } .single-formula-flow-group { flex: 0 0 auto; min-width: 0; } .single-formula-flow-arrow { transform: rotate(90deg); min-height: 20px; } }
 </style>
 </head>
 <body>
 <main>
 <h1>千川素材榜单数据工作台</h1>
 <nav class="section-nav" aria-label="报告部分">
-  <button type="button" class="active" data-section="materials">素材榜单</button>
+  <button type="button" class="active" data-section="filters">素材筛选条件</button>
+  <button type="button" data-section="materials">素材榜单</button>
   <button type="button" data-section="audience">人群数据</button>
   <button type="button" data-section="scripts">脚本内容公式</button>
   <button type="button" data-section="highlights">高光帧数据</button>
   <button type="button" data-section="single-material">单素材数据</button>
 </nav>
+<section id="filters-panel" class="audience-section" data-section-panel="filters">
+  <div class="filter-config-shell"><h2>素材筛选条件</h2><div id="filter-config"></div></div>
+</section>
 <section id="field-management" class="field-modal" role="dialog" aria-modal="true" aria-labelledby="field-management-title" hidden>
   <div class="field-modal-backdrop" data-field-action="cancel"></div>
   <div class="field-modal-panel">
@@ -707,7 +786,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     </footer>
   </div>
 </section>
-<section id="materials-panel" data-section-panel="materials">
+<section id="materials-panel" data-section-panel="materials" hidden>
 <div class="toolbar">
   <input id="search" type="search" placeholder="输入素材标题或 ID" aria-label="输入素材标题或 ID">
   <button id="field-button" type="button">自定义指标</button>
@@ -717,11 +796,11 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 <div class="pager">
   <span id="range"></span>
   <span>
-    <button id="first" type="button">首</button>
-    <button id="previous" type="button">前</button>
+    <button id="first" type="button">首页</button>
+    <button id="previous" type="button">上一页</button>
     <span id="pages"></span>
-    <button id="next" type="button">后</button>
-    <button id="last" type="button">末</button>
+    <button id="next" type="button">下一页</button>
+    <button id="last" type="button">尾页</button>
   </span>
 </div>
 </section>
@@ -733,32 +812,30 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     <div class="highlight-pager">
       <span id="highlight-range"></span>
       <span>
-        <button id="highlight-first" type="button">首</button>
-        <button id="highlight-previous" type="button">前</button>
+        <button id="highlight-first" type="button">首页</button>
+        <button id="highlight-previous" type="button">上一页</button>
         <span id="highlight-pages"></span>
-        <button id="highlight-next" type="button">后</button>
-        <button id="highlight-last" type="button">末</button>
+        <button id="highlight-next" type="button">下一页</button>
+        <button id="highlight-last" type="button">尾页</button>
       </span>
     </div>
 </div>
 </section>
 <section id="single-material-panel" class="single-material-section" data-section-panel="single-material" hidden>
   <div id="single-material-unavailable" class="audience-card empty" hidden>单素材详情数据不可用</div>
-  <div id="single-material-content" class="single-material-layout" hidden>
-    <aside class="single-material-selector-shell" aria-label="详情素材选择"><div id="single-material-selector" class="single-material-selector"></div></aside>
-    <div class="single-material-main">
-      <div class="single-material-detail-card">
-        <div class="single-material-topbar"><div id="single-material-video" class="single-material-video-card"></div><header class="single-material-header"><h2 id="single-material-title"></h2><p id="single-material-id"></p></header></div>
+  <div id="single-material-content" class="single-material-shell" hidden>
+    <aside class="single-material-selector" aria-label="详情素材选择"><h2>单素材数据</h2><p>选择素材查看详细分析</p><div id="single-material-selector" class="single-material-selector-list"></div></aside>
+    <section class="single-material-main" aria-label="单素材详情">
+      <div class="single-material-overview"><div id="single-material-video" class="single-material-video"></div><div class="single-material-meta"><header class="single-material-header"><h2 id="single-material-title"></h2><p id="single-material-id"></p></header></div></div>
         <nav id="single-material-tabs" class="single-material-tabs" aria-label="单素材数据板块">
           <button type="button" data-single-anchor="delivery">投放数据</button><button type="button" data-single-anchor="interactions">互动时序分析</button><button type="button" data-single-anchor="script">脚本分析</button><button type="button" data-single-anchor="audience">人群分析</button><button type="button" data-single-anchor="highlights">高光帧数据</button>
         </nav>
-        <section id="single-material-delivery" class="audience-card single-material-panel" data-single-panel="delivery"><div class="single-delivery-header"><h3>投放数据</h3><button id="single-field-button" type="button" aria-expanded="false">自定义指标</button></div><div id="single-delivery-content"></div></section>
-        <section id="single-material-interactions" class="audience-card single-material-panel" data-single-panel="interactions"><h3>互动时序分析</h3><div id="single-interaction-content"></div></section>
-        <section id="single-material-script" class="audience-card single-material-panel" data-single-panel="script"><h3>脚本分析</h3><div id="single-script-content"></div></section>
-        <section id="single-material-audience" class="audience-card single-material-panel" data-single-panel="audience"><h3>人群分析</h3><div id="single-audience-content"></div></section>
-        <section id="single-material-highlights" class="audience-card single-material-panel" data-single-panel="highlights"><h3>高光帧数据</h3><div id="single-highlights-content"></div></section>
-      </div>
-    </div>
+        <section id="single-material-delivery" class="single-material-panel" data-single-panel="delivery"><div class="single-panel-heading single-panel-heading-with-action"><h2>投放数据</h2><button id="single-field-button" type="button" aria-expanded="false">自定义指标</button></div><div id="single-delivery-content"></div></section>
+        <section id="single-material-interactions" class="single-material-panel" data-single-panel="interactions"><div class="single-panel-heading"><h2>互动时序分析</h2></div><div id="single-interaction-content"></div></section>
+        <section id="single-material-script" class="single-material-panel" data-single-panel="script"><div class="single-panel-heading"><h2>脚本分析</h2></div><div id="single-script-content"></div></section>
+        <section id="single-material-audience" class="single-material-panel" data-single-panel="audience"><div class="single-panel-heading"><h2>人群分析</h2></div><div id="single-audience-content"></div></section>
+        <section id="single-material-highlights" class="single-material-panel" data-single-panel="highlights"><div class="single-panel-heading"><h2>高光帧数据</h2></div><div id="single-highlights-content"></div></section>
+    </section>
   </div>
 </section>
 <section id="audience-panel" class="audience-section" data-section-panel="audience" hidden>
@@ -877,6 +954,42 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 
   function singleEmpty(label) { return `<div class="empty">暂无${escaped(label)}有效数据</div>`; }
 
+  const fieldLabelById = Object.fromEntries((Array.isArray(model.fields) ? model.fields : []).filter(field => field && field.id && field.label).map(field => [field.id, field.label]));
+  const filterConfigFieldAliases = {};
+  const filterConfigLabels = { period: "投放周期", startDate: "开始日期", endDate: "结束日期", start_date: "开始日期", end_date: "结束日期", type: "类型", filters: "筛选条件", dimensions: "维度筛选", metrics: "指标筛选", ranking: "榜单排序", field: "字段", operator: "条件", value: "值", materialList: "素材列表", sort: "排序", direction: "方向" };
+  const filterConfigOperators = { eq: "等于", neq: "不等于", gt: "大于", gte: "大于等于", lt: "小于", lte: "小于等于", in: "包含", not_in: "不包含", asc: "升序", desc: "降序" };
+  function filterConfigHasValue(value) {
+    if (value == null || value === "") return false;
+    if (Array.isArray(value)) return value.some(filterConfigHasValue);
+    if (typeof value === "object") return Object.values(value).some(filterConfigHasValue);
+    return true;
+  }
+  function filterConfigFieldLabel(value) {
+    const raw = String(value == null ? "" : value);
+    return fieldLabelById[raw] || filterConfigFieldAliases[raw] || (raw ? `未找到中文映射：${raw}` : "未配置");
+  }
+  function filterConfigText(value, key) {
+    if (value == null || value === "") return "未配置";
+    if (Array.isArray(value)) return value.length ? value.map(item => filterConfigText(item, key)).join("、") : "不限";
+    if (typeof value === "object") {
+      if (Object.prototype.hasOwnProperty.call(value, "field") && Object.prototype.hasOwnProperty.call(value, "operator")) return `${filterConfigFieldLabel(value.field)} ${filterConfigOperators[value.operator] || filterConfigText(value.operator)} ${filterConfigText(value.value, "value")}`;
+      return Object.entries(value).filter(([, item]) => filterConfigHasValue(item)).map(([entryKey, item]) => `${filterConfigLabels[entryKey] || entryKey}：${entryKey === "field" || entryKey === "metric" ? filterConfigFieldLabel(item) : filterConfigText(item, entryKey)}`).join("；") || "未配置";
+    }
+    if (key === "field" || key === "metric") return filterConfigFieldLabel(value);
+    return filterConfigOperators[value] || String(value);
+  }
+  function renderFilterConfig() {
+    const context = model.queryContext || {}, entries = [];
+    const add = (label, value) => { if (filterConfigHasValue(value)) entries.push({ label, value: filterConfigText(value) }); };
+    add(filterConfigLabels.period, context.period);
+    add(filterConfigLabels.filters, context.filters);
+    add(filterConfigLabels.ranking, context.ranking);
+    const highlightEntries = Array.isArray(model.highlightFilterContext) ? model.highlightFilterContext : [];
+    const renderColumn = (title, note, items, empty) => `<section class="filter-config-column"><h3>${escaped(title)}</h3><p class="filter-config-note">${escaped(note)}</p>${items.length ? `<dl class="filter-config-list">${items.map(item => `<div class="filter-config-item"><dt>${escaped(item.label)}</dt><dd>${escaped(item.value)}</dd></div>`).join("")}</dl>` : `<div class="empty">${escaped(empty)}</div>`}</section>`;
+    const target = document.getElementById("filter-config");
+    target.innerHTML = `<div class="filter-config-layout">${renderColumn("素材列表筛选条件", "仅展示本次实际影响素材入选或排序的条件。", entries, "未配置有效素材列表条件")}${renderColumn("高光帧筛选标准", "仅展示本次实际启用的高光帧选择规则。", highlightEntries, "未配置有效高光帧筛选标准")}</div>`;
+  }
+
   const singleDefaultFieldIds = [
     "stat_cost_for_overall_roi2",
     "stat_cost_for_roi2",
@@ -901,7 +1014,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
       ? singleState.deliveryFields[material.materialId]
       : defaultSingleFieldIds(fields);
     const visibleFields = fields.filter(field => selectedIds.includes(field.id));
-    target.innerHTML = fields.length ? `<div id="single-field-summary" class="single-field-summary">已展示指标 ${visibleFields.length} / ${fields.length}</div><div class="single-metric-grid">${visibleFields.map(field => `<div class="single-metric-card"><small>${escaped(field.label || field.id)}</small><strong>${singleValue(field.value)}</strong></div>`).join("") || singleEmpty("投放数据")}</div>` : singleEmpty("投放数据");
+    target.innerHTML = fields.length ? `<div id="single-field-summary" class="single-field-summary">已展示指标 ${visibleFields.length} / ${fields.length}</div><div class="single-material-metrics">${visibleFields.map(field => `<article class="metric-card"><span>${escaped(field.label || field.id)}</span><strong>${singleValue(field.value)}</strong></article>`).join("") || singleEmpty("投放数据")}</div>` : singleEmpty("投放数据");
   }
 
   function singleRenderVideo(material) {
@@ -972,14 +1085,14 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     if (script.status !== "available") { target.innerHTML = singleEmpty("脚本"); return; }
     const formulas = Array.isArray(script.formula) ? script.formula : [];
     const formulaGroups = formulas.map(item => ({ primary: item.primary, secondary: Array.isArray(item.secondary) ? item.secondary.filter(Boolean) : [] })).filter(item => item.primary);
-    const chips = formulaGroups.flatMap(item => [{ label: item.primary, kind: "一级公式", related: [item.primary, ...item.secondary] }, ...item.secondary.map(label => ({ label, kind: "二级公式", related: [label] }))]);
     const selected = singleState.selectedFormula;
     const segments = Array.isArray(script.segments) ? script.segments : [];
-    const palette = ["#16a34a", "#ef4444", "#f59e0b", "#2563eb", "#14b8a6", "#ec4899", "#8b5cf6"];
+    const palette = ["#ef6a6a", "#8b5cf6", "#22b573", "#f59e0b", "#64748b", "#2563eb", "#14b8a6"];
     const labelColors = {};
-    chips.forEach((chip, index) => { if (!labelColors[chip.label]) labelColors[chip.label] = palette[index % palette.length]; });
-    const selectedChip = chips.find(chip => chip.label === selected);
-    const activeLabels = new Set(selectedChip?.related || []);
+    formulaGroups.forEach((group, index) => { if (!labelColors[group.primary]) labelColors[group.primary] = palette[index % palette.length]; group.secondary.forEach(label => { if (!labelColors[label]) labelColors[label] = labelColors[group.primary]; }); });
+    const selectedGroup = formulaGroups.find(group => group.primary === selected || group.secondary.includes(selected));
+    const activeLabels = selected ? new Set(selected === selectedGroup?.primary ? [selectedGroup.primary, ...(selectedGroup.secondary || [])] : [selected]) : null;
+    const formulaColor = label => labelColors[label] || "#64748b";
     function linkedScriptText(text) {
       const matches = [];
       segments.forEach(segment => {
@@ -996,11 +1109,12 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
       const nonOverlapping = [];
       matches.forEach(match => { if (!nonOverlapping.some(item => match.start < item.end && match.end > item.start)) nonOverlapping.push(match); });
       let cursor = 0;
-      return nonOverlapping.map(match => { const before = escaped(text.slice(cursor, match.start)); const body = escaped(text.slice(match.start, match.end)); const active = !selected || activeLabels.has(match.label); const color = labelColors[match.label] || "#64748b"; cursor = match.end; return `${before}<mark class="single-script-highlight${active ? " active" : ""}" style="--single-script-highlight:${color}" title="${escaped(match.label)}">${body}</mark>`; }).join("") + escaped(text.slice(cursor));
+      return nonOverlapping.map(match => { const before = escaped(text.slice(cursor, match.start)); const body = escaped(text.slice(match.start, match.end)); const active = !selected || activeLabels.has(match.label); const color = formulaColor(match.label); cursor = match.end; return `${before}<mark class="single-script-highlight${active ? " active" : ""}" data-single-formula="${escaped(match.label)}" style="--single-script-highlight:${color}" title="点击联动${escaped(match.label)}">${body}</mark>`; }).join("") + escaped(text.slice(cursor));
     }
-    const segmentMarkup = segments.length && !script.text ? segments.map(segment => { const active = !selected || activeLabels.has(segment.label); const color = labelColors[segment.label] || "#64748b"; return `<p><strong>${escaped(segment.label)}：</strong><mark class="single-script-highlight${active ? " active" : ""}" style="--single-script-highlight:${color}">${escaped(segment.text)}</mark></p>`; }).join("") : "";
-    const formulaMarkup = formulaGroups.map(group => `<div class="single-formula-group"><div class="single-formula-row single-formula-primary-row"><span class="single-formula-level">一级</span><span class="single-formula-chip single-formula-chip-primary"><span class="single-formula-dot" style="background:${labelColors[group.primary]}"></span>${escaped(group.primary)}</span></div><div class="single-formula-row single-formula-secondary-row"><span class="single-formula-level">二级</span>${group.secondary.length ? group.secondary.map(label => `<span class="single-formula-connector" aria-hidden="true">+</span><button type="button" class="single-formula-chip single-formula-chip-secondary ${selected === label ? "active" : ""}" data-single-formula="${escaped(label)}" data-single-formula-level="secondary"><span class="single-formula-dot" style="background:${labelColors[label]}"></span>${escaped(label)}</button>`).join("") : `<span class="single-formula-level">暂无二级内容公式</span>`}</div></div>`).join("");
-    target.innerHTML = `<div class="single-script-formula-header"><strong>本视频内容公式</strong><span>${selected ? `已联动：${escaped(selected)}` : "一级与二级内容公式已同时展示，点击二级内容公式可联动脚本证据"}</span></div><div class="single-formula-chips">${formulaMarkup || singleEmpty("内容公式")}</div>${script.text ? `<div class="single-script-heading"><strong>本视频脚本</strong><span>彩色片段对应已解析的脚本标签</span></div><div class="single-script-text">${linkedScriptText(script.text)}</div>` : ""}${segmentMarkup || (!script.text ? singleEmpty("脚本内容") : "")}`;
+    const segmentMarkup = segments.length && !script.text ? segments.map(segment => { const active = !selected || activeLabels.has(segment.label); const color = formulaColor(segment.label); return `<p><strong>${escaped(segment.label)}：</strong><mark class="single-script-highlight${active ? " active" : ""}" data-single-formula="${escaped(segment.label)}" style="--single-script-highlight:${color}" title="点击联动${escaped(segment.label)}">${escaped(segment.text)}</mark></p>`; }).join("") : "";
+    const formulaMarkup = formulaGroups.map((group, index) => `<div class="single-formula-flow-group" data-single-formula-group="${escaped(group.primary)}"><button type="button" class="single-formula-node single-formula-primary ${selected === group.primary ? "active" : ""}" data-single-formula="${escaped(group.primary)}" aria-pressed="${selected === group.primary}" style="--single-formula-color:${formulaColor(group.primary)}"><span class="single-formula-level">一级内容公式</span><strong>${escaped(group.primary)}</strong></button><div class="single-formula-secondary-list" aria-label="${escaped(group.primary)}二级内容公式">${group.secondary.length ? group.secondary.map(label => `<button type="button" class="single-formula-node single-formula-secondary ${selected === label ? "active" : ""}" data-single-formula="${escaped(label)}" aria-pressed="${selected === label}" style="--single-formula-color:${formulaColor(label)}"><span class="single-formula-level">二级</span><strong>${escaped(label)}</strong></button>`).join("") : '<span class="single-formula-empty">暂无二级内容公式</span>'}</div></div>${index < formulaGroups.length - 1 ? '<span class="single-formula-flow-arrow" aria-hidden="true">→</span>' : ""}`).join("");
+    const legendMarkup = formulaGroups.map(group => `<span class="single-formula-legend-item"><i class="single-formula-legend-dot" style="background:${formulaColor(group.primary)}"></i>${escaped(group.primary)}</span>`).join("");
+    target.innerHTML = `<div class="single-formula-workspace"><div class="single-formula-toolbar single-script-formula-header"><h3>本视频内容公式</h3><span>${selected ? `已联动：${escaped(selected)}` : "点击内容公式或下方脚本文案，可双向定位"}</span></div><div class="single-formula-legend">${legendMarkup || '<span class="empty">暂无公式标签</span>'}</div><div class="single-formula-flow" aria-label="内容公式层级链路">${formulaMarkup || singleEmpty("内容公式")}</div><div class="single-script-heading"><strong>本视频脚本文案</strong><span>彩色片段对应已解析的内容公式</span></div>${script.text ? `<div class="single-script-text">${linkedScriptText(script.text)}</div>` : segmentMarkup || singleEmpty("脚本内容")}</div>`;
     target.querySelectorAll("[data-single-formula]").forEach(button => button.addEventListener("click", () => { singleState.selectedFormula = singleState.selectedFormula === button.dataset.singleFormula ? null : button.dataset.singleFormula; singleRenderScript(material); }));
   }
 
@@ -1088,7 +1202,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     singleState.framePage = Math.min(singleState.framePage, pageCount);
     const start = (singleState.framePage - 1) * singleHighlightPageSize;
     const shown = cards.slice(start, start + singleHighlightPageSize);
-    target.innerHTML = `<div class="single-highlight-layout"><div class="single-highlight-grid">${shown.map((card, index) => `<article class="single-highlight-card"><button type="button" data-single-frame-index="${start + index}" aria-label="放大查看${escaped(card.second)}秒高光帧"><img src="${escaped(card.artifact.path)}" alt="${escaped(card.second)}秒高光帧"></button><p>${escaped(card.description || card.role || "高光帧")} · ${escaped(card.second)}秒</p></article>`).join("")}</div><div class="single-highlight-pager"><span>第 ${singleState.framePage} / ${pageCount} 页 · 共 ${cards.length} 帧</span><span><button type="button" data-single-frame-page="previous" ${singleState.framePage <= 1 ? "disabled" : ""}>前</button><button type="button" data-single-frame-page="next" ${singleState.framePage >= pageCount ? "disabled" : ""}>后</button></span></div></div>`;
+    target.innerHTML = `<div class="single-highlight-layout"><div class="single-highlight-grid">${shown.map((card, index) => `<article class="single-highlight-card"><button type="button" data-single-frame-index="${start + index}" aria-label="放大查看${escaped(card.second)}秒高光帧"><img src="${escaped(card.artifact.path)}" alt="${escaped(card.second)}秒高光帧"></button><p>${escaped(card.description || card.role || "高光帧")} · ${escaped(card.second)}秒</p></article>`).join("")}</div><div class="single-highlight-pager"><span>第 ${singleState.framePage} / ${pageCount} 页 · 共 ${cards.length} 帧</span><span><button type="button" data-single-frame-page="previous" ${singleState.framePage <= 1 ? "disabled" : ""}>上一页</button><button type="button" data-single-frame-page="next" ${singleState.framePage >= pageCount ? "disabled" : ""}>下一页</button></span></div></div>`;
     target.querySelectorAll("[data-single-frame-index]").forEach(button => button.addEventListener("click", () => singleOpenLightbox(cards[Number(button.dataset.singleFrameIndex)], button)));
     target.querySelectorAll("[data-single-frame-page]").forEach(button => button.addEventListener("click", () => { singleState.framePage += button.dataset.singleFramePage === "next" ? 1 : -1; singleRenderHighlights(material); }));
   }
@@ -1099,12 +1213,12 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     singleMaterialContent.hidden = !available;
     if (!available) return;
     const material = singleCurrentMaterial();
-    singleMaterialSelector.innerHTML = `<div class="single-material-selector-header"><strong>详情素材选择</strong><span>${singleMaterials.length} 个素材</span></div><div class="single-material-items">${singleMaterials.map(item => `<button type="button" class="${item.materialId === material.materialId ? "active" : ""}" data-single-material-id="${escaped(item.materialId)}" aria-label="第${escaped(item.rank)}名，${escaped(item.title)}"><span class="single-material-rank">#${escaped(item.rank)} ${escaped(item.title)}</span><span class="single-material-id">素材ID：${escaped(item.materialId)}</span></button>`).join("")}</div>`;
+    singleMaterialSelector.innerHTML = singleMaterials.map(item => `<button type="button" class="${item.materialId === material.materialId ? "active" : ""}" data-single-material-id="${escaped(item.materialId)}" aria-pressed="${item.materialId === material.materialId}" aria-label="第${escaped(item.rank)}名，${escaped(item.title)}"><strong>TOP${escaped(item.rank)} · ${escaped(item.title)}</strong><span>素材ID：${escaped(item.materialId)}</span></button>`).join("");
     document.getElementById("single-material-title").textContent = material.title;
     document.getElementById("single-material-id").textContent = `素材ID：${material.materialId} · 榜单第 ${material.rank} 名`;
     singleRenderVideo(material); singleRenderDelivery(material); singleRenderInteractions(material); singleRenderScript(material); singleRenderAudience(material); singleRenderHighlights(material);
     document.querySelectorAll("[data-single-anchor]").forEach(button => button.classList.toggle("active", button.dataset.singleAnchor === singleState.anchor));
-    singleMaterialSelector.querySelectorAll("[data-single-material-id]").forEach(button => button.addEventListener("click", () => { singleState.selectedMaterialId = button.dataset.singleMaterialId; singleState.framePage = 1; singleState.selectedFormula = null; singleState.interactionMetric = null; singleRender(); }));
+    singleMaterialSelector.querySelectorAll("[data-single-material-id]").forEach(button => button.addEventListener("click", () => { singleState.selectedMaterialId = button.dataset.singleMaterialId; singleState.framePage = 1; singleState.selectedFormula = null; singleState.interactionMetric = null; singleRender(); document.querySelector(".single-material-main")?.scrollIntoView({behavior:"auto", block:"start"}); }));
   }
 
   function normalize(value) {
@@ -1833,6 +1947,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     const section = event.currentTarget.dataset.section;
     document.querySelectorAll("[data-section]").forEach(item => item.classList.toggle("active", item.dataset.section === section));
     document.querySelectorAll("[data-section-panel]").forEach(panel => { panel.hidden = panel.dataset.sectionPanel !== section; });
+    if (section === "filters") renderFilterConfig();
     if (section === "audience") renderAudience();
     if (section === "scripts") renderScriptFormula();
     if (section === "highlights") renderHighlights();
@@ -1870,6 +1985,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   renderAudience();
   renderScriptFormula();
   renderHighlights();
+  renderFilterConfig();
   singleRender();
   search.addEventListener("input", event => { state.query = event.target.value; state.page = 1; render(); });
   document.getElementById("first").addEventListener("click", () => { state.page = 1; render(); });

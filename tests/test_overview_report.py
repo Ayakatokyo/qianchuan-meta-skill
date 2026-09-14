@@ -337,7 +337,9 @@ class OverviewHtmlTests(unittest.TestCase):
         model = {
             "schemaVersion": 1, "kind": "qianchuan_material_leaderboard_overview", "runId": "run-test",
             "source": {"path": "source-data/materials.csv.structured.json", "sha256": "a" * 64, "recordCount": 1},
-            "queryContext": {"period": {}, "filters": {}, "ranking": {}}, "fields": [], "rows": [],
+            "queryContext": {"period": {"startDate": "2026-08-30", "endDate": "2026-09-04"}, "filters": {"dimensions": [], "metrics": [{"field": "stat_cost_for_roi2", "operator": "gte", "value": "1000"}]}, "ranking": {"field": "total_prepay_and_pay_settle_roi2_1h", "direction": "desc"}},
+            "highlightFilterContext": [{"label": "0秒画面", "value": "不包含"}, {"label": "整体点击次数", "value": "局部峰值，3 帧"}, {"label": "整体点赞次数", "value": "局部峰值，3 帧"}, {"label": "整体转发次数", "value": "数值 Top，2 帧"}],
+            "fields": [{"id": "stat_cost_for_roi2", "label": "整体消耗"}, {"id": "total_prepay_and_pay_settle_roi2_1h", "label": "净成交ROI"}], "rows": [],
             "singleMaterialOverview": {"status": "available", "materialScope": {"count": 1, "materialIds": ["m-1"]}, "materials": [{
                 "materialId": "m-1", "rank": 1, "title": "素材标题", "leaderboard": {"fields": []},
                 "interactions": {"status": "unavailable", "metrics": []}, "script": {"status": "unavailable", "formula": []},
@@ -347,28 +349,49 @@ class OverviewHtmlTests(unittest.TestCase):
         }
         html = render_overview_html(model)
 
+        self.assertIn('data-section="filters"', html)
+        self.assertLess(html.index('data-section="filters"'), html.index('data-section="materials"'))
+        self.assertIn('id="filters-panel"', html)
+        self.assertIn('id="filter-config"', html)
+        self.assertIn("整体消耗", html)
+        self.assertIn("净成交ROI", html)
+        self.assertIn("filterConfigFieldLabel", html)
+        self.assertIn("filter-config-layout", html)
+        self.assertIn("filter-config-shell", html)
+        self.assertIn("素材列表筛选条件", html)
+        self.assertIn("高光帧筛选标准", html)
+        self.assertIn("highlightFilterContext", html)
+        self.assertIn("filterConfigHasValue", html)
+        self.assertNotIn("维度筛选：不限", html)
         self.assertIn('data-section="single-material"', html)
         self.assertIn('id="single-material-panel"', html)
         self.assertIn('id="single-material-selector"', html)
-        self.assertIn('class="single-material-selector-shell"', html)
-        self.assertIn('class="single-material-detail-card"', html)
+        self.assertIn('class="single-material-shell"', html)
+        self.assertIn('class="single-material-main"', html)
         self.assertIn('id="single-material-video"', html)
-        self.assertIn(".single-material-video-card { aspect-ratio: 9 / 16;", html)
-        self.assertIn("width: min(100%, 160px)", html)
-        self.assertIn("grid-template-columns: 160px minmax(0, 1fr)", html)
-        self.assertIn("justify-self: start", html)
-        self.assertIn("margin: -16px -16px 12px 0", html)
+        self.assertIn(".single-material-video { display: flex; width: 100%;", html)
+        self.assertIn("grid-template-columns: 230px minmax(0, 1fr)", html)
+        self.assertIn("single-material-overview", html)
         self.assertIn("border-radius: 12px;", html)
-        self.assertIn(".single-material-header { display: flex; min-width: 0;", html)
-        self.assertNotIn("background: var(--surface-muted); border: 1px solid var(--line); border-radius: 12px; }\n.single-material-header h2", html)
+        self.assertIn(".single-material-header { width: 100%;", html)
+        self.assertNotIn('data-single-anchor="filters"', html)
+        self.assertNotIn('data-single-panel="filters"', html)
+        self.assertIn("renderFilterConfig", html)
+        self.assertIn('data-single-anchor="delivery"', html)
         self.assertIn('data-single-panel="delivery"', html)
         self.assertIn('id="single-field-button"', html)
+        self.assertIn('class="single-panel-heading single-panel-heading-with-action"><h2>投放数据</h2>', html)
+        self.assertNotIn('class="single-delivery-header"', html)
         self.assertIn("deliveryFields: {}", html)
         self.assertIn('data-single-panel="interactions"', html)
         self.assertIn('data-single-panel="script"', html)
         self.assertIn('data-single-panel="audience"', html)
         self.assertIn('data-single-panel="highlights"', html)
         self.assertIn("singleMaterialOverview", html)
+        for label in ("首页", "上一页", "下一页", "尾页"):
+            self.assertIn(f">{label}<", html)
+        for label in (">首<", ">前<", ">后<", ">末<"):
+            self.assertNotIn(label, html)
 
     def test_single_material_controls_keep_width_only_scaling_and_live_geo_window(self):
         model = {
@@ -413,11 +436,12 @@ class OverviewHtmlTests(unittest.TestCase):
         self.assertNotIn('chartSvg.style.transform = `scaleX(${singleState.chartScale / 100})`', html)
         self.assertIn('data-single-value', html)
         self.assertIn('metric.label}：${point.dataset.singleValue}', html)
-        self.assertIn('single-formula-primary-row', html)
-        self.assertIn('single-formula-secondary-row', html)
-        self.assertNotIn('data-single-formula-level="primary"', html)
-        self.assertIn('data-single-formula-level="secondary"', html)
-        self.assertIn('点击二级内容公式可联动脚本证据', html)
+        self.assertIn('single-formula-flow', html)
+        self.assertIn('single-formula-primary', html)
+        self.assertIn('single-formula-secondary-list', html)
+        self.assertIn('data-single-formula=', html)
+        self.assertIn('点击内容公式或下方脚本文案，可双向定位', html)
+        self.assertNotIn('最多 3 帧', html)
         self.assertIn('.single-audience-grid > .single-audience-subsection { padding: 0; background: transparent; border: 0;', html)
         self.assertIn('max-width: 170px;', html)
         self.assertIn('function singleRenderVideo(material)', html)
