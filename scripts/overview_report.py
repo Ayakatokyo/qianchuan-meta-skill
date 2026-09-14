@@ -1389,7 +1389,6 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     singleState.selectedFormula = null;
     singleState.interactionMetric = null;
     activateSection("single-material");
-    document.getElementById("single-material-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function requestHighlightMaterialDetail(materialId) {

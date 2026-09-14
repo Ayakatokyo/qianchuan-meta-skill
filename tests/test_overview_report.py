@@ -502,7 +502,8 @@ class OverviewHtmlTests(unittest.TestCase):
         self.assertIn("function openSingleMaterialDetail(materialId)", html)
         self.assertIn('activateSection("single-material")', html)
         self.assertIn("singleState.selectedMaterialId = materialId", html)
-        self.assertIn('document.getElementById("single-material-panel")?.scrollIntoView', html)
+        highlight_jump = html.split("function openSingleMaterialDetail(materialId)", 1)[1].split("function requestHighlightMaterialDetail", 1)[0]
+        self.assertNotIn("scrollIntoView", highlight_jump)
         self.assertNotIn("new CustomEvent(\"highlight-material-detail\"", html)
         self.assertIn("s ·", html)
         self.assertIn("整体点击次数", html)
