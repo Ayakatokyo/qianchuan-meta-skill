@@ -18,7 +18,11 @@ class SkillDocumentTests(unittest.TestCase):
         metadata, _ = load_skill_document()
         pre_input = metadata.get("metadata", {}).get("pre_input", "")
 
-        self.assertTrue(pre_input.startswith("请采集千川素材及相关诊断数据"))
+        self.assertTrue(pre_input.startswith("请采集千川素材及相关诊断数据。"))
+        self.assertGreaterEqual(pre_input.count("\n"), 12)
+        self.assertNotIn("<p>", pre_input)
+        self.assertNotIn("data-pre-input-blank", pre_input)
+        self.assertIn("____", pre_input)
         self.assertIn("授权店铺ID", pre_input)
         self.assertIn("广告主ID", pre_input)
         self.assertIn("时间范围", pre_input)
