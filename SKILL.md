@@ -97,6 +97,18 @@ QuerySpec 的 `field` 必须来自 `config/asset-field-registry-v1.json`。注�
 
 `validate` 不访问外部服务；`query` 使用 `ENV_BACKEND_HOST`、`YUCE_AUTHORIZATION`，以及 `YUCE_SESSION_ID` 或 `YCSESSIONID` 调用千川报表连接器。RPA 与报表连接器采用相同会话优先级：`YUCE_SESSION_ID` → `YCSESSIONID` → `YUCE_AUTHORIZATION`。凭证不得进入 Spec、Git、日志或运行工件。
 
+详情 RPA 的唯一静态身份是 `rpa.conn.juliang.qc.material.analysis.video.live.diagnosis`，只保存在 `scripts/rpa_dynamic_client.py`。每次取数先执行 `detail`/`schema` 获取实时 `platformCode`、`inParamJsonSchemaText` 或 `inParamList`，再用一个完整业务 JSON 执行 `validate`；`fetch` 会再次反查详情、重复校验、走异步 task/status，并下载解析 CSV。禁止把详情返回的 `id` 当作 connector code，禁止补 `_ACCOUNT_PASSWORD`，也不能继续使用同步 `/invoke` 执行详情 RPA。外层工具执行真实 `fetch` 时显式设置 3600 秒超时。
+
+```bash
+python scripts/rpa_dynamic_client.py detail
+python scripts/rpa_dynamic_client.py schema
+python scripts/rpa_dynamic_client.py list-accounts
+python scripts/rpa_dynamic_client.py validate --params-file config/rpa-business-params.json
+python scripts/rpa_dynamic_client.py fetch --shop-id "<shop_id>" \
+  --params-file config/rpa-business-params.json \
+  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/rpa-result
+```
+
 在未预装依赖的本地 Codex 运行面，统一从技能根目录使用 `uv run --with-requirements requirements.txt python`；它会按本技能清单解析依赖，避免 `requests` 缺失被误判为鉴权故障。不要把凭证写入命令行。
 
 ```bash
@@ -107,44 +119,44 @@ uv run --with-requirements requirements.txt python scripts/run_meta_skill.py val
 uv run --with-requirements requirements.txt python scripts/run_meta_skill.py query \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
-  --output-dir /path/to/new-run
+  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD
 
 uv run --with-requirements requirements.txt python scripts/run_meta_skill.py run \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
   --execute-rpa \
-  --output-dir /path/to/new-run
+  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD
 
 # 单 skill 完整工作流入口（阶段一完成后暂停，等待第二次分析输入）
 uv run --with-requirements requirements.txt python scripts/run_meta_skill.py workflow \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
   --execute-rpa \
-  --output-dir /path/to/new-run
+  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD
 
 # 阶段一取数、事实包构建和校验成功后，生成阶段一离线素材总览报告
 uv run --with-requirements requirements.txt python scripts/run_meta_skill.py render-overview \
-  --run-dir /path/to/completed-run \
-  --output-dir /path/to/completed-run/overview
+  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD \
+  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/overview
 
 uv run --with-requirements requirements.txt python scripts/run_meta_skill.py verify-run \
-  --output-dir /path/to/completed-run
+  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD
 
 uv run --with-requirements requirements.txt python scripts/run_meta_skill.py build-fact-pack \
-  --run-dir /path/to/completed-run
+  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD
 
 uv run --with-requirements requirements.txt python scripts/run_meta_skill.py verify-fact-pack \
-  --run-dir /path/to/completed-run \
-  --fact-pack-dir /path/to/completed-run/fact-pack
+  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD \
+  --fact-pack-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/fact-pack
 
 uv run --with-requirements requirements.txt python scripts/run_meta_skill.py prepare-analysis \
-  --run-dir /path/to/completed-run \
+  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD \
   --analysis-request /path/to/analysis-request.json \
-  --output-dir /path/to/completed-run/analysis
+  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/analysis
 
 uv run --with-requirements requirements.txt python scripts/run_meta_skill.py verify-analysis \
-  --run-dir /path/to/completed-run \
-  --analysis-dir /path/to/completed-run/analysis
+  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD \
+  --analysis-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/analysis
 ```
 
 `query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认同样只查询或复用候选工件，并写入 `run-receipt.json`；只有显式传入 `--execute-rpa` 才会解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复。每个成功详情素材的视频下载至运行目录的 `rpa/videos/`，并以相对路径、大小和 SHA-256 纳入 RPA 回执与事实包清单；高光帧仍只在提供 `HighlightSpec` 时抽取。
@@ -184,7 +196,7 @@ uv run --with-requirements requirements.txt python scripts/run_meta_skill.py ver
 
 ```bash
 uv run --with-requirements requirements.txt python scripts/run_meta_skill.py continue-analysis \
-  --run-dir /path/to/completed-run \
+  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD \
   --analysis-request /path/to/analysis-request.json
 ```
 
@@ -218,13 +230,13 @@ uv run --with-requirements requirements.txt python scripts/run_meta_skill.py sel
   --highlight-spec /path/to/highlight-spec.json \
   --records-json /path/to/interactions.json \
   --video /path/to/material.mp4 \
-  --output-dir /path/to/frames
+  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/frames
 ```
 
 过渡期仍可用旧合并式 `--config` 入口，但新请求必须优先使用独立的 `--query-spec` 和 `--highlight-spec`。
 
 ## 产物与恢复
 
-运行目录保存解析后的配置、`source-data/`、候选素材、脱敏查询回执和 `run-receipt.json`；RPA 运行另保存诊断 CSV、records、`rpa/videos/` 中的原视频、可选 JPEG 和 `top_materials_rpa_ready.json`。配置、查询范围或高光帧规则变化时必须使用新的输出目录。
+未来运行统一写入技能根目录下的 `千川数据资源/`；动态客户端未传 `--output-dir` 时也会以该目录为默认根。原有 `runs/` 只作为历史运行兼容目录，不搬动、不覆盖。每个运行目录保存解析后的配置、`source-data/`、候选素材、脱敏查询回执和 `run-receipt.json`；RPA 运行另保存诊断 CSV、records、`rpa/videos/` 中的原视频、可选 JPEG 和 `top_materials_rpa_ready.json`。配置、查询范围或高光帧规则变化时必须使用新的输出目录。
 
 `query` 成功不代表 RPA 已完成。RPA 仅在目标数量的素材均成功处理并保存视频后才完整；失败素材会按保存的排名顺序由后续候选补位，仍不会超过 `targetTopN`。当前保留经下载上限校验的原视频，不做隐式压缩；如需压缩，后续必须显式声明目标编码、码率/尺寸上限、保留源文件还是替换源文件，并为压缩产物另写入路径、大小和 SHA-256。长期工件不保存凭证。`verify-run` 完全离线，可校验已完成目录的相对路径、哈希、JSON、视频与 JPEG 工件，不读取凭证也不调用外部服务。

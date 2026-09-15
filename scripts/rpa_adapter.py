@@ -1,6 +1,5 @@
 """Bounded, redacted adapter for Qianchuan material-diagnosis RPA."""
 
-import json
 import os
 from pathlib import Path
 import re
@@ -12,10 +11,9 @@ import requests
 
 from path_safety import artifact_path, validate_material_id
 from rpa_csv_parser import RpaCsvError, parse_diagnosis_csv
+import rpa_dynamic_client as dynamic_rpa
 
 
-FUNCTION_CODE = "rpa.conn.juliang.qc.material.analysis.video.live.diagnosis"
-PLATFORM = "RPA_JULIANG_QC_ACCOUNT_PASSWORD"
 DEFAULT_CSV_MAX_BYTES = 100 * 1024 * 1024
 DEFAULT_VIDEO_MAX_BYTES = 1024 * 1024 * 1024
 DEFAULT_DOWNLOAD_DEADLINE_SEC = 600
@@ -65,7 +63,7 @@ def redact_gateway_payload(value):
     return result
 
 
-def select_rpa_account(payload):
+def select_rpa_account(payload, platform):
     accounts = payload.get("data") if isinstance(payload, dict) else None
     if isinstance(accounts, dict):
         accounts = accounts.get("accounts") or accounts.get("list")
@@ -84,8 +82,8 @@ def select_rpa_account(payload):
             or item.get("shopId")
             or ""
         ).strip()
-        if account_id and (platform in (None, "", PLATFORM)):
-            matching.append({"accountId": account_id, "platform": platform or PLATFORM})
+        if account_id and (item.get("platform") in (None, "", platform)):
+            matching.append({"accountId": account_id, "platform": item.get("platform") or platform})
     if not matching:
         raise RpaAdapterError("rpa_account_unavailable: no authorized RPA account", "rpa_account_unavailable")
     unique = {(item["accountId"], item["platform"]) for item in matching}
@@ -148,13 +146,59 @@ def download_file(url, target_path, *, session=None, timeout=300, max_bytes=DEFA
             response.close()
 
 
+def _gateway_json(response, action):
+    try:
+        response.raise_for_status()
+        body = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise RpaAdapterError(f"unable to {action}") from exc
+    if not isinstance(body, dict) or body.get("success") is not True:
+        raise RpaAdapterError(f"{action} returned an unsuccessful result")
+    return body
+
+
+def fetch_connector_detail(*, environ=None, session=None):
+    context = runtime_context(environ)
+    session = requests.Session() if session is None else session
+    response = session.post(
+        context["apiBase"] + dynamic_rpa.DETAIL_PATH,
+        json={"connectorCode": dynamic_rpa.CONNECTOR_CODE},
+        headers={"Content-Type": "application/json;charset=UTF-8"},
+        cookies={"YCSESSIONID": context["cookieSession"]},
+        timeout=30,
+    )
+    body = _gateway_json(response, "fetch RPA connector detail")
+    data = body.get("data")
+    if not isinstance(data, list):
+        raise RpaAdapterError("RPA connector detail data must be a list")
+    matches = [
+        item for item in data
+        if isinstance(item, dict) and item.get("connectorCode") == dynamic_rpa.CONNECTOR_CODE
+    ]
+    if not matches:
+        raise RpaAdapterError(
+            "RPA connector is unavailable, offline, or unsupported for BIZ_EXPERT"
+        )
+    if len(matches) != 1:
+        raise RpaAdapterError("RPA connector detail is ambiguous")
+    try:
+        dynamic_rpa.normalized_detail(matches[0])
+    except dynamic_rpa.ContractError as exc:
+        raise RpaAdapterError(str(exc)) from exc
+    return matches[0]
+
+
 def list_rpa_accounts(*, environ=None, session=None):
     context = runtime_context(environ)
     session = requests.Session() if session is None else session
+    detail = fetch_connector_detail(environ=environ, session=session)
     try:
-        response = session.post(context["apiBase"] + "/adg/v1/agent/rpa/authorizations/query", json={"authorization": context["authorization"], "platform": PLATFORM}, headers={"Content-Type": "application/json"}, cookies={"YCSESSIONID": context["cookieSession"]}, timeout=30)
-        response.raise_for_status()
-        return select_rpa_account(response.json())
+        platform = dynamic_rpa.resolve_platform(detail)
+    except dynamic_rpa.ContractError as exc:
+        raise RpaAdapterError(str(exc)) from exc
+    try:
+        response = session.post(context["apiBase"] + "/adg/v1/agent/rpa/authorizations/query", json={"authorization": context["authorization"], "platform": platform}, headers={"Content-Type": "application/json"}, cookies={"YCSESSIONID": context["cookieSession"]}, timeout=30)
+        return select_rpa_account(_gateway_json(response, "list RPA accounts"), platform)
     except RpaAdapterError:
         raise
     except (requests.RequestException, ValueError) as exc:
@@ -167,43 +211,72 @@ def fetch_diagnosis(*, shop_id, rpa_account_id, material_id, start_date, end_dat
     context = runtime_context(environ)
     session = requests.Session() if session is None else session
     params = build_diagnosis_params(material_id, start_date, end_date)
-    payload = {"authorization": context["authorization"], "agent_session_id": context["agentSession"], "data_source_type": "rpa", "platform": PLATFORM, "function_code": FUNCTION_CODE, "business_params": params, "shop_id": str(shop_id).strip(), "rpa_account_id": str(rpa_account_id).strip()}
     try:
-        response = session.post(context["apiBase"] + "/adg/v1/agent/invoke", json=payload, headers={"Content-Type": "application/json"}, cookies={"YCSESSIONID": context["cookieSession"]}, timeout=timeout_sec)
-        response.raise_for_status()
-        result = response.json()
-    except (requests.RequestException, ValueError) as exc:
+        detail = fetch_connector_detail(environ=environ, session=session)
+        dynamic_rpa.validate_business_params(detail, params)
+        platform = dynamic_rpa.resolve_platform(detail)
+        submit_payload = {
+            "authorization": context["authorization"],
+            "agent_session_id": context["agentSession"],
+            "data_source_type": dynamic_rpa.DATA_SOURCE_TYPE,
+            "platform": platform,
+            "function_code": dynamic_rpa.CONNECTOR_CODE,
+            "business_params": params,
+            "shop_id": str(shop_id).strip(),
+        }
+        response = session.post(
+            context["apiBase"] + dynamic_rpa.FETCH_SUBMIT_PATH,
+            json=submit_payload,
+            headers={"Content-Type": "application/json;charset=UTF-8"},
+            cookies={"YCSESSIONID": context["cookieSession"]},
+            timeout=min(30, timeout_sec),
+        )
+        submit_data = _gateway_json(response, "submit RPA fetch task").get("data")
+        task_group_id = submit_data.get("task_group_id") if isinstance(submit_data, dict) else None
+        if not isinstance(task_group_id, str) or not task_group_id:
+            raise RpaAdapterError("RPA fetch task response has no task_group_id")
+        deadline = time.monotonic() + timeout_sec
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RpaAdapterError(f"RPA fetch task timed out: {task_group_id}")
+            time.sleep(min(dynamic_rpa.POLL_INTERVAL_SECONDS, remaining))
+            response = session.post(
+                context["apiBase"] + dynamic_rpa.FETCH_STATUS_PATH,
+                json={"authorization": context["authorization"], "task_group_id": task_group_id},
+                headers={"Content-Type": "application/json;charset=UTF-8"},
+                cookies={"YCSESSIONID": context["cookieSession"]},
+                timeout=min(30, max(deadline - time.monotonic(), 0.001)),
+            )
+            result = _gateway_json(response, "query RPA fetch task").get("data")
+            if not isinstance(result, dict):
+                raise RpaAdapterError("RPA fetch task status has no data object")
+            result.setdefault("task_group_id", task_group_id)
+            status = str(result.get("status") or "").lower()
+            if status in dynamic_rpa.SUCCESS_STATUSES:
+                break
+            if status == "failed":
+                raise RpaAdapterError(f"RPA fetch task failed: {task_group_id}")
+            if status not in dynamic_rpa.RUNNING_STATUSES:
+                raise RpaAdapterError(f"RPA fetch task returned unknown status: {status}")
+    except (dynamic_rpa.ContractError, requests.RequestException, ValueError) as exc:
         raise RpaAdapterError("unable to fetch RPA material diagnosis") from exc
-    data = result.get("data") if isinstance(result, dict) else None
-    if isinstance(data, list):
-        return data, None, redact_gateway_payload(result)
-    if not isinstance(data, dict) or result.get("success") is False:
-        raise RpaAdapterError("RPA gateway returned an invalid result")
-    content = data.get("result_content")
-    if data.get("result_type") == "files":
-        if result.get("success") is not True or result.get("code") not in (200, "200"):
-            raise RpaAdapterError("rpa_gateway_client_error: RPA files response was not successful")
-        if not isinstance(content, dict) or content.get("status") != "COMPLETED" or content.get("failedInstances", 0) != 0:
-            raise RpaAdapterError("rpa_csv_artifact_unavailable: RPA files task did not complete", "rpa_csv_artifact_unavailable")
-        files = content.get("files") if isinstance(content, dict) else None
-        url = files[0].get("fileUrl") if isinstance(files, list) and files and isinstance(files[0], dict) else None
-        if not isinstance(url, str) or not url:
-            raise RpaAdapterError("rpa_csv_artifact_unavailable: gateway response has no CSV")
+    records = result.get("payload") or result.get("records")
+    if isinstance(records, list):
+        return records, None, redact_gateway_payload(result)
+    files = list(dynamic_rpa._iter_file_objects(result))
+    if files:
+        try:
+            url = dynamic_rpa._file_url(files[0])
+        except dynamic_rpa.ContractError as exc:
+            raise RpaAdapterError("rpa_csv_artifact_unavailable: gateway response has no CSV") from exc
         csv_path = artifact_path(csv_dir, material_id, ".csv")
         download_file(url, csv_path, session=session, max_bytes=csv_max_bytes, deadline_sec=download_deadline_sec)
         try:
             return parse_diagnosis_csv(csv_path), csv_path, redact_gateway_payload(result)
         except RpaCsvError as exc:
             raise RpaAdapterError("rpa_csv_invalid: %s" % exc, "rpa_csv_invalid") from exc
-    records = content.get("payload") if isinstance(content, dict) and "payload" in content else content
-    if isinstance(records, str):
-        try:
-            records = json.loads(records)
-        except json.JSONDecodeError as exc:
-            raise RpaAdapterError("rpa_records_invalid: invalid payload JSON") from exc
-    if not isinstance(records, list):
-        raise RpaAdapterError("rpa_records_invalid: gateway payload is not a record list")
-    return records, None, redact_gateway_payload(result)
+    raise RpaAdapterError("rpa_records_invalid: gateway result has no records or downloadable CSV")
 
 
 def fetch_diagnosis_worker(params):

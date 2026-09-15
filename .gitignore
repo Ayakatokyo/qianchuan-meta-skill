@@ -4,5 +4,6 @@ __pycache__/
 .env
 .env.*
 runs/
+千川数据资源/
 .worktrees/
 docs/
