@@ -728,6 +728,8 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
  .single-formula-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
  .single-formula-toolbar h3 { margin: 0; font-size: 18px; }
  .single-formula-toolbar span { color: var(--muted); font-size: 12px; }
+ .single-copy-button { min-height: 30px; padding: 5px 10px; color: var(--accent); font-size: 12px; }
+ .single-copy-button.copied { border-color: #22b573; background: #effaf4; color: #16804e; }
  .single-formula-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 12px; }
  .single-formula-legend-item { display: inline-flex; align-items: center; gap: 6px; }
  .single-formula-legend-dot { width: 9px; height: 9px; border-radius: 2px; }
@@ -1093,6 +1095,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     const selectedGroup = formulaGroups.find(group => group.primary === selected || group.secondary.includes(selected));
     const activeLabels = selected ? new Set(selected === selectedGroup?.primary ? [selectedGroup.primary, ...(selectedGroup.secondary || [])] : [selected]) : null;
     const formulaColor = label => labelColors[label] || "#64748b";
+    const formulaCopyText = formulaGroups.map(group => [group.primary, ...group.secondary.map(label => `  - ${label}`)].join("\n")).join("\n");
     function linkedScriptText(text) {
       const matches = [];
       segments.forEach(segment => {
@@ -1114,7 +1117,12 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     const segmentMarkup = segments.length && !script.text ? segments.map(segment => { const active = !selected || activeLabels.has(segment.label); const color = formulaColor(segment.label); return `<p><strong>${escaped(segment.label)}：</strong><mark class="single-script-highlight${active ? " active" : ""}" data-single-formula="${escaped(segment.label)}" style="--single-script-highlight:${color}" title="点击联动${escaped(segment.label)}">${escaped(segment.text)}</mark></p>`; }).join("") : "";
     const formulaMarkup = formulaGroups.map((group, index) => `<div class="single-formula-flow-group" data-single-formula-group="${escaped(group.primary)}"><button type="button" class="single-formula-node single-formula-primary ${selected === group.primary ? "active" : ""}" data-single-formula="${escaped(group.primary)}" aria-pressed="${selected === group.primary}" style="--single-formula-color:${formulaColor(group.primary)}"><span class="single-formula-level">一级内容公式</span><strong>${escaped(group.primary)}</strong></button><div class="single-formula-secondary-list" aria-label="${escaped(group.primary)}二级内容公式">${group.secondary.length ? group.secondary.map(label => `<button type="button" class="single-formula-node single-formula-secondary ${selected === label ? "active" : ""}" data-single-formula="${escaped(label)}" aria-pressed="${selected === label}" style="--single-formula-color:${formulaColor(label)}"><span class="single-formula-level">二级</span><strong>${escaped(label)}</strong></button>`).join("") : '<span class="single-formula-empty">暂无二级内容公式</span>'}</div></div>${index < formulaGroups.length - 1 ? '<span class="single-formula-flow-arrow" aria-hidden="true">→</span>' : ""}`).join("");
     const legendMarkup = formulaGroups.map(group => `<span class="single-formula-legend-item"><i class="single-formula-legend-dot" style="background:${formulaColor(group.primary)}"></i>${escaped(group.primary)}</span>`).join("");
-    target.innerHTML = `<div class="single-formula-workspace"><div class="single-formula-toolbar single-script-formula-header"><h3>本视频内容公式</h3><span>${selected ? `已联动：${escaped(selected)}` : "点击内容公式或下方脚本文案，可双向定位"}</span></div><div class="single-formula-legend">${legendMarkup || '<span class="empty">暂无公式标签</span>'}</div><div class="single-formula-flow" aria-label="内容公式层级链路">${formulaMarkup || singleEmpty("内容公式")}</div><div class="single-script-heading"><strong>本视频脚本文案</strong><span>彩色片段对应已解析的内容公式</span></div>${script.text ? `<div class="single-script-text">${linkedScriptText(script.text)}</div>` : segmentMarkup || singleEmpty("脚本内容")}</div>`;
+    const scriptCopyText = script.text || segments.map(segment => `${segment.label}：${segment.text}`).join("\n");
+    target.innerHTML = `<div class="single-formula-workspace"><div class="single-formula-toolbar single-script-formula-header"><h3>本视频内容公式</h3><span>${selected ? `已联动：${escaped(selected)}` : "点击内容公式或下方脚本文案，可双向定位"}</span>${formulaCopyText ? '<button type="button" class="single-copy-button" data-single-copy="formula" aria-label="复制本视频内容公式">复制公式</button>' : ""}</div><div class="single-formula-legend">${legendMarkup || '<span class="empty">暂无公式标签</span>'}</div><div class="single-formula-flow" aria-label="内容公式层级链路">${formulaMarkup || singleEmpty("内容公式")}</div><div class="single-script-heading"><strong>本视频脚本文案</strong><span>彩色片段对应已解析的内容公式</span>${scriptCopyText ? '<button type="button" class="single-copy-button" data-single-copy="script" aria-label="复制本视频脚本文案">复制文案</button>' : ""}</div>${script.text ? `<div class="single-script-text">${linkedScriptText(script.text)}</div>` : segmentMarkup || singleEmpty("脚本内容")}</div>`;
+    const formulaCopyButton = target.querySelector("[data-single-copy='formula']");
+    if (formulaCopyButton) formulaCopyButton.addEventListener("click", () => copySingleText(formulaCopyText, formulaCopyButton));
+    const scriptCopyButton = target.querySelector("[data-single-copy='script']");
+    if (scriptCopyButton) scriptCopyButton.addEventListener("click", () => copySingleText(scriptCopyText, scriptCopyButton));
     target.querySelectorAll("[data-single-formula]").forEach(button => button.addEventListener("click", () => { singleState.selectedFormula = singleState.selectedFormula === button.dataset.singleFormula ? null : button.dataset.singleFormula; singleRenderScript(material); }));
   }
 
@@ -1191,6 +1199,34 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     document.body.classList.remove("modal-open");
     if (singleLightboxTrigger) singleLightboxTrigger.focus();
     singleLightboxTrigger = null;
+  }
+
+  async function copySingleText(text, button) {
+    const originalLabel = button.textContent;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        textarea.remove();
+        if (!copied) throw new Error("copy_failed");
+      }
+      button.textContent = "已复制";
+      button.classList.add("copied");
+    } catch (_) {
+      button.textContent = "复制失败";
+    }
+    window.setTimeout(() => {
+      button.textContent = originalLabel;
+      button.classList.remove("copied");
+    }, 1600);
   }
 
   function singleRenderHighlights(material) {
