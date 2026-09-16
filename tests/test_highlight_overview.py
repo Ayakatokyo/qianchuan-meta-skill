@@ -92,6 +92,24 @@ class HighlightOverviewTests(unittest.TestCase):
             "metric": "SHARE_COUNT", "metricLabel": "整体转发次数", "value": 0.0, "mode": "global_top_values", "rank": 2, "policyRank": 3,
         }])
 
+    def test_projects_a_cover_frame_without_treating_its_sentinel_as_metric_evidence(self):
+        def mutate(_run_dir, _manifest, frame):
+            frame["selectionEvidence"] = [{
+                "metric": "ZERO_SECOND",
+                "mode": "zero_second",
+                "policyRank": 0,
+                "durationSec": 0.0,
+                "metricValue": None,
+            }]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model = build_highlight_overview(_make_run(Path(temp_dir), mutate=mutate))
+
+        card = model["cards"][0]
+        self.assertEqual(card["description"], "封面画面")
+        self.assertEqual(card["selectionConditions"], ["封面画面"])
+        self.assertEqual(card["selectionEvidence"], [])
+
     def test_describes_nonzero_peak_using_persisted_metric_and_rank(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = _make_run(Path(temp_dir))

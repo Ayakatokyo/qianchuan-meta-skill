@@ -11,7 +11,6 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
@@ -24,6 +23,8 @@ workspace_root = Path.cwd()
 # 导入同目录模块（如 wanxiangtai_api 等）
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
+
+from runtime_paths import RuntimePathError, external_runtime_path
 
 
 CONNECTOR_CODE = 'rpa.conn.juliang.qc.material.analysis.video.live.diagnosis'
@@ -477,12 +478,6 @@ def download_and_parse_files(
     return summaries
 
 
-def default_output_dir() -> Path:
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", _connector_code())
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return workspace_root / "千川数据资源" / slug / stamp
-
-
 def cmd_detail(_args: argparse.Namespace) -> None:
     print(json.dumps(normalized_detail(fetch_connector_detail()), ensure_ascii=False, indent=2))
 
@@ -515,7 +510,10 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     detail = fetch_connector_detail()
     params = validate_business_params(detail, load_params(args))
     result = invoke(detail, args.shop_id, params)
-    output_dir = workspace_root / args.output_dir if args.output_dir else default_output_dir()
+    output_dir = external_runtime_path(
+        workspace_root / args.output_dir,
+        label="RPA output directory",
+    )
     file_summaries = [] if args.no_download else download_and_parse_files(detail, result, output_dir, args.preview_limit)
     print(
         json.dumps(
@@ -601,7 +599,7 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_parser = subparsers.add_parser("fetch", help="校验、异步取数、下载并解析 CSV")
     fetch_parser.add_argument("--shop-id", required=True, help="RPA 授权账号对应的 shop_id")
     add_params_source(fetch_parser)
-    fetch_parser.add_argument("--output-dir", help="输出目录，相对 workspace 根")
+    fetch_parser.add_argument("--output-dir", required=True, help="输出目录；必须位于技能安装目录之外")
     fetch_parser.add_argument("--preview-limit", type=int, default=5, help="每个文件输出的记录预览条数")
     fetch_parser.add_argument("--no-download", action="store_true", help="仅返回终态，不下载文件")
     fetch_parser.add_argument("--include-raw-result", action="store_true", help="在输出中保留完整终态结果")
@@ -616,7 +614,7 @@ def main() -> int:
     try:
         args.func(args)
         return 0
-    except ValidationContractError as exc:
+    except (ValidationContractError, RuntimePathError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     except (ContractError, requests.RequestException, OSError, TimeoutError) as exc:

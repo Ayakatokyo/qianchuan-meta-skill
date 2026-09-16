@@ -73,7 +73,7 @@ class RoutingSession:
 
 
 class DynamicRpaMigrationTests(unittest.TestCase):
-    def test_generated_client_has_qianchuan_resource_default(self):
+    def test_generated_client_requires_explicit_output_directory(self):
         client_path = ROOT / "scripts" / "rpa_dynamic_client.py"
         self.assertTrue(client_path.is_file(), "dynamic RPA client is missing")
         spec = importlib.util.spec_from_file_location("qian_dynamic_client", client_path)
@@ -82,7 +82,10 @@ class DynamicRpaMigrationTests(unittest.TestCase):
         module.workspace_root = ROOT
 
         self.assertEqual(module.CONNECTOR_CODE, CONNECTOR_CODE)
-        self.assertEqual(module.default_output_dir().relative_to(ROOT).parts[0], "千川数据资源")
+        with self.assertRaises(SystemExit):
+            module.build_parser().parse_args([
+                "fetch", "--shop-id", "shop-1", "--params-json", "{}",
+            ])
 
     def test_generated_client_preserves_legacy_session_cookie_fallback(self):
         client_path = ROOT / "scripts" / "rpa_dynamic_client.py"

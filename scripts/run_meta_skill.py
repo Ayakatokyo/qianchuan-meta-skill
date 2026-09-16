@@ -25,6 +25,7 @@ from rpa_pipeline import RpaPipelineError, build_postprocessor, resolve_rpa_opti
 from rpa_runtime import RpaRuntimeError, run_isolated
 from run_receipt import RunReceipt
 from run_verifier import RunVerificationError, verify_completed_run
+from runtime_paths import RuntimePathError, external_runtime_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -422,13 +423,27 @@ def build_parser():
     return parser
 
 
+def _enforce_external_runtime_paths(args):
+    if args.command in {"query", "run", "workflow", "select-frames"}:
+        args.output_dir = str(external_runtime_path(args.output_dir, label="output directory"))
+    if args.command in {
+        "build-fact-pack", "prepare-analysis", "continue-analysis",
+        "verify-analysis", "receive-analysis-result",
+    }:
+        args.run_dir = str(external_runtime_path(args.run_dir, label="run directory"))
+    if args.command == "render-overview":
+        output_dir = Path(args.output_dir) if args.output_dir else Path(args.run_dir) / "overview"
+        args.output_dir = str(external_runtime_path(output_dir, label="overview output directory"))
+
+
 def main(argv=None):
     receipt = None
     try:
         args = build_parser().parse_args(argv)
+        _enforce_external_runtime_paths(args)
         if args.command == "render-overview":
             run_dir = Path(args.run_dir)
-            output_dir = Path(args.output_dir) if args.output_dir else run_dir / "overview"
+            output_dir = Path(args.output_dir)
             result = write_overview(run_dir, output_dir, REGISTRY_PATH)
             print(json.dumps(_json_safe(result), ensure_ascii=False))
             return 0
@@ -669,7 +684,7 @@ def main(argv=None):
             print("next_step=awaiting_analysis_input")
             print("analysis_prompt=请继续输入分析目标、分区、素材范围和关注指标")
         return 0
-    except (MetaSkillError, AnalysisError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError, RunVerificationError, FactPackError, OverviewReportError) as exc:
+    except (MetaSkillError, AnalysisError, ConfigSpecError, MaterialQueryError, FieldRegistryError, FrameExtractionError, ReportClientError, RpaAdapterError, RpaPipelineError, RpaRuntimeError, RunVerificationError, FactPackError, OverviewReportError, RuntimePathError) as exc:
         if receipt is not None:
             failed_stage = receipt.active_stage
             receipt.fail_active_stage(exc)

@@ -70,6 +70,15 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("ranking.field", body)
         self.assertIn("未提供排序条件时按连接器返回的原始顺序输出", body)
 
+    def test_runtime_outputs_are_kept_outside_the_skill_installation(self):
+        _, body = load_skill_document()
+
+        self.assertIn('WORKSPACE_ROOT="$PWD"', body)
+        self.assertIn('$WORKSPACE_ROOT/千川数据资源/', body)
+        self.assertIn("拒绝技能安装目录内的目标", body)
+        self.assertIn("必须显式传 `--output-dir`", body)
+        self.assertNotIn("未来运行统一写入技能根目录", body)
+
     def test_skill_body_describes_analysis_handoff_and_completion_gate(self):
         _, body = load_skill_document()
 

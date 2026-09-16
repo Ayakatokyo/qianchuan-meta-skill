@@ -98,70 +98,76 @@ QuerySpec 的 `field` 必须来自 `config/asset-field-registry-v1.json`。注�
 详情 RPA 的唯一静态身份是 `rpa.conn.juliang.qc.material.analysis.video.live.diagnosis`，只保存在 `scripts/rpa_dynamic_client.py`。每次取数先执行 `detail`/`schema` 获取实时 `platformCode`、`inParamJsonSchemaText` 或 `inParamList`，再用一个完整业务 JSON 执行 `validate`；`fetch` 会再次反查详情、重复校验、走异步 task/status，并下载解析 CSV。禁止把详情返回的 `id` 当作 connector code，禁止补 `_ACCOUNT_PASSWORD`，也不能继续使用同步 `/invoke` 执行详情 RPA。外层工具执行真实 `fetch` 时显式设置 3600 秒超时。
 
 ```bash
-python scripts/rpa_dynamic_client.py detail
-python scripts/rpa_dynamic_client.py schema
-python scripts/rpa_dynamic_client.py list-accounts
-python scripts/rpa_dynamic_client.py validate --params-file config/rpa-business-params.json
-python scripts/rpa_dynamic_client.py fetch --shop-id "<shop_id>" \
+python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" detail
+python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" schema
+python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" list-accounts
+python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" validate --params-file config/rpa-business-params.json
+python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" fetch --shop-id "<shop_id>" \
   --params-file config/rpa-business-params.json \
-  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/rpa-result
+  --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD/rpa-result"
 ```
 
-在未预装依赖的本地 Codex 运行面，统一从技能根目录使用 `uv run --with-requirements requirements.txt python`；它会按本技能清单解析依赖，避免 `requests` 缺失被误判为鉴权故障。不要把凭证写入命令行。
+执行前保持当前目录为用户工作对象目录，并先保存 `WORKSPACE_ROOT="$PWD"`；技能脚本和依赖清单通过技能安装目录的绝对路径读取，运行产物一律显式写入 `$WORKSPACE_ROOT`。不得 `cd` 到技能目录后创建运行目录，也不得把技能目录赋给 `WORKSPACE_ROOT`。在未预装依赖的本地 Codex 运行面，使用 `uv run --with-requirements "$SKILL_ROOT/requirements.txt" python` 按本技能清单解析依赖，避免 `requests` 缺失被误判为鉴权故障。不要把凭证写入命令行。
 
 ```bash
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py validate \
+# SKILL_ROOT 由宿主解析为当前技能安装目录；PWD 保持为用户工作对象目录
+WORKSPACE_ROOT="$PWD"
+test "$WORKSPACE_ROOT" != "$SKILL_ROOT" || { echo "WORKSPACE_ROOT 不能是技能安装目录" >&2; exit 2; }
+
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" validate \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json
 
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py query \
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" query \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
-  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD
+  --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD"
 
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py run \
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" run \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
   --execute-rpa \
-  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD
+  --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD"
 
 # 单 skill 完整工作流入口（阶段一完成后暂停，等待第二次分析输入）
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py workflow \
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" workflow \
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
   --execute-rpa \
-  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD
+  --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD"
 
 # 阶段一取数、事实包构建和校验成功后，生成阶段一离线素材总览报告
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py render-overview \
-  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD \
-  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/overview
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" render-overview \
+  --run-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD" \
+  --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD/overview"
 
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py verify-run \
-  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" verify-run \
+  --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD"
 
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py build-fact-pack \
-  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" build-fact-pack \
+  --run-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD"
 
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py verify-fact-pack \
-  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD \
-  --fact-pack-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/fact-pack
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" verify-fact-pack \
+  --run-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD" \
+  --fact-pack-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD/fact-pack"
 
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py prepare-analysis \
-  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD \
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" prepare-analysis \
+  --run-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD" \
   --analysis-request /path/to/analysis-request.json \
-  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/analysis
+  --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD/analysis"
 
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py verify-analysis \
-  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD \
-  --analysis-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/analysis
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" verify-analysis \
+  --run-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD" \
+  --analysis-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD/analysis"
 ```
 
 `query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认同样只查询或复用候选工件，并写入 `run-receipt.json`；只有显式传入 `--execute-rpa` 才会解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复。每个成功详情素材的视频下载至运行目录的 `rpa/videos/`，并以相对路径、大小和 SHA-256 纳入 RPA 回执与事实包清单；高光帧仍只在提供 `HighlightSpec` 时抽取。
 
+执行 `run --execute-rpa` 前要向用户说明阶段顺序和主要耗时来源，并在 `query → RPA 详情任务与轮询 → 视频下载/可选抽帧 → 批量校验 → 事实包构建与校验 → render-overview` 各节点报告进度。运行目录中已经出现 CSV、MP4 或 JPEG 只表示部分文件已落盘，不表示 RPA、事实包或阶段一已经完成；以进程完成回执和 `run-receipt.json` 各阶段终态为准。详情素材数、视频体积和高光帧规则决定前半段耗时，执行前可说明减少详情素材数或关闭高光帧的影响。
+
 只有 `run --execute-rpa` 在 RPA、records、抽帧和批量验证均成功后，才会自动生成 `fact-pack/`；成功回执的 `factPack` 阶段会记录 manifest 路径、`targetTopN` 和分类计数。仅 `query` 或未授权的 `run` 不会创建或声称完成事实包。也可以对已有完成目录显式执行 `build-fact-pack`，但 query-only、RPA 部分失败或工件不完整时命令会非零退出。
 
-阶段一取数成功并通过事实包校验后，必须继续执行 `render-overview` 生成阶段一素材总览报告。该命令只读取当前运行目录中的已校验素材汇总、事实包和可用详情证据，不重新查询、不重跑 RPA、不调用模型；默认输出 `overview/overview-data.json` 和 `overview/index.html`。报告是事实投影工作台，包含素材榜单、查询上下文、可选字段，以及在证据可用时展示的人群、脚本、高光帧、9:16 单素材视频预览和单素材详情；报告会把已验证视频复制到相对 `assets/single-material/videos/`。不可用数据必须保留明确的 unavailable/gap 状态，不得补零或生成商业结论。命令返回 `status=succeeded` 且两个文件均存在后，阶段一报告才算完成；来源文件缺失、记录数不一致、字段未注册或写入失败时必须阻断阶段一交接。
+阶段一取数成功并通过事实包校验后，必须继续执行 `render-overview` 生成阶段一素材总览报告。该命令只读取当前运行目录中的已校验素材汇总、事实包和可用详情证据，校验所引用文件后生成 JSON/HTML 并复制报告所需的已验证本地媒体；不重新查询、不重跑 RPA、不调用模型，也不重建事实包或重新抽帧。默认输出 `overview/overview-data.json` 和 `overview/index.html`。报告是事实投影工作台，包含素材榜单、查询上下文、可选字段，以及在证据可用时展示的人群、脚本、高光帧、9:16 单素材视频预览和单素材详情；报告会把已验证视频复制到相对 `assets/single-material/videos/`。不可用数据必须保留明确的 unavailable/gap 状态，不得补零或生成商业结论。命令返回 `status=succeeded` 且两个文件均存在后，阶段一报告才算完成；来源文件缺失、记录数不一致、字段未注册或写入失败时必须阻断阶段一交接。
 
 事实包按 `targetTopN` 生成以下文件：`material-leaderboard.json`（素材榜单与平台维度字段）、`audience.json`（人群事实）、`scripts.json`（脚本事实）、`highlight-frames.json`（高光帧事实）以及 `manifest.json`/`README.md`。候选池大于目标时，只纳入 RPA 成功选中的目标素材；`scripts.json` 使用 `parseStatus=parsed|missing|failed` 和对应错误码，`highlight-frames.json` 在没有选中帧时使用 `status=no_highlight_frames`，不会把缺失推断为事实。
 
@@ -193,8 +199,8 @@ uv run --with-requirements requirements.txt python scripts/run_meta_skill.py ver
 继续分析时必须绑定同一 `runId` 和 manifest SHA-256；事实包变化、分区文件缺失/不可用、素材范围越界或请求文本为空都会被阻断，缺失数据不会被当作零：
 
 ```bash
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py continue-analysis \
-  --run-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD \
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" continue-analysis \
+  --run-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD" \
   --analysis-request /path/to/analysis-request.json
 ```
 
@@ -211,7 +217,7 @@ uv run --with-requirements requirements.txt python scripts/run_meta_skill.py con
 模型完成二次分析后必须只返回可解析的 `analysis-result.json`，至少包含 `schemaVersion`、`contractVersion=2`、`analysisSpecFingerprint` 和非空 `claims`；每条 claim 必须包含 `claimType`、`statement`、`section`、`priority`、`evidenceRefs`、`confidence`，其中 `section` 只能是本次选定的事实包分区或 `synthesis`，`priority` 为 `high|medium|low`，可选 `businessImplication` 用于表达业务含义。建议必须带证据引用，计算还必须声明 `calculationId`、`formula` 和 `inputs`。结果必须符合输入中的 `resultSchema`，并通过：
 
 ```bash
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py receive-analysis-result \
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" receive-analysis-result \
   --run-dir /path/to/completed-run --analysis-result /path/to/analysis-result.json
 ```
 
@@ -224,17 +230,17 @@ uv run --with-requirements requirements.txt python scripts/run_meta_skill.py rec
 独立抽帧仅在已有本地视频与互动曲线时执行，不会发起报表查询；`run` 内部会自动准备这些输入：
 
 ```bash
-uv run --with-requirements requirements.txt python scripts/run_meta_skill.py select-frames \
+uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" select-frames \
   --highlight-spec /path/to/highlight-spec.json \
   --records-json /path/to/interactions.json \
   --video /path/to/material.mp4 \
-  --output-dir 千川数据资源/run-YYYYMMDD-YYYYMMDD/frames
+  --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD/frames"
 ```
 
 过渡期仍可用旧合并式 `--config` 入口，但新请求必须优先使用独立的 `--query-spec` 和 `--highlight-spec`。
 
 ## 产物与恢复
 
-未来运行统一写入技能根目录下的 `千川数据资源/`；动态客户端未传 `--output-dir` 时也会以该目录为默认根。原有 `runs/` 只作为历史运行兼容目录，不搬动、不覆盖。每个运行目录保存解析后的配置、`source-data/`、候选素材、脱敏查询回执和 `run-receipt.json`；RPA 运行另保存诊断 CSV、records、`rpa/videos/` 中的原视频、可选 JPEG 和 `top_materials_rpa_ready.json`。配置、查询范围或高光帧规则变化时必须使用新的输出目录。
+新运行统一写入用户工作对象目录下的 `$WORKSPACE_ROOT/千川数据资源/`，技能安装目录只保留代码、配置与参考资料。所有会写文件的入口都必须显式提供输出路径，并拒绝技能安装目录内的目标；动态 RPA 客户端也必须显式传 `--output-dir`。原有技能内 `runs/`、`千川数据资源/` 仅作为历史只读兼容目录，不搬动、不覆盖；如需恢复或继续生成产物，先完整复制到工作对象目录并从副本接续。每个运行目录保存解析后的配置、`source-data/`、候选素材、脱敏查询回执和 `run-receipt.json`；RPA 运行另保存诊断 CSV、records、`rpa/videos/` 中的原视频、可选 JPEG 和 `top_materials_rpa_ready.json`。配置、查询范围或高光帧规则变化时必须使用新的输出目录。
 
 `query` 成功不代表 RPA 已完成。RPA 仅在目标数量的素材均成功处理并保存视频后才完整；失败素材会按保存的排名顺序由后续候选补位，仍不会超过 `targetTopN`。当前保留经下载上限校验的原视频，不做隐式压缩；如需压缩，后续必须显式声明目标编码、码率/尺寸上限、保留源文件还是替换源文件，并为压缩产物另写入路径、大小和 SHA-256。长期工件不保存凭证。`verify-run` 完全离线，可校验已完成目录的相对路径、哈希、JSON、视频与 JPEG 工件，不读取凭证也不调用外部服务。

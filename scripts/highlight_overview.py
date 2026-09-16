@@ -127,13 +127,23 @@ def _material_titles(run_dir, manifest):
     return titles, ranks
 
 
-def _selection_evidence(value):
+def _selection_evidence(value, duration):
     if not isinstance(value, list) or not value:
         raise HighlightOverviewError("selection evidence is invalid")
     result = []
     for item in value:
         if not isinstance(item, dict):
             raise HighlightOverviewError("selection evidence is invalid")
+        if item.get("metric") == "ZERO_SECOND" and item.get("mode") == "zero_second":
+            if (
+                duration != 0
+                or item.get("metricValue") is not None
+                or item.get("policyRank") != 0
+                or "selectionRank" in item
+                or item.get("durationSec") != 0
+            ):
+                raise HighlightOverviewError("cover selection evidence is invalid")
+            continue
         metric = _safe_scalar(item.get("metric"), "selection evidence metric")
         mode = _safe_scalar(item.get("mode"), "selection evidence mode")
         metric_value = _safe_scalar(item.get("metricValue"), "selection evidence value")
@@ -186,7 +196,7 @@ def _frame_card(run_dir, frame, titles, ranks, manifest_source_paths):
         raise HighlightOverviewError("highlight frame artifact material is invalid")
     if relative not in manifest_source_paths:
         raise HighlightOverviewError("highlight frame artifact is not manifest-bound")
-    evidence = _selection_evidence(frame.get("selectionEvidence"))
+    evidence = _selection_evidence(frame.get("selectionEvidence"), duration)
     selection_conditions = _selection_conditions(duration, evidence)
     card_id = "%s:%d" % (material_id, sequence)
     return {
