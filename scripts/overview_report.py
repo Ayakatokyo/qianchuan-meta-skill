@@ -6,10 +6,14 @@ import math
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shutil
 import tempfile
 
 from field_registry import FieldRegistryError, load_field_registry
+
+try:
+    from command_io import CommandFileCache
+except ImportError:  # pragma: no cover
+    from .command_io import CommandFileCache
 
 try:
     from audience_overview import AudienceOverviewError, build_audience_overview
@@ -53,6 +57,7 @@ _FIELD_GROUP_ORDER = (
 _SENSITIVE_CONTEXT_FIELDS = {"anchor_id", "shop_id", "advertiser_id", "account_id", "shopId", "advertiserId"}
 _SENSITIVE_TEXT = re.compile(r"(?:https?|file)://|(?:^|[\\/])(?:Users|home|var|tmp)(?:[\\/]|$)", re.IGNORECASE)
 _NUMBER = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
+_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 class OverviewReportError(ValueError):
@@ -323,8 +328,9 @@ def _field_ids(field_manifest):
     return result
 
 
-def build_overview_data(run_dir, registry_path):
+def build_overview_data(run_dir, registry_path, io_cache=None):
     run_root = Path(run_dir).resolve()
+    io_cache = io_cache or CommandFileCache(run_root)
     if not run_root.is_dir():
         raise OverviewReportError("run directory is missing")
     structured_path, status = _structured_source_path(run_root)
@@ -394,7 +400,7 @@ def build_overview_data(run_dir, registry_path):
             values["material_source"] = source
         rows.append({"materialId": str(material_id).strip(), "values": values})
 
-    source_hash = hashlib.sha256(structured_path.read_bytes()).hexdigest()
+    source_hash = io_cache.digest(structured_path)[0]
     relative_source = structured_path.relative_to(run_root).as_posix()
     default_field_ids = [field_id for field_id in _DEFAULT_FIELD_IDS if field_id in field_by_id]
     default_fields = set(default_field_ids)
@@ -417,7 +423,7 @@ def build_overview_data(run_dir, registry_path):
         "rows": rows,
     }
     try:
-        model["audienceOverview"] = build_audience_overview(run_root)
+        model["audienceOverview"] = build_audience_overview(run_root, io_cache=io_cache)
     except AudienceOverviewError:
         model["audienceOverview"] = {
             "schemaVersion": 1,
@@ -425,7 +431,7 @@ def build_overview_data(run_dir, registry_path):
             "gaps": [{"code": "audience_unavailable"}],
         }
     try:
-        model["scriptFormulaOverview"] = build_script_formula_overview(run_root)
+        model["scriptFormulaOverview"] = build_script_formula_overview(run_root, io_cache=io_cache)
     except ScriptFormulaOverviewError:
         model["scriptFormulaOverview"] = {
             "schemaVersion": 1,
@@ -433,7 +439,7 @@ def build_overview_data(run_dir, registry_path):
             "gaps": [{"code": "script_formula_unavailable"}],
         }
     try:
-        model["highlightOverview"] = build_highlight_overview(run_root)
+        model["highlightOverview"] = build_highlight_overview(run_root, io_cache=io_cache)
     except HighlightOverviewError:
         model["highlightOverview"] = {
             "schemaVersion": 1,
@@ -441,7 +447,11 @@ def build_overview_data(run_dir, registry_path):
             "gaps": [{"code": "highlight_frames_unavailable"}],
         }
     try:
-        model["singleMaterialOverview"] = build_single_material_overview(run_root)
+        model["singleMaterialOverview"] = build_single_material_overview(
+            run_root,
+            io_cache=io_cache,
+            highlight_model=model.get("highlightOverview"),
+        )
         for material in model["singleMaterialOverview"].get("materials", []):
             for field in material.get("leaderboard", {}).get("fields", []):
                 registered = field_by_id.get(field.get("id"))
@@ -2065,74 +2075,130 @@ def _write_atomic(path, content):
         raise
 
 
-def _copy_highlight_assets(model, run_dir, output_dir):
+def _asset_copy_key(artifact, suffixes, label):
+    if not isinstance(artifact, dict):
+        raise OverviewReportError("%s is missing" % label)
+    path_text = artifact.get("path")
+    relative = PurePosixPath(path_text) if isinstance(path_text, str) else None
+    if (
+        relative is None
+        or relative.is_absolute()
+        or "\\" in path_text
+        or "\x00" in path_text
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise OverviewReportError("%s path is unsafe" % label)
+    suffix = Path(path_text).suffix.lower()
+    if suffix not in suffixes:
+        raise OverviewReportError("%s extension is invalid" % label)
+    expected_hash = artifact.get("sha256")
+    expected_size = artifact.get("sizeBytes")
+    if not isinstance(expected_hash, str) or not _SHA256.fullmatch(expected_hash):
+        raise OverviewReportError("%s sha256 is invalid" % label)
+    if type(expected_size) is not int or expected_size < 0:
+        raise OverviewReportError("%s sizeBytes is invalid" % label)
+    expected_hash = expected_hash.lower()
+    return relative, suffix, expected_hash, expected_size, (expected_hash, expected_size, suffix)
+
+
+def _copy_highlight_assets(model, run_dir, output_dir, io_cache=None, copied_assets=None):
     overview = model.get("highlightOverview")
     if not isinstance(overview, dict) or overview.get("status") != "available":
-        return
+        return {"copied": 0, "reused": 0}
     cards = overview.get("cards")
     if not isinstance(cards, list) or not cards:
-        return
+        return {"copied": 0, "reused": 0}
     run_root = Path(run_dir).resolve()
+    io_cache = io_cache or CommandFileCache(run_root)
+    copied_assets = copied_assets if copied_assets is not None else {}
     asset_dir = Path(output_dir) / "assets" / "highlights"
     asset_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    reused = 0
     for card in cards:
         artifact = card.get("artifact") if isinstance(card, dict) else None
-        if not isinstance(artifact, dict):
-            raise OverviewReportError("highlight artifact is missing")
-        source = (run_root / Path(*PurePosixPath(artifact["path"]).parts)).resolve()
+        relative, suffix, expected_hash, expected_size, copy_key = _asset_copy_key(
+            artifact, {".jpg", ".jpeg", ".png", ".webp"}, "highlight artifact"
+        )
+        existing = copied_assets.get(copy_key)
+        if existing is not None:
+            artifact.clear()
+            artifact.update(existing)
+            reused += 1
+            continue
+        source = (run_root / Path(*relative.parts)).resolve()
         try:
             source.relative_to(run_root)
         except ValueError as exc:
             raise OverviewReportError("highlight artifact path escapes run") from exc
-        suffix = source.suffix.lower()
-        if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
-            raise OverviewReportError("highlight artifact extension is invalid")
-        expected_hash = artifact.get("sha256")
-        expected_size = artifact.get("sizeBytes")
+        if not source.is_file():
+            raise OverviewReportError("highlight artifact is unavailable")
         destination = asset_dir / (expected_hash + suffix)
-        shutil.copyfile(source, destination)
-        actual_bytes = destination.read_bytes()
-        actual_hash = hashlib.sha256(actual_bytes).hexdigest()
-        if actual_hash != expected_hash or len(actual_bytes) != expected_size:
-            raise OverviewReportError("highlight preview asset hash or size mismatch")
+        try:
+            actual_hash, actual_size = io_cache.copy_verified(
+                source, destination, expected_hash, expected_size
+            )
+        except (OSError, ValueError) as exc:
+            raise OverviewReportError("highlight preview asset hash or size mismatch") from exc
+        projected = {
+            "path": (Path("assets") / "highlights" / destination.name).as_posix(),
+            "sha256": actual_hash,
+            "sizeBytes": actual_size,
+        }
+        copied_assets[copy_key] = projected
         artifact.clear()
-        artifact.update({"path": (Path("assets") / "highlights" / destination.name).as_posix(), "sha256": actual_hash, "sizeBytes": len(actual_bytes)})
+        artifact.update(projected)
+        copied += 1
+    return {"copied": copied, "reused": reused}
 
 
-def _copy_single_material_assets(model, run_dir, output_dir):
+def _copy_single_material_assets(model, run_dir, output_dir, io_cache=None, copied_assets=None):
     overview = model.get("singleMaterialOverview")
     if not isinstance(overview, dict) or overview.get("status") != "available":
-        return
+        return {"copied": 0, "reused": 0}
     run_root = Path(run_dir).resolve()
+    io_cache = io_cache or CommandFileCache(run_root)
+    copied_assets = copied_assets if copied_assets is not None else {}
     base_output = Path(output_dir)
+    copied = 0
+    reused = 0
 
     def copy_artifact(artifact, folder, suffixes):
-        if not isinstance(artifact, dict):
-            raise OverviewReportError("single-material artifact is missing")
-        path_text = artifact.get("path")
-        relative = PurePosixPath(path_text) if isinstance(path_text, str) else None
-        if relative is None or relative.is_absolute() or "\\" in path_text or any(part in {"", ".", ".."} for part in relative.parts):
-            raise OverviewReportError("single-material artifact path is unsafe")
+        nonlocal copied, reused
+        relative, suffix, expected_hash, expected_size, copy_key = _asset_copy_key(
+            artifact, suffixes, "single-material artifact"
+        )
+        existing = copied_assets.get(copy_key)
+        if existing is not None:
+            artifact.clear()
+            artifact.update(existing)
+            reused += 1
+            return
         source = (run_root / Path(*relative.parts)).resolve()
         try:
             source.relative_to(run_root)
         except ValueError as exc:
             raise OverviewReportError("single-material artifact path escapes run") from exc
-        if source.suffix.lower() not in suffixes or not source.is_file():
+        if not source.is_file():
             raise OverviewReportError("single-material artifact is unavailable")
-        expected_hash, expected_size = artifact.get("sha256"), artifact.get("sizeBytes")
-        data = source.read_bytes()
-        actual_hash = hashlib.sha256(data).hexdigest()
-        if actual_hash != expected_hash or len(data) != expected_size:
-            raise OverviewReportError("single-material artifact hash or size mismatch")
         destination_dir = base_output / "assets" / folder
         destination_dir.mkdir(parents=True, exist_ok=True)
-        destination = destination_dir / (actual_hash + source.suffix.lower())
-        shutil.copyfile(source, destination)
-        copied = destination.read_bytes()
-        if hashlib.sha256(copied).hexdigest() != actual_hash or len(copied) != len(data):
-            raise OverviewReportError("single-material preview asset hash or size mismatch")
-        artifact.update({"path": (Path("assets") / folder / destination.name).as_posix(), "sha256": actual_hash, "sizeBytes": len(copied)})
+        destination = destination_dir / (expected_hash + suffix)
+        try:
+            actual_hash, actual_size = io_cache.copy_verified(
+                source, destination, expected_hash, expected_size
+            )
+        except (OSError, ValueError) as exc:
+            raise OverviewReportError("single-material preview asset hash or size mismatch") from exc
+        projected = {
+            "path": (Path("assets") / folder / destination.name).as_posix(),
+            "sha256": actual_hash,
+            "sizeBytes": actual_size,
+        }
+        copied_assets[copy_key] = projected
+        artifact.clear()
+        artifact.update(projected)
+        copied += 1
 
     for material in overview.get("materials", []):
         if not isinstance(material, dict):
@@ -2146,16 +2212,23 @@ def _copy_single_material_assets(model, run_dir, output_dir):
         video = highlights.get("video")
         if isinstance(video, dict) and video.get("status") == "available":
             copy_artifact(video, "single-material/videos", {".mp4", ".webm"})
+    return {"copied": copied, "reused": reused}
 
 
 def write_overview(run_dir, output_dir, registry_path):
-    model = build_overview_data(run_dir, registry_path)
+    io_cache = CommandFileCache(Path(run_dir).resolve())
+    model = build_overview_data(run_dir, registry_path, io_cache=io_cache)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     data_path = output_path / "overview-data.json"
     html_path = output_path / "index.html"
-    _copy_highlight_assets(model, run_dir, output_path)
-    _copy_single_material_assets(model, run_dir, output_path)
+    copied_assets = {}
+    highlight_copy = _copy_highlight_assets(
+        model, run_dir, output_path, io_cache=io_cache, copied_assets=copied_assets
+    )
+    single_copy = _copy_single_material_assets(
+        model, run_dir, output_path, io_cache=io_cache, copied_assets=copied_assets
+    )
     data_text = json.dumps(model, ensure_ascii=False, indent=2) + "\n"
     html_text = render_overview_html(model)
     _write_atomic(data_path, data_text)
@@ -2172,9 +2245,31 @@ def write_overview(run_dir, output_dir, registry_path):
         output_paths = [path.resolve().relative_to(run_root).as_posix() for path in (data_path, html_path)]
     except ValueError:
         output_paths = [path.name for path in (data_path, html_path)]
+    data_bytes = data_text.encode("utf-8")
+    html_bytes = html_text.encode("utf-8")
     return {
         "status": "succeeded",
         "outputPaths": output_paths,
         "recordCount": model["source"]["recordCount"],
         "sourceSha256": model["source"]["sha256"],
+        "validation": {
+            "status": "passed",
+            "checks": ["source_bindings", "asset_hashes", "safe_paths", "atomic_outputs"],
+            "assetCopies": {
+                "copied": highlight_copy["copied"] + single_copy["copied"],
+                "reused": highlight_copy["reused"] + single_copy["reused"],
+            },
+            "outputFiles": [
+                {
+                    "path": output_paths[0],
+                    "sha256": hashlib.sha256(data_bytes).hexdigest(),
+                    "sizeBytes": len(data_bytes),
+                },
+                {
+                    "path": output_paths[1],
+                    "sha256": hashlib.sha256(html_bytes).hexdigest(),
+                    "sizeBytes": len(html_bytes),
+                },
+            ],
+        },
     }

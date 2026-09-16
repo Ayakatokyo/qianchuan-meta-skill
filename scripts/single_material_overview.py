@@ -4,13 +4,16 @@ import hashlib
 import json
 import math
 import re
+from copy import deepcopy
 from pathlib import Path, PurePosixPath
 
 try:
     import audience_overview as _audience
+    from command_io import CommandFileCache
     from highlight_overview import HighlightOverviewError, build_highlight_overview
 except ImportError:  # pragma: no cover - package-style imports.
     from . import audience_overview as _audience
+    from .command_io import CommandFileCache
     from .highlight_overview import HighlightOverviewError, build_highlight_overview
 
 
@@ -43,9 +46,9 @@ _FACT_FILES = (
 )
 
 
-def _read_json(path, label, expected_type=None):
+def _read_json(path, label, expected_type=None, io_cache=None):
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = io_cache.read_json(Path(path)) if io_cache is not None else json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise SingleMaterialOverviewError(f"{label} is unreadable") from exc
     if expected_type is not None and not isinstance(value, expected_type):
@@ -80,7 +83,7 @@ def _safe_relative_path(run_root, value, label):
     return relative.as_posix(), resolved
 
 
-def _hash_ref(run_root, ref, label, allowed=None, require_exists=True):
+def _hash_ref(run_root, ref, label, allowed=None, require_exists=True, io_cache=None):
     if not isinstance(ref, dict):
         raise SingleMaterialOverviewError(f"{label} must be an object")
     path_text, path = _safe_relative_path(run_root, ref.get("path"), f"{label} path")
@@ -99,8 +102,17 @@ def _hash_ref(run_root, ref, label, allowed=None, require_exists=True):
     if require_exists and not path.is_file():
         raise SingleMaterialOverviewError(f"{label} file is missing")
     if require_exists:
-        actual = path.read_bytes()
-        if len(actual) != expected_size or hashlib.sha256(actual).hexdigest() != expected_hash:
+        try:
+            if io_cache is not None:
+                actual_hash, actual_size = io_cache.verify(
+                    path, {"sha256": expected_hash, "sizeBytes": expected_size}
+                )
+            else:
+                actual = path.read_bytes()
+                actual_hash, actual_size = hashlib.sha256(actual).hexdigest(), len(actual)
+        except (OSError, ValueError) as exc:
+            raise SingleMaterialOverviewError(f"{label} hash or size mismatch") from exc
+        if actual_size != expected_size or actual_hash != expected_hash:
             raise SingleMaterialOverviewError(f"{label} hash or size mismatch")
     return path_text, path, expected_hash, expected_size
 
@@ -118,19 +130,21 @@ def _manifest_scope(manifest):
     return normalized, set(normalized)
 
 
-def _manifest_sources(run_root, manifest):
+def _manifest_sources(run_root, manifest, io_cache=None):
     refs = manifest.get("sourceFiles")
     if not isinstance(refs, list):
         raise SingleMaterialOverviewError("manifest sourceFiles are missing")
     known = {}
     for index, ref in enumerate(refs):
         label = f"manifest sourceFile {index}"
-        path_text, _path, digest, size = _hash_ref(run_root, ref, label, require_exists=False)
+        path_text, _path, digest, size = _hash_ref(
+            run_root, ref, label, require_exists=False, io_cache=io_cache
+        )
         previous = known.get(path_text)
         if previous is not None and previous != (digest, size):
             raise SingleMaterialOverviewError("manifest sourceFile declarations disagree")
         if previous is None:
-            _hash_ref(run_root, ref, label)
+            _hash_ref(run_root, ref, label, io_cache=io_cache)
         known[path_text] = (digest, size)
     return known
 
@@ -164,9 +178,9 @@ def _record_indexes_match(records, ref, material_id, label):
             raise SingleMaterialOverviewError(f"{label} material association mismatch")
 
 
-def _load_declared_records(run_root, ref, allowed, material_id, label):
+def _load_declared_records(run_root, ref, allowed, material_id, label, io_cache=None):
     path_text, path, _digest, _size = _hash_ref(run_root, ref, label, allowed, require_exists=False)
-    records = _read_json(path, label, list)
+    records = _read_json(path, label, list, io_cache)
     _record_indexes_match(records, ref, material_id, label)
     return path_text, records
 
@@ -203,7 +217,7 @@ def _leaderboard(run_root, payload, scope_ids, allowed):
     return sorted(output, key=lambda item: item["rank"])
 
 
-def _interactions(run_root, frame_records, allowed, material_id):
+def _interactions(run_root, frame_records, allowed, material_id, io_cache=None):
     refs = []
     for frame in frame_records:
         series = frame.get("interactionSeries") if isinstance(frame, dict) else None
@@ -220,7 +234,7 @@ def _interactions(run_root, frame_records, allowed, material_id):
     loaded = {}
     for path_text, path_refs in unique.items():
         path_text, records = _load_declared_records(
-            run_root, path_refs[0], allowed, material_id, "interaction sourceRef"
+            run_root, path_refs[0], allowed, material_id, "interaction sourceRef", io_cache
         )
         for ref in path_refs[1:]:
             _record_indexes_match(records, ref, material_id, "interaction sourceRef")
@@ -364,15 +378,16 @@ def _ensure_fact_ids_in_scope(payload, key, scope_ids, label):
             raise SingleMaterialOverviewError(f"{label} materialId is outside manifest scope")
 
 
-def build_single_material_overview(run_dir: Path) -> dict:
+def build_single_material_overview(run_dir: Path, io_cache=None, highlight_model=None) -> dict:
     run_root = Path(run_dir).resolve()
     if not run_root.is_dir():
         raise SingleMaterialOverviewError("run directory is missing")
+    io_cache = io_cache or CommandFileCache(run_root)
     fact_dir = run_root / "fact-pack"
-    manifest = _read_json(fact_dir / "manifest.json", "fact-pack manifest", dict)
+    manifest = _read_json(fact_dir / "manifest.json", "fact-pack manifest", dict, io_cache)
     material_ids, scope_ids = _manifest_scope(manifest)
-    allowed = _manifest_sources(run_root, manifest)
-    payloads = {name: _read_json(fact_dir / name, name, dict) for name in _FACT_FILES}
+    allowed = _manifest_sources(run_root, manifest, io_cache)
+    payloads = {name: _read_json(fact_dir / name, name, dict, io_cache) for name in _FACT_FILES}
     _ensure_fact_ids_in_scope(payloads["audience.json"], "audience", scope_ids, "audience")
     _ensure_fact_ids_in_scope(payloads["scripts.json"], "scripts", scope_ids, "scripts")
     _ensure_fact_ids_in_scope(payloads["highlight-frames.json"], "highlightFrames", scope_ids, "highlight")
@@ -381,16 +396,17 @@ def build_single_material_overview(run_dir: Path) -> dict:
     frames = highlight_payload.get("highlightFrames")
     if not isinstance(frames, list):
         frames = []
-    try:
-        highlight_model = build_highlight_overview(run_root)
-    except HighlightOverviewError as exc:
-        raise SingleMaterialOverviewError(str(exc)) from exc
+    if highlight_model is None:
+        try:
+            highlight_model = build_highlight_overview(run_root, io_cache=io_cache)
+        except HighlightOverviewError as exc:
+            raise SingleMaterialOverviewError(str(exc)) from exc
     cards_by_material = {}
     for card in highlight_model.get("cards", []):
         material_id = card.get("materialId")
         if material_id not in scope_ids:
             raise SingleMaterialOverviewError("highlight materialId is outside manifest scope")
-        cards_by_material.setdefault(material_id, []).append(card)
+        cards_by_material.setdefault(material_id, []).append(deepcopy(card))
     material_models = []
     for material in leaderboard:
         material_id = material["materialId"]
@@ -404,7 +420,7 @@ def build_single_material_overview(run_dir: Path) -> dict:
             "rank": material["rank"],
             "title": material["title"],
             "leaderboard": {"fields": material["fields"]},
-            "interactions": _interactions(run_root, material_frames, allowed, material_id),
+            "interactions": _interactions(run_root, material_frames, allowed, material_id, io_cache),
             "script": _script_for_material(payloads["scripts.json"], run_root, allowed, material_id),
             "audience": _audience_for_material(payloads["audience.json"], run_root, allowed, material_id),
             "highlights": {"status": "available" if cards_by_material.get(material_id) else "unavailable", "cards": cards_by_material.get(material_id, []), "video": _video_artifact(run_root, manifest, allowed, material_id)},
@@ -414,6 +430,6 @@ def build_single_material_overview(run_dir: Path) -> dict:
         "status": "available",
         "runId": run_root.name,
         "materialScope": {"count": len(material_ids), "materialIds": [item["materialId"] for item in leaderboard]},
-        "source": {"files": [{"path": f"fact-pack/{name}", "sha256": hashlib.sha256((fact_dir / name).read_bytes()).hexdigest(), "sizeBytes": (fact_dir / name).stat().st_size} for name in _FACT_FILES]},
+        "source": {"files": [{"path": f"fact-pack/{name}", "sha256": io_cache.digest(fact_dir / name)[0], "sizeBytes": (fact_dir / name).stat().st_size} for name in _FACT_FILES]},
         "materials": material_models,
     }

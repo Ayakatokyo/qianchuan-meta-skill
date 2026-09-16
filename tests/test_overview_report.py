@@ -11,10 +11,15 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from overview_report import (  # noqa: E402
     OverviewReportError,
+    _copy_highlight_assets,
+    _copy_single_material_assets,
     build_overview_data,
     render_overview_html,
     write_overview,
 )
+from command_io import CommandFileCache  # noqa: E402
+from highlight_overview import build_highlight_overview  # noqa: E402
+from single_material_overview import build_single_material_overview  # noqa: E402
 
 
 REGISTRY_PATH = ROOT / "config" / "asset-field-registry-v1.json"
@@ -226,6 +231,60 @@ def _attach_highlight_facts(run_dir, *, valid=True):
 
 
 class OverviewProjectionTests(unittest.TestCase):
+    def test_combined_highlight_copy_uses_independent_cards_and_one_physical_source_copy(self):
+        from test_single_material_overview import _make_run as make_single_run
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = make_single_run(Path(temp_dir))
+            io_cache = CommandFileCache(run_dir)
+            highlight_model = build_highlight_overview(run_dir, io_cache=io_cache)
+            single_model = build_single_material_overview(
+                run_dir, io_cache=io_cache, highlight_model=highlight_model
+            )
+            highlight_card = highlight_model["cards"][0]
+            single_card = single_model["materials"][0]["highlights"]["cards"][0]
+            source = run_dir / highlight_card["artifact"]["path"]
+            reads_before_copy = io_cache.read_count(source)
+            model = {
+                "highlightOverview": highlight_model,
+                "singleMaterialOverview": single_model,
+            }
+            copied_assets = {}
+            output_dir = run_dir / "overview-preview"
+
+            highlight_copy = _copy_highlight_assets(
+                model, run_dir, output_dir, io_cache=io_cache, copied_assets=copied_assets
+            )
+            single_copy = _copy_single_material_assets(
+                model, run_dir, output_dir, io_cache=io_cache, copied_assets=copied_assets
+            )
+
+            self.assertIsNot(highlight_card, single_card)
+            self.assertIsNot(highlight_card["artifact"], single_card["artifact"])
+            self.assertEqual(io_cache.read_count(source), reads_before_copy + 1)
+            self.assertEqual(highlight_copy, {"copied": 1, "reused": 0})
+            self.assertEqual(single_copy, {"copied": 0, "reused": 1})
+            self.assertEqual(
+                highlight_card["artifact"]["path"], single_card["artifact"]["path"]
+            )
+            self.assertTrue((output_dir / highlight_card["artifact"]["path"]).is_file())
+
+    def test_single_material_video_copy_streams_source_once(self):
+        from test_single_material_overview import _make_run as make_single_run
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = make_single_run(Path(temp_dir), include_video=True)
+            model = {"singleMaterialOverview": build_single_material_overview(run_dir)}
+            output_dir = run_dir / "overview-preview"
+            io_cache = CommandFileCache(run_dir)
+            video = run_dir / "rpa" / "videos" / "m-1.mp4"
+
+            _copy_single_material_assets(model, run_dir, output_dir, io_cache=io_cache)
+
+            self.assertEqual(io_cache.read_count(video), 1)
+            copied = next(output_dir.glob("assets/single-material/videos/*.mp4"))
+            self.assertEqual(copied.read_bytes(), b"fixture-video")
+
     def test_build_overview_projects_all_source_rows_with_verified_field_labels(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = _make_run(Path(temp_dir))
@@ -774,8 +833,15 @@ class OverviewWriteTests(unittest.TestCase):
             self.assertEqual(receipt["recordCount"], 3)
             self.assertEqual(receipt["sourceSha256"], expected_hash)
             self.assertEqual(receipt["outputPaths"], ["overview/overview-data.json", "overview/index.html"])
+            self.assertEqual(receipt["validation"]["status"], "passed")
+            self.assertEqual(receipt["validation"]["assetCopies"], {"copied": 0, "reused": 0})
+            self.assertEqual(len(receipt["validation"]["outputFiles"]), 2)
             self.assertTrue((output_dir / "overview-data.json").is_file())
             self.assertTrue((output_dir / "index.html").is_file())
+            for output_file in receipt["validation"]["outputFiles"]:
+                content = run_dir.joinpath(output_file["path"]).read_bytes()
+                self.assertEqual(hashlib.sha256(content).hexdigest(), output_file["sha256"])
+                self.assertEqual(len(content), output_file["sizeBytes"])
 
             broken_run = _make_run(root / "broken")
             broken_output = broken_run / "overview"

@@ -103,6 +103,14 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("continue-analysis", body)
         self.assertIn("不自动生成商业结论", body)
 
+    def test_stage_one_uses_one_built_in_report_gate_without_fragmented_rechecks(self):
+        _, body = load_skill_document()
+
+        self.assertIn("阶段一一次性报告门禁", body)
+        self.assertIn("不得再例行重复执行 `verify-run` 或 `verify-fact-pack`", body)
+        self.assertIn("禁止拆成多条临时脚本逐项反复检查", body)
+        self.assertIn("不在 render-overview 成功后例行执行", body)
+
     def test_skill_body_specifies_model_handoff_contract_and_pause_resume_protocol(self):
         _, body = load_skill_document()
 
