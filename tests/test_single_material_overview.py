@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from single_material_overview import SingleMaterialOverviewError, build_single_material_overview  # noqa: E402
+from audience_overview import build_audience_overview  # noqa: E402
+from command_io import CommandFileCache  # noqa: E402
+from highlight_overview import build_highlight_overview  # noqa: E402
+from script_formula_overview import build_script_formula_overview  # noqa: E402
 
 
 def _write_json(path, payload):
@@ -132,6 +136,21 @@ def _make_run(root, *, tamper=None, include_video=False):
 
 
 class SingleMaterialOverviewTests(unittest.TestCase):
+    def test_report_builders_share_one_command_verification_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = _make_run(Path(temp_dir), include_video=True)
+            io_cache = CommandFileCache(run_dir)
+            build_audience_overview(run_dir, io_cache=io_cache)
+            build_script_formula_overview(run_dir, io_cache=io_cache)
+            highlights = build_highlight_overview(run_dir, io_cache=io_cache)
+            build_single_material_overview(
+                run_dir, io_cache=io_cache, highlight_model=highlights
+            )
+
+            self.assertEqual(io_cache.read_count(run_dir / "rpa/videos/m-1.mp4"), 1)
+            self.assertEqual(io_cache.read_count(run_dir / "rpa/peak-frames/m-1/01_0s.jpg"), 1)
+            self.assertEqual(io_cache.read_count(run_dir / "rpa/diagnosis-records/m-1.json"), 2)
+
     def test_hashes_each_manifest_source_once_in_single_material_builder(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = _make_run(Path(temp_dir))
@@ -141,8 +160,8 @@ class SingleMaterialOverviewTests(unittest.TestCase):
             original_hash_ref = module._hash_ref
             full_validations = []
 
-            def tracked_hash_ref(run_root, ref, label, allowed=None, require_exists=True):
-                result = original_hash_ref(run_root, ref, label, allowed, require_exists)
+            def tracked_hash_ref(run_root, ref, label, allowed=None, require_exists=True, io_cache=None):
+                result = original_hash_ref(run_root, ref, label, allowed, require_exists, io_cache)
                 if result[1] == diagnosis_path and require_exists:
                     full_validations.append(label)
                 return result

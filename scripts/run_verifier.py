@@ -58,8 +58,14 @@ def _verify_summary(path):
 
 
 def _verify_jpeg(path):
-    payload = Path(path).read_bytes()
-    if len(payload) < 4 or payload[:2] != b"\xff\xd8" or payload[-2:] != b"\xff\xd9":
+    target = Path(path)
+    if target.stat().st_size < 4:
+        raise RunVerificationError("highlight frame is not a valid JPEG")
+    with target.open("rb") as source:
+        header = source.read(2)
+        source.seek(-2, 2)
+        footer = source.read(2)
+    if header != b"\xff\xd8" or footer != b"\xff\xd9":
         raise RunVerificationError("highlight frame is not a valid JPEG")
 
 

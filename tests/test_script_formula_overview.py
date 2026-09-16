@@ -13,6 +13,7 @@ from script_formula_overview import (  # noqa: E402
     ScriptFormulaOverviewError,
     build_script_formula_overview,
 )
+from command_io import CommandFileCache  # noqa: E402
 
 
 def _write_json(path, payload):
@@ -76,6 +77,18 @@ def _bucket(buckets, label):
 
 
 class ScriptFormulaOverviewTests(unittest.TestCase):
+    def test_each_diagnostic_source_is_read_once_per_command(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = _make_run(Path(temp_dir))
+            io_cache = CommandFileCache(run_dir)
+
+            build_script_formula_overview(run_dir, io_cache=io_cache)
+
+            self.assertEqual(
+                [io_cache.read_count(run_dir / "rpa" / "diagnosis-records" / f"m-{index}.json") for index in range(1, 4)],
+                [1, 1, 1],
+            )
+
     def test_build_script_formula_overview_deduplicates_material_coverage(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             model = build_script_formula_overview(_make_run(Path(temp_dir)))

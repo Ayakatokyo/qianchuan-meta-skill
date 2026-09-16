@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from audience_overview import AudienceOverviewError, build_audience_overview  # noqa: E402
+from command_io import CommandFileCache  # noqa: E402
 
 
 def _write_json(path, payload):
@@ -111,21 +112,11 @@ class AudienceOverviewTests(unittest.TestCase):
     def test_reads_each_declared_diagnosis_source_once(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = _make_run(Path(temp_dir))
-            diagnosis_dir = (run_dir / "rpa" / "diagnosis-records").resolve()
-            original_read_bytes = Path.read_bytes
-            diagnosis_reads = []
+            io_cache = CommandFileCache(run_dir)
+            build_audience_overview(run_dir, io_cache=io_cache)
+            diagnosis_paths = sorted((run_dir / "rpa" / "diagnosis-records").glob("*.json"))
 
-            def tracked_read_bytes(path):
-                resolved = path.resolve()
-                if resolved.parent == diagnosis_dir:
-                    diagnosis_reads.append(resolved)
-                return original_read_bytes(path)
-
-            with patch.object(Path, "read_bytes", tracked_read_bytes):
-                build_audience_overview(run_dir)
-
-        self.assertEqual(len(diagnosis_reads), 2)
-        self.assertEqual(len(set(diagnosis_reads)), 2)
+        self.assertEqual([io_cache.read_count(path) for path in diagnosis_paths], [1, 1])
 
     def test_build_audience_overview_aggregates_all_dimensions_and_metric_fallback(self):
         with tempfile.TemporaryDirectory() as temp_dir:

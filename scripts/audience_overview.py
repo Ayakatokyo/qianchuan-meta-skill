@@ -5,6 +5,11 @@ import json
 import math
 from pathlib import Path
 
+try:
+    from command_io import CommandFileCache
+except ImportError:  # pragma: no cover
+    from .command_io import CommandFileCache
+
 
 class AudienceOverviewError(ValueError):
     """Raised when audience facts cannot be trusted for presentation."""
@@ -36,9 +41,9 @@ _AGE_ORDER = {label: index for index, label in enumerate(("18岁以下", "18-23"
 _METRIC_BY_ID = {item["id"]: item for item in AUDIENCE_METRICS}
 
 
-def _read_json(path, label, expected_type=None):
+def _read_json(path, label, expected_type=None, io_cache=None):
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        payload = io_cache.read_json(Path(path)) if io_cache is not None else json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise AudienceOverviewError("%s is unreadable" % label) from exc
     if expected_type is not None and not isinstance(payload, expected_type):
@@ -102,7 +107,7 @@ def _manifest_scope(manifest):
     return counts["audienceFacts"], set(normalized)
 
 
-def _verify_source_ref(run_root, ref, label, known=None, require_exists=True):
+def _verify_source_ref(run_root, ref, label, known=None, require_exists=True, io_cache=None):
     if not isinstance(ref, dict):
         raise AudienceOverviewError("%s must be an object" % label)
     path_text, path = _safe_relative_path(run_root, ref.get("path"), "%s path" % label)
@@ -124,8 +129,14 @@ def _verify_source_ref(run_root, ref, label, known=None, require_exists=True):
     if require_exists and not path.is_file():
         raise AudienceOverviewError("%s file is missing" % label)
     if require_exists:
-        actual_size = path.stat().st_size
-        actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        try:
+            if io_cache is not None:
+                actual_hash, actual_size = io_cache.verify(path, {"sha256": expected_hash, "sizeBytes": expected_size})
+            else:
+                actual_size = path.stat().st_size
+                actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        except (OSError, ValueError) as exc:
+            raise AudienceOverviewError("%s sha256 or size mismatch" % label) from exc
         if actual_size != expected_size:
             raise AudienceOverviewError("%s size mismatch" % label)
         if actual_hash != expected_hash:
@@ -133,7 +144,7 @@ def _verify_source_ref(run_root, ref, label, known=None, require_exists=True):
     return path_text, expected_hash, expected_size
 
 
-def _verify_sources(run_root, payload):
+def _verify_sources(run_root, payload, io_cache=None):
     source_refs = payload.get("sourceRefs")
     if not isinstance(source_refs, list) or not source_refs:
         raise AudienceOverviewError("audience sourceRefs are missing")
@@ -141,12 +152,12 @@ def _verify_sources(run_root, payload):
     for index, ref in enumerate(source_refs):
         label = "sourceRef %d" % index
         path_text, expected_hash, expected_size = _verify_source_ref(
-            run_root, ref, label, require_exists=False
+            run_root, ref, label, require_exists=False, io_cache=io_cache
         )
         if path_text in known and known[path_text] != (expected_hash, expected_size):
             raise AudienceOverviewError("sourceRef declarations disagree")
         if path_text not in known:
-            _verify_source_ref(run_root, ref, label)
+            _verify_source_ref(run_root, ref, label, io_cache=io_cache)
         known[path_text] = (expected_hash, expected_size)
     return known
 
@@ -210,21 +221,22 @@ def _dimension_model(label, chart):
     return {"label": label, "chart": chart, "bucketsByMetric": {}}
 
 
-def build_audience_overview(run_dir):
+def build_audience_overview(run_dir, io_cache=None):
     run_root = Path(run_dir).resolve()
     if not run_root.is_dir():
         raise AudienceOverviewError("run directory is missing")
+    io_cache = io_cache or CommandFileCache(run_root)
     fact_path = run_root / "fact-pack" / "audience.json"
     manifest_path = run_root / "fact-pack" / "manifest.json"
-    payload = _read_json(fact_path, "audience facts", dict)
-    manifest = _read_json(manifest_path, "fact-pack manifest", dict)
+    payload = _read_json(fact_path, "audience facts", dict, io_cache)
+    manifest = _read_json(manifest_path, "fact-pack manifest", dict, io_cache)
     expected_count, scope_ids = _manifest_scope(manifest)
     records = payload.get("audience")
     if payload.get("status") != "available" or not isinstance(records, list):
         raise AudienceOverviewError("audience facts are unavailable")
     if expected_count != len(records):
         raise AudienceOverviewError("manifest audienceFacts count does not match audience facts")
-    source_refs = _verify_sources(run_root, payload)
+    source_refs = _verify_sources(run_root, payload, io_cache)
 
     dimensions = {
         "eight_groups": _dimension_model("八大人群分布", "bar"),
@@ -313,7 +325,7 @@ def build_audience_overview(run_dir):
         "status": "available",
         "source": {
             "path": "fact-pack/audience.json",
-            "sha256": hashlib.sha256(fact_path.read_bytes()).hexdigest(),
+            "sha256": io_cache.digest(fact_path)[0],
             "recordCount": len(records),
         },
         "materialScope": {"count": len(scope_ids)},

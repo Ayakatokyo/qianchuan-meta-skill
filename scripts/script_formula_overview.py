@@ -4,15 +4,19 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 
+try:
+    from command_io import CommandFileCache
+except ImportError:  # pragma: no cover
+    from .command_io import CommandFileCache
+
 
 class ScriptFormulaOverviewError(ValueError):
     """Raised when script facts cannot be trusted for presentation."""
 
 
-def _read_json(path, label, expected_type=None):
+def _read_json(path, label, expected_type=None, io_cache=None):
     try:
-        payload = Path(path).read_text(encoding="utf-8")
-        value = json.loads(payload)
+        value = io_cache.read_json(Path(path)) if io_cache is not None else json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ScriptFormulaOverviewError("%s is unreadable" % label) from exc
     if expected_type is not None and not isinstance(value, expected_type):
@@ -40,28 +44,42 @@ def _safe_relative_path(run_root, value, label):
     return relative.as_posix(), resolved
 
 
-def _verify_source_ref(run_root, ref, label, known=None):
+def _verify_source_ref(run_root, ref, label, known=None, require_exists=True, io_cache=None):
     if not isinstance(ref, dict):
         raise ScriptFormulaOverviewError("%s must be an object" % label)
     path_text, path = _safe_relative_path(run_root, ref.get("path"), "%s path" % label)
     if not path_text.startswith("rpa/diagnosis-records/") or not path_text.endswith(".json"):
         raise ScriptFormulaOverviewError("%s must point to a diagnosis record" % label)
-    if known is not None and path_text not in known:
-        raise ScriptFormulaOverviewError("%s is not declared" % label)
     expected_hash = _required_text(ref.get("sha256"), "%s sha256" % label)
     if len(expected_hash) != 64 or any(char not in "0123456789abcdefABCDEF" for char in expected_hash):
         raise ScriptFormulaOverviewError("%s sha256 is invalid" % label)
     expected_size = ref.get("sizeBytes")
     if type(expected_size) is not int or expected_size < 0:
         raise ScriptFormulaOverviewError("%s sizeBytes is invalid" % label)
-    if not path.is_file():
+    expected = (expected_hash, expected_size)
+    if known is not None:
+        declared = known.get(path_text)
+        if declared is None:
+            raise ScriptFormulaOverviewError("%s is not declared" % label)
+        if declared != expected:
+            raise ScriptFormulaOverviewError("%s disagrees" % label)
+    if require_exists and not path.is_file():
         raise ScriptFormulaOverviewError("%s file is missing" % label)
-    actual_size = path.stat().st_size
-    actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
-    if actual_size != expected_size:
-        raise ScriptFormulaOverviewError("%s size mismatch" % label)
-    if actual_hash != expected_hash:
-        raise ScriptFormulaOverviewError("%s sha256 mismatch" % label)
+    if require_exists:
+        try:
+            if io_cache is not None:
+                actual_hash, actual_size = io_cache.verify(
+                    path, {"sha256": expected_hash, "sizeBytes": expected_size}
+                )
+            else:
+                actual_size = path.stat().st_size
+                actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        except (OSError, ValueError) as exc:
+            raise ScriptFormulaOverviewError("%s sha256 or size mismatch" % label) from exc
+        if actual_size != expected_size:
+            raise ScriptFormulaOverviewError("%s size mismatch" % label)
+        if actual_hash != expected_hash:
+            raise ScriptFormulaOverviewError("%s sha256 mismatch" % label)
     return path_text, expected_hash, expected_size
 
 
@@ -87,16 +105,21 @@ def _manifest_scope(manifest):
     return counts["scriptFacts"], normalized
 
 
-def _verified_source_refs(run_root, payload):
+def _verified_source_refs(run_root, payload, io_cache=None):
     refs = payload.get("sourceRefs")
     if not isinstance(refs, list) or not refs:
         raise ScriptFormulaOverviewError("scripts sourceRefs are missing")
     known = {}
     for index, ref in enumerate(refs):
-        path_text, expected_hash, expected_size = _verify_source_ref(run_root, ref, "scripts sourceRef %d" % index)
+        label = "scripts sourceRef %d" % index
+        path_text, expected_hash, expected_size = _verify_source_ref(
+            run_root, ref, label, require_exists=False, io_cache=io_cache
+        )
         declared = (expected_hash, expected_size)
         if path_text in known and known[path_text] != declared:
             raise ScriptFormulaOverviewError("scripts sourceRef declarations disagree")
+        if path_text not in known:
+            _verify_source_ref(run_root, ref, label, io_cache=io_cache)
         known[path_text] = declared
     return known
 
@@ -118,15 +141,16 @@ def _bucket_list(material_sets, total):
     return sorted(buckets, key=lambda item: (-item["value"], item["label"]))
 
 
-def build_script_formula_overview(run_dir: Path) -> dict:
+def build_script_formula_overview(run_dir: Path, io_cache=None) -> dict:
     """Project only verified structured formula labels into safe aggregates."""
     run_root = Path(run_dir).resolve()
     if not run_root.is_dir():
         raise ScriptFormulaOverviewError("run directory is missing")
+    io_cache = io_cache or CommandFileCache(run_root)
     fact_path = run_root / "fact-pack" / "scripts.json"
     manifest_path = run_root / "fact-pack" / "manifest.json"
-    payload = _read_json(fact_path, "script facts", dict)
-    manifest = _read_json(manifest_path, "fact-pack manifest", dict)
+    payload = _read_json(fact_path, "script facts", dict, io_cache)
+    manifest = _read_json(manifest_path, "fact-pack manifest", dict, io_cache)
     expected_count, material_ids = _manifest_scope(manifest)
     records = payload.get("scripts")
     if payload.get("status") != "available" or not isinstance(records, list):
@@ -138,7 +162,7 @@ def build_script_formula_overview(run_dir: Path) -> dict:
     if len(record_ids) != len(records) or len(set(record_ids)) != len(record_ids) or set(record_ids) != manifest_ids:
         raise ScriptFormulaOverviewError("script materialIds do not match manifest materialIds")
 
-    source_refs = _verified_source_refs(run_root, payload)
+    source_refs = _verified_source_refs(run_root, payload, io_cache)
     primary_materials = {}
     secondary_materials = {}
     primary_pairs = set()
@@ -151,7 +175,8 @@ def build_script_formula_overview(run_dir: Path) -> dict:
         material_id = _required_text(record.get("materialId"), "script materialId")
         record_ref = record.get("sourceRef")
         ref_path, ref_hash, ref_size = _verify_source_ref(
-            run_root, record_ref, "script record %d sourceRef" % index, source_refs
+            run_root, record_ref, "script record %d sourceRef" % index, source_refs,
+            require_exists=False, io_cache=io_cache
         )
         if source_refs[ref_path] != (ref_hash, ref_size):
             raise ScriptFormulaOverviewError("script record sourceRef disagrees")
@@ -203,7 +228,7 @@ def build_script_formula_overview(run_dir: Path) -> dict:
     if missing_secondary_count:
         gaps.append({"code": "missing_level_2_label", "count": missing_secondary_count})
 
-    script_hash = hashlib.sha256(fact_path.read_bytes()).hexdigest()
+    script_hash = io_cache.digest(fact_path)[0]
     primary_buckets = _bucket_list(primary_materials, len(set(material_id for material_id, _ in primary_pairs)))
     # The secondary distribution is scoped to the materials covered by its
     # selected primary formula.  `value` is that primary's coverage; `total`

@@ -6,6 +6,11 @@ import math
 from pathlib import Path, PurePosixPath
 import re
 
+try:
+    from command_io import CommandFileCache
+except ImportError:  # pragma: no cover
+    from .command_io import CommandFileCache
+
 
 SCHEMA_VERSION = 1
 _REQUIRED_FACT_FILES = {"manifest.json", "material-leaderboard.json", "highlight-frames.json"}
@@ -24,9 +29,9 @@ class HighlightOverviewError(ValueError):
     """Raised when persisted highlight facts cannot be safely projected."""
 
 
-def _read_json(path, label):
+def _read_json(path, label, io_cache=None):
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = io_cache.read_json(Path(path)) if io_cache is not None else json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise HighlightOverviewError("%s is unreadable" % label) from exc
     if not isinstance(value, dict):
@@ -48,7 +53,7 @@ def _safe_relative_path(run_dir, raw_path, label):
     return candidate, relative.as_posix()
 
 
-def _verified_file(run_dir, reference, label, *, require_image=False):
+def _verified_file(run_dir, reference, label, *, require_image=False, io_cache=None):
     if not isinstance(reference, dict):
         raise HighlightOverviewError("%s must be a file reference" % label)
     expected_hash = reference.get("sha256")
@@ -61,22 +66,29 @@ def _verified_file(run_dir, reference, label, *, require_image=False):
     if require_image and path.suffix.lower() not in _IMAGE_SUFFIXES:
         raise HighlightOverviewError("%s must be an image" % label)
     try:
-        actual_size = path.stat().st_size
-        actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        if io_cache is not None:
+            actual_hash, actual_size = io_cache.verify(path, reference)
+        else:
+            actual_size = path.stat().st_size
+            actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError as exc:
         raise HighlightOverviewError("%s is missing" % label) from exc
+    except ValueError as exc:
+        raise HighlightOverviewError("%s hash or size mismatch" % label) from exc
     if actual_size != expected_size or actual_hash != expected_hash:
         raise HighlightOverviewError("%s hash or size mismatch" % label)
     return path, relative, actual_hash, actual_size
 
 
-def _verify_manifest_sources(run_dir, manifest):
+def _verify_manifest_sources(run_dir, manifest, io_cache=None):
     refs = manifest.get("sourceFiles")
     if not isinstance(refs, list):
         raise HighlightOverviewError("manifest sourceFiles must be a list")
     verified = {}
     for index, reference in enumerate(refs):
-        _path, relative, actual_hash, actual_size = _verified_file(run_dir, reference, "manifest sourceFiles[%d]" % index)
+        _path, relative, actual_hash, actual_size = _verified_file(
+            run_dir, reference, "manifest sourceFiles[%d]" % index, io_cache=io_cache
+        )
         previous = verified.get(relative)
         current = (actual_hash, actual_size)
         if previous is not None and previous != current:
@@ -95,9 +107,9 @@ def _safe_scalar(value, label):
     return value
 
 
-def _material_titles(run_dir, manifest):
+def _material_titles(run_dir, manifest, io_cache=None):
     payload_path = Path(run_dir) / "fact-pack" / "material-leaderboard.json"
-    payload = _read_json(payload_path, "material leaderboard")
+    payload = _read_json(payload_path, "material leaderboard", io_cache)
     materials = payload.get("materials")
     material_ids = manifest.get("materialIds")
     if not isinstance(materials, list) or not isinstance(material_ids, list):
@@ -178,7 +190,7 @@ def _selection_conditions(duration, evidence):
     return conditions
 
 
-def _frame_card(run_dir, frame, titles, ranks, manifest_source_paths):
+def _frame_card(run_dir, frame, titles, ranks, manifest_source_paths, io_cache=None):
     if not isinstance(frame, dict):
         raise HighlightOverviewError("highlight frame is invalid")
     material_id = str(frame.get("materialId", "")).strip()
@@ -191,7 +203,9 @@ def _frame_card(run_dir, frame, titles, ranks, manifest_source_paths):
     if type(sequence) is not int or sequence < 1:
         raise HighlightOverviewError("highlight frame sequence is invalid")
     artifact = frame.get("artifact")
-    path, relative, actual_hash, actual_size = _verified_file(run_dir, artifact, "highlight frame artifact", require_image=True)
+    path, relative, actual_hash, actual_size = _verified_file(
+        run_dir, artifact, "highlight frame artifact", require_image=True, io_cache=io_cache
+    )
     if path.parent.name != material_id or "peak-frames" not in path.parts:
         raise HighlightOverviewError("highlight frame artifact material is invalid")
     if relative not in manifest_source_paths:
@@ -216,45 +230,46 @@ def _frame_card(run_dir, frame, titles, ranks, manifest_source_paths):
     }
 
 
-def _build_highlight_overview(run_dir):
+def _build_highlight_overview(run_dir, io_cache=None):
     """Build a safe, deterministic projection from a completed run's fact pack."""
     run_root = Path(run_dir).resolve()
+    io_cache = io_cache or CommandFileCache(run_root)
     fact_dir = run_root / "fact-pack"
-    manifest = _read_json(fact_dir / "manifest.json", "fact-pack manifest")
+    manifest = _read_json(fact_dir / "manifest.json", "fact-pack manifest", io_cache)
     declared_files = manifest.get("files")
     if not isinstance(declared_files, list) or not _REQUIRED_FACT_FILES.issubset(set(declared_files)):
         raise HighlightOverviewError("fact-pack manifest files are incomplete")
-    source_paths = _verify_manifest_sources(run_root, manifest)
-    titles, ranks = _material_titles(run_root, manifest)
+    source_paths = _verify_manifest_sources(run_root, manifest, io_cache)
+    titles, ranks = _material_titles(run_root, manifest, io_cache)
     highlights_path = fact_dir / "highlight-frames.json"
-    highlights = _read_json(highlights_path, "highlight frames")
+    highlights = _read_json(highlights_path, "highlight frames", io_cache)
     if highlights.get("status") != "available" or not isinstance(highlights.get("highlightFrames"), list):
         raise HighlightOverviewError("highlight frames are unavailable")
     expected_count = manifest.get("counts", {}).get("highlightFrames")
     frames = highlights["highlightFrames"]
     if type(expected_count) is not int or expected_count != len(frames):
         raise HighlightOverviewError("highlight frame count does not match manifest")
-    cards = [_frame_card(run_root, frame, titles, ranks, source_paths) for frame in frames]
+    cards = [_frame_card(run_root, frame, titles, ranks, source_paths, io_cache) for frame in frames]
     if len({card["id"] for card in cards}) != len(cards):
         raise HighlightOverviewError("highlight frame IDs are not unique")
     cards.sort(key=lambda card: (card["materialRank"], card["second"], card["frameSequence"], card["materialId"]))
-    source_bytes = highlights_path.read_bytes()
+    source_hash, source_size = io_cache.digest(highlights_path)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "status": "available",
         "source": {
             "path": "fact-pack/highlight-frames.json",
-            "sha256": hashlib.sha256(source_bytes).hexdigest(),
-            "sizeBytes": len(source_bytes),
+            "sha256": source_hash,
+            "sizeBytes": source_size,
             "recordCount": len(cards),
         },
         "cards": cards,
     }
 
 
-def build_highlight_overview(run_dir):
+def build_highlight_overview(run_dir, io_cache=None):
     try:
-        return _build_highlight_overview(run_dir)
+        return _build_highlight_overview(run_dir, io_cache)
     except HighlightOverviewError:
         raise
     except (KeyError, TypeError, ValueError, OSError) as exc:
