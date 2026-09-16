@@ -84,14 +84,18 @@ def _hash_ref(run_root, ref, label, allowed=None, require_exists=True):
     if not isinstance(ref, dict):
         raise SingleMaterialOverviewError(f"{label} must be an object")
     path_text, path = _safe_relative_path(run_root, ref.get("path"), f"{label} path")
-    if allowed is not None and path_text not in allowed:
-        raise SingleMaterialOverviewError(f"{label} is not declared by manifest")
     expected_hash = _required_text(ref.get("sha256"), f"{label} sha256")
     expected_size = ref.get("sizeBytes")
     if len(expected_hash) != 64 or any(char not in "0123456789abcdefABCDEF" for char in expected_hash):
         raise SingleMaterialOverviewError(f"{label} sha256 is invalid")
     if type(expected_size) is not int or expected_size < 0:
         raise SingleMaterialOverviewError(f"{label} sizeBytes is invalid")
+    if allowed is not None:
+        declared = allowed.get(path_text)
+        if declared is None:
+            raise SingleMaterialOverviewError(f"{label} is not declared by manifest")
+        if declared != (expected_hash, expected_size):
+            raise SingleMaterialOverviewError(f"{label} declaration mismatch")
     if require_exists and not path.is_file():
         raise SingleMaterialOverviewError(f"{label} file is missing")
     if require_exists:
@@ -120,10 +124,13 @@ def _manifest_sources(run_root, manifest):
         raise SingleMaterialOverviewError("manifest sourceFiles are missing")
     known = {}
     for index, ref in enumerate(refs):
-        path_text, _path, digest, size = _hash_ref(run_root, ref, f"manifest sourceFile {index}")
+        label = f"manifest sourceFile {index}"
+        path_text, _path, digest, size = _hash_ref(run_root, ref, label, require_exists=False)
         previous = known.get(path_text)
         if previous is not None and previous != (digest, size):
             raise SingleMaterialOverviewError("manifest sourceFile declarations disagree")
+        if previous is None:
+            _hash_ref(run_root, ref, label)
         known[path_text] = (digest, size)
     return known
 
@@ -158,7 +165,7 @@ def _record_indexes_match(records, ref, material_id, label):
 
 
 def _load_declared_records(run_root, ref, allowed, material_id, label):
-    path_text, path, _digest, _size = _hash_ref(run_root, ref, label, allowed)
+    path_text, path, _digest, _size = _hash_ref(run_root, ref, label, allowed, require_exists=False)
     records = _read_json(path, label, list)
     _record_indexes_match(records, ref, material_id, label)
     return path_text, records
@@ -180,7 +187,7 @@ def _leaderboard(run_root, payload, scope_ids, allowed):
         if type(rank) is not int or rank <= 0:
             raise SingleMaterialOverviewError("leaderboard rank is invalid")
         source_ref = item.get("sourceRef")
-        _hash_ref(run_root, source_ref, f"leaderboard {material_id} sourceRef", allowed)
+        _hash_ref(run_root, source_ref, f"leaderboard {material_id} sourceRef", allowed, require_exists=False)
         fields = []
         metrics = item.get("metrics", [])
         metric_items = metrics if isinstance(metrics, list) else [
@@ -206,10 +213,20 @@ def _interactions(run_root, frame_records, allowed, material_id):
         return {"status": "unavailable", "metrics": [], "gaps": [{"code": "interaction_series_unavailable"}]}
     unique = {}
     for ref in refs:
-        path_text, records = _load_declared_records(run_root, ref, allowed, material_id, "interaction sourceRef")
-        unique[path_text] = records
+        path_text, _path, _digest, _size = _hash_ref(
+            run_root, ref, "interaction sourceRef", allowed, require_exists=False
+        )
+        unique.setdefault(path_text, []).append(ref)
+    loaded = {}
+    for path_text, path_refs in unique.items():
+        path_text, records = _load_declared_records(
+            run_root, path_refs[0], allowed, material_id, "interaction sourceRef"
+        )
+        for ref in path_refs[1:]:
+            _record_indexes_match(records, ref, material_id, "interaction sourceRef")
+        loaded[path_text] = records
     buckets = {metric_id: [] for metric_id in _INTERACTION_METRICS}
-    for records in unique.values():
+    for records in loaded.values():
         for record in records:
             if not isinstance(record, dict) or record.get("recordType") != "interaction_series":
                 continue
@@ -235,7 +252,9 @@ def _script_for_material(payload, run_root, allowed, material_id):
     record = next((item for item in records if isinstance(item, dict) and str(item.get("materialId")) == material_id), None)
     if record is None:
         return {"status": "unavailable", "formula": [], "text": None, "segments": [], "gaps": [{"code": "script_material_missing"}]}
-    _hash_ref(run_root, record.get("sourceRef"), f"script {material_id} sourceRef", allowed)
+    _hash_ref(
+        run_root, record.get("sourceRef"), f"script {material_id} sourceRef", allowed, require_exists=False
+    )
     if record.get("parseStatus") != "parsed" or not isinstance(record.get("data"), list):
         return {"status": "unavailable", "formula": [], "text": None, "segments": [], "gaps": [{"code": "formula_labels_unavailable"}]}
     formula = []
@@ -275,7 +294,9 @@ def _audience_for_material(payload, run_root, allowed, material_id):
         return {"status": "unavailable", "dimensions": {}, "gaps": [{"code": "audience_material_missing"}]}
     dimensions = {}
     for record in selected:
-        _hash_ref(run_root, record.get("sourceRef"), f"audience {material_id} sourceRef", allowed)
+        _hash_ref(
+            run_root, record.get("sourceRef"), f"audience {material_id} sourceRef", allowed, require_exists=False
+        )
         dimension_key = record.get("dimensionKey")
         dimension_info = _audience.DIMENSIONS.get(dimension_key)
         if dimension_info is None:
@@ -323,7 +344,9 @@ def _video_artifact(run_root, manifest, allowed, material_id):
     selected = next((item for item in artifacts if isinstance(item, dict) and str(item.get("materialId")) == material_id), None)
     if selected is None:
         return {"status": "unavailable", "message": "本次详情数据未保存可播放视频"}
-    path_text, _path, digest, size = _hash_ref(run_root, selected, f"video {material_id} artifact", allowed)
+    path_text, _path, digest, size = _hash_ref(
+        run_root, selected, f"video {material_id} artifact", allowed, require_exists=False
+    )
     if Path(path_text).suffix.lower() not in {".mp4", ".webm"}:
         raise SingleMaterialOverviewError("video artifact extension is invalid")
     return {"status": "available", "path": path_text, "sha256": digest, "sizeBytes": size}
@@ -373,7 +396,9 @@ def build_single_material_overview(run_dir: Path) -> dict:
         material_id = material["materialId"]
         material_frames = [frame for frame in frames if isinstance(frame, dict) and str(frame.get("materialId")) == material_id]
         for frame in material_frames:
-            _hash_ref(run_root, frame.get("artifact"), f"highlight {material_id} artifact", allowed)
+            _hash_ref(
+                run_root, frame.get("artifact"), f"highlight {material_id} artifact", allowed, require_exists=False
+            )
         material_models.append({
             "materialId": material_id,
             "rank": material["rank"],

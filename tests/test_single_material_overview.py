@@ -1,9 +1,11 @@
 import hashlib
 import json
+import copy
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,6 +132,26 @@ def _make_run(root, *, tamper=None, include_video=False):
 
 
 class SingleMaterialOverviewTests(unittest.TestCase):
+    def test_hashes_each_manifest_source_once_in_single_material_builder(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = _make_run(Path(temp_dir))
+            diagnosis_path = (run_dir / "rpa" / "diagnosis-records" / "m-1.json").resolve()
+            import single_material_overview as module
+
+            original_hash_ref = module._hash_ref
+            full_validations = []
+
+            def tracked_hash_ref(run_root, ref, label, allowed=None, require_exists=True):
+                result = original_hash_ref(run_root, ref, label, allowed, require_exists)
+                if result[1] == diagnosis_path and require_exists:
+                    full_validations.append(label)
+                return result
+
+            with patch.object(module, "_hash_ref", tracked_hash_ref):
+                build_single_material_overview(run_dir)
+
+        self.assertEqual(full_validations, ["manifest sourceFile 0"])
+
     def test_projects_a_verified_manifest_video_for_the_single_material_player(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             model = build_single_material_overview(_make_run(Path(temp_dir), include_video=True))
@@ -159,6 +181,37 @@ class SingleMaterialOverviewTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             with self.assertRaisesRegex(SingleMaterialOverviewError, "hash or size"):
+                build_single_material_overview(_make_run(Path(temp_dir), tamper=tamper))
+
+    def test_rejects_fact_record_source_declaration_mismatch(self):
+        def tamper(run_dir, _manifest):
+            path = run_dir / "fact-pack" / "audience.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["audience"][0]["sourceRef"]["sha256"] = "f" * 64
+            _write_json(path, payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(SingleMaterialOverviewError, "declaration mismatch"):
+                build_single_material_overview(_make_run(Path(temp_dir), tamper=tamper))
+
+    def test_rejects_invalid_indexes_on_duplicate_interaction_source_refs(self):
+        def tamper(run_dir, _manifest):
+            highlights_path = run_dir / "fact-pack" / "highlight-frames.json"
+            highlights = json.loads(highlights_path.read_text(encoding="utf-8"))
+            duplicate = copy.deepcopy(highlights["highlightFrames"][0])
+            duplicate["frameSequence"] = 2
+            duplicate["durationSec"] = 1
+            duplicate["interactionSeries"]["sourceRef"]["recordIndexes"] = [999]
+            highlights["highlightFrames"].append(duplicate)
+            _write_json(highlights_path, highlights)
+
+            manifest_path = run_dir / "fact-pack" / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["counts"]["highlightFrames"] = 2
+            _write_json(manifest_path, manifest)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(SingleMaterialOverviewError, "recordIndexes are invalid"):
                 build_single_material_overview(_make_run(Path(temp_dir), tamper=tamper))
 
     def test_rejects_fact_record_associated_with_non_detail_material(self):

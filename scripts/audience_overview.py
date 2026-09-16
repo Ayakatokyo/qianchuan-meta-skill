@@ -102,28 +102,34 @@ def _manifest_scope(manifest):
     return counts["audienceFacts"], set(normalized)
 
 
-def _verify_source_ref(run_root, ref, label, known=None):
+def _verify_source_ref(run_root, ref, label, known=None, require_exists=True):
     if not isinstance(ref, dict):
         raise AudienceOverviewError("%s must be an object" % label)
     path_text, path = _safe_relative_path(run_root, ref.get("path"), "%s path" % label)
     if not path_text.startswith("rpa/diagnosis-records/") or not path_text.endswith(".json"):
         raise AudienceOverviewError("%s must point to a diagnosis record" % label)
-    if known is not None and path_text not in known:
-        raise AudienceOverviewError("%s is not declared" % label)
     expected_hash = _required_text(ref.get("sha256"), "%s sha256" % label)
     if len(expected_hash) != 64 or any(char not in "0123456789abcdefABCDEF" for char in expected_hash):
         raise AudienceOverviewError("%s sha256 is invalid" % label)
     expected_size = ref.get("sizeBytes")
     if type(expected_size) is not int or expected_size < 0:
         raise AudienceOverviewError("%s sizeBytes is invalid" % label)
-    if not path.is_file():
+    expected = (expected_hash, expected_size)
+    if known is not None:
+        declared = known.get(path_text)
+        if declared is None:
+            raise AudienceOverviewError("%s is not declared" % label)
+        if declared != expected:
+            raise AudienceOverviewError("%s disagrees" % label)
+    if require_exists and not path.is_file():
         raise AudienceOverviewError("%s file is missing" % label)
-    actual_size = path.stat().st_size
-    actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
-    if actual_size != expected_size:
-        raise AudienceOverviewError("%s size mismatch" % label)
-    if actual_hash != expected_hash:
-        raise AudienceOverviewError("%s sha256 mismatch" % label)
+    if require_exists:
+        actual_size = path.stat().st_size
+        actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_size != expected_size:
+            raise AudienceOverviewError("%s size mismatch" % label)
+        if actual_hash != expected_hash:
+            raise AudienceOverviewError("%s sha256 mismatch" % label)
     return path_text, expected_hash, expected_size
 
 
@@ -133,9 +139,14 @@ def _verify_sources(run_root, payload):
         raise AudienceOverviewError("audience sourceRefs are missing")
     known = {}
     for index, ref in enumerate(source_refs):
-        path_text, expected_hash, expected_size = _verify_source_ref(run_root, ref, "sourceRef %d" % index)
+        label = "sourceRef %d" % index
+        path_text, expected_hash, expected_size = _verify_source_ref(
+            run_root, ref, label, require_exists=False
+        )
         if path_text in known and known[path_text] != (expected_hash, expected_size):
             raise AudienceOverviewError("sourceRef declarations disagree")
+        if path_text not in known:
+            _verify_source_ref(run_root, ref, label)
         known[path_text] = (expected_hash, expected_size)
     return known
 
@@ -182,7 +193,7 @@ def _validate_record(run_root, record, scope_ids, source_refs):
         raise AudienceOverviewError("audience metric source field is invalid")
     source_ref = record.get("sourceRef")
     path_text, expected_hash, expected_size = _verify_source_ref(
-        run_root, source_ref, "audience record sourceRef", source_refs
+        run_root, source_ref, "audience record sourceRef", source_refs, require_exists=False
     )
     if source_refs[path_text] != (expected_hash, expected_size):
         raise AudienceOverviewError("audience record sourceRef disagrees")
