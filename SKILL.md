@@ -163,7 +163,7 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
 
 `query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认同样只查询或复用候选工件，并写入 `run-receipt.json`；只有显式传入 `--execute-rpa` 才会解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复。每个成功详情素材的视频下载至运行目录的 `rpa/videos/`，并以相对路径、大小和 SHA-256 纳入 RPA 回执与事实包清单；高光帧仍只在提供 `HighlightSpec` 时抽取。
 
-执行 `run --execute-rpa` 前要向用户说明阶段顺序和主要耗时来源，并在 `query → RPA 详情任务与轮询 → 视频下载/可选抽帧 → 批量校验 → 事实包构建与校验 → render-overview` 各节点报告进度。运行目录中已经出现 CSV、MP4 或 JPEG 只表示部分文件已落盘，不表示 RPA、事实包或阶段一已经完成；以进程完成回执和 `run-receipt.json` 各阶段终态为准。详情素材数、视频体积和高光帧规则决定前半段耗时，执行前可说明减少详情素材数或关闭高光帧的影响。
+执行 `run --execute-rpa` 前要向用户说明阶段顺序和主要耗时来源，并在 `query → RPA 详情任务与轮询 → 视频下载/可选抽帧 → 批量校验 → 事实包构建与校验 → render-overview` 各节点报告进度。详情任务与媒体后处理使用独立线程池：任一素材的详情结果返回并完成 CSV/JSON 持久化后，立即提交该素材的视频下载和可选抽帧，不等待当前详情波次的其他素材完成；其余详情轮询和后续补位可以与媒体后处理重叠。运行目录中已经出现 CSV、MP4 或 JPEG 只表示部分文件已落盘，不表示 RPA、事实包或阶段一已经完成；以进程完成回执和 `run-receipt.json` 各阶段终态为准。详情素材数、视频体积和高光帧规则决定前半段耗时，执行前可说明减少详情素材数或关闭高光帧的影响。
 
 只有 `run --execute-rpa` 在 RPA、records、抽帧和批量验证均成功后，才会自动生成 `fact-pack/`；成功回执的 `factPack` 阶段会记录 manifest 路径、`targetTopN` 和分类计数。仅 `query` 或未授权的 `run` 不会创建或声称完成事实包。也可以对已有完成目录显式执行 `build-fact-pack`，但 query-only、RPA 部分失败或工件不完整时命令会非零退出。
 

@@ -438,45 +438,56 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
                 entry["timingsSec"]["rpa"] = time.monotonic() - started
                 return entry, None
 
-    next_index = 0
-    while next_index < len(entries) and sum(_source_completed(item) for item in entries) < target_top_n:
-        remaining = target_top_n - sum(_source_completed(item) for item in entries)
-        wave_size = min(options["rpaConcurrency"], max(1, remaining))
-        wave = [item for item in entries[next_index:next_index + wave_size] if not _source_completed(item)]
-        next_index += wave_size
-        if not wave:
-            continue
-        if progress_callback:
-            for item in wave:
-                try:
-                    progress_callback("rpa_processing", {"completed": sum(_source_completed(entry) for entry in entries), "total": target_top_n}, item["materialId"])
-                except Exception:
-                    pass
-        with ThreadPoolExecutor(max_workers=len(wave)) as executor:
-            futures = [executor.submit(process_rpa, entry) for entry in wave]
-            wave_results = [future.result() for future in as_completed(futures)]
-        for entry, records in sorted(wave_results, key=lambda value: value[0]["rank"]):
-            if records is None:
-                continue
-            entry["postprocessAttemptCount"] += 1
-            entry["postprocessStatus"] = "running"
-            try:
-                postprocessed = postprocess(entry, records, paths)
-                frames = postprocessed.get("frames") if isinstance(postprocessed, dict) else None
-                video_path = postprocessed.get("videoPath") if isinstance(postprocessed, dict) else None
-                if not isinstance(frames, list) or not video_path:
-                    raise RpaPipelineError("video_download_failed: postprocess did not return a retained video", "video_download_failed")
-                entry.update({"postprocessStatus": "succeeded", "status": "succeeded", "highlightFrames": frames, "videoPath": video_path})
-                entry["highlightSummaryPath"] = postprocessed.get("summaryPath")
-            except Exception as exc:
-                entry.update({"postprocessStatus": "failed", "status": "partial", "failureReason": getattr(exc, "error_type", "frame_extraction_failed"), "errorType": type(exc).__name__, "errorMessage": str(exc)})
-            _persist(paths, entries, configuration_fingerprint, period, options, account)
-            if progress_callback:
-                try:
-                    progress_callback("rpa_processing", {"completed": sum(_source_completed(item) for item in entries), "total": target_top_n}, entry["materialId"])
-                except Exception:
-                    pass
+    def complete_postprocess(future, entry):
+        try:
+            postprocessed = future.result()
+            frames = postprocessed.get("frames") if isinstance(postprocessed, dict) else None
+            video_path = postprocessed.get("videoPath") if isinstance(postprocessed, dict) else None
+            if not isinstance(frames, list) or not video_path:
+                raise RpaPipelineError("video_download_failed: postprocess did not return a retained video", "video_download_failed")
+            entry.update({"postprocessStatus": "succeeded", "status": "succeeded", "highlightFrames": frames, "videoPath": video_path})
+            entry["highlightSummaryPath"] = postprocessed.get("summaryPath")
+        except Exception as exc:
+            entry.update({"postprocessStatus": "failed", "status": "partial", "failureReason": getattr(exc, "error_type", "frame_extraction_failed"), "errorType": type(exc).__name__, "errorMessage": str(exc)})
         _persist(paths, entries, configuration_fingerprint, period, options, account)
+        if progress_callback:
+            try:
+                progress_callback("rpa_processing", {"completed": sum(_source_completed(item) for item in entries), "total": target_top_n}, entry["materialId"])
+            except Exception:
+                pass
+
+    next_index = 0
+    pending_postprocess = {}
+    with ThreadPoolExecutor(max_workers=options["rpaConcurrency"]) as postprocess_executor:
+        while next_index < len(entries) and sum(_source_completed(item) for item in entries) < target_top_n:
+            remaining = target_top_n - sum(_source_completed(item) for item in entries)
+            wave_size = min(options["rpaConcurrency"], max(1, remaining))
+            wave = [item for item in entries[next_index:next_index + wave_size] if not _source_completed(item)]
+            next_index += wave_size
+            if not wave:
+                continue
+            if progress_callback:
+                for item in wave:
+                    try:
+                        progress_callback("rpa_processing", {"completed": sum(_source_completed(entry) for entry in entries), "total": target_top_n}, item["materialId"])
+                    except Exception:
+                        pass
+            with ThreadPoolExecutor(max_workers=len(wave)) as detail_executor:
+                detail_futures = [detail_executor.submit(process_rpa, entry) for entry in wave]
+                for future in as_completed(detail_futures):
+                    entry, records = future.result()
+                    if records is not None:
+                        entry["postprocessAttemptCount"] += 1
+                        entry["postprocessStatus"] = "running"
+                        _persist(paths, entries, configuration_fingerprint, period, options, account)
+                        media_future = postprocess_executor.submit(postprocess, entry, records, paths)
+                        pending_postprocess[media_future] = entry
+                    for media_future in [item for item in pending_postprocess if item.done()]:
+                        complete_postprocess(media_future, pending_postprocess.pop(media_future))
+            _persist(paths, entries, configuration_fingerprint, period, options, account)
+
+        for media_future in as_completed(list(pending_postprocess)):
+            complete_postprocess(media_future, pending_postprocess[media_future])
 
     verification = _verify(paths, entries, configuration_fingerprint, target_top_n)
     if verification["status"] == "succeeded":

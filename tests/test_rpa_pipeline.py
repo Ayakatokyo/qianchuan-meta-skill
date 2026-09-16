@@ -1,6 +1,7 @@
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -16,6 +17,44 @@ def candidate(material_id, rank):
 
 
 class RpaPipelineTests(unittest.TestCase):
+    def test_starts_media_postprocess_as_soon_as_one_detail_is_persisted(self):
+        fast_postprocess_started = threading.Event()
+        slow_detail_observed_overlap = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def fetch(entry, _paths):
+                if entry["materialId"] == "m-slow":
+                    slow_detail_observed_overlap.append(
+                        fast_postprocess_started.wait(timeout=0.5)
+                    )
+                return {
+                    "records": [{"materialId": entry["materialId"]}],
+                    "csvPath": self._csv(root),
+                }
+
+            def postprocess(entry, records, paths):
+                if entry["materialId"] == "m-fast":
+                    fast_postprocess_started.set()
+                return self._video_postprocess(entry, records, paths)
+
+            result = run_rpa_pipeline(
+                root,
+                {
+                    "materials": [candidate("m-fast", 1), candidate("m-slow", 2)],
+                    "collection": {"candidateTopN": 2, "targetTopN": 2},
+                },
+                configuration_fingerprint="fingerprint",
+                period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
+                options={"rpaConcurrency": 2, "recoveryAttempts": 1},
+                fetch_diagnosis=fetch,
+                postprocess=postprocess,
+            )
+
+        self.assertTrue(result["succeeded"])
+        self.assertEqual(slow_detail_observed_overlap, [True])
+
     def test_reports_material_progress_for_long_rpa_stage(self):
         events = []
         with tempfile.TemporaryDirectory() as directory:
