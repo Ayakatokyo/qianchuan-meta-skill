@@ -43,12 +43,12 @@ class RoutingSession:
                         "type": "object",
                         "properties": {
                             "material_id": {"type": "string"},
-                            "date_range_type": {"type": "string"},
+                            "date_type": {"type": "string"},
                             "custom_start_date": {"type": "string"},
                             "custom_end_date": {"type": "string"},
                         },
                         "required": [
-                            "material_id", "date_range_type",
+                            "material_id", "date_type",
                             "custom_start_date", "custom_end_date",
                         ],
                         "additionalProperties": False,

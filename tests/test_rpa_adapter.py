@@ -62,7 +62,7 @@ def connector_detail():
             "inParamJsonSchemaText": None,
             "inParamList": [
                 {"param": "material_id", "isRequired": True, "dataTypeEnum": "STRING"},
-                {"param": "date_range_type", "isRequired": True, "dataTypeEnum": "STRING"},
+                {"param": "date_type", "isRequired": True, "dataTypeEnum": "STRING"},
                 {"param": "custom_start_date", "isRequired": True, "dataTypeEnum": "STRING"},
                 {"param": "custom_end_date", "isRequired": True, "dataTypeEnum": "STRING"},
             ],
@@ -103,7 +103,8 @@ class RpaAdapterTests(unittest.TestCase):
     def test_builds_custom_period_without_reusing_shop_id_as_account_id(self):
         params = rpa_adapter.build_diagnosis_params("material-1", "2026-08-01", "2026-08-24")
 
-        self.assertEqual(params["date_range_type"], "CUSTOM")
+        self.assertEqual(params["date_type"], "CUSTOM")
+        self.assertNotIn("date_range_type", params)
         self.assertEqual(params["custom_start_date"], "2026-08-01")
         self.assertEqual(params["custom_end_date"], "2026-08-24")
         self.assertNotIn("shop_id", params)

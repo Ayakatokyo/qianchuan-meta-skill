@@ -103,7 +103,7 @@ def build_diagnosis_params(material_id, start_date, end_date):
         raise RpaAdapterError("RPA dates must use YYYY-MM-DD")
     if end_date < start_date:
         raise RpaAdapterError("RPA end date cannot precede start date")
-    return {"material_id": material_id, "date_range_type": "CUSTOM", "custom_start_date": str(start_date), "custom_end_date": str(end_date)}
+    return {"material_id": material_id, "date_type": "CUSTOM", "custom_start_date": str(start_date), "custom_end_date": str(end_date)}
 
 
 def download_file(url, target_path, *, session=None, timeout=300, max_bytes=DEFAULT_CSV_MAX_BYTES, deadline_sec=DEFAULT_DOWNLOAD_DEADLINE_SEC):
