@@ -1,0 +1,350 @@
+short-description: "采集并诊断千川素材，生成含人群、脚本、互动时序与可选高光帧的阶段化报告"
+tags:
+  - 千川
+  - 短视频素材
+  - 素材诊断
+  - 高光帧
+compatibility:
+  - data-analysis
+  - python
+  - html-report
+requires:
+  env:
+    - ENV_BACKEND_HOST
+    - YUCE_AUTHORIZATION
+    - YUCE_SESSION_ID
+    - YCSESSIONID
+market:
+  title: "千川素材全景诊断"
+  summary: "按店铺、广告主和日期范围筛选千川素材，执行受控详情诊断，生成事实包、阶段一离线总览和可选高光帧资产，并在用户提出问题后继续商业分析。"
+  category:
+    key: short_video_content
+    label: 短视频内容
+  badges:
+    - label: 千川
+      tone: blue
+    - label: 素材诊断
+      tone: green
+    - label: 高光帧
+      tone: orange
+  examples:
+    - title: 千川素材诊断
+      prompt: "按店铺和日期范围采集千川素材并生成阶段一诊断报告"
+    - title: 高光帧分析
+      prompt: "采集千川素材详情并生成点击和互动高光帧"
+    - title: 已有数据继续分析
+      prompt: "基于已有千川事实包生成素材总览，并等待后续商业分析问题"
+skill_form:
+  - key: shop_id
+    type: input
+    label: 授权店铺 ID
+    description: 魔方授权店铺 ID；用于千川报表连接器与详情 RPA
+    placeholder: "请输入魔方授权店铺 ID"
+    required: true
+  - key: advertiser_id
+    type: input
+    label: 广告主 ID
+    description: 用于千川报表业务筛选的广告主 ID，仅填写数字
+    placeholder: "请输入数字广告主 ID"
+    pattern: '^\d+$'
+    pattern_message: 广告主 ID 只能包含数字
+    required: true
+  - key: date_range
+    type: daterange
+    label: 时间范围
+    description: 对应起止日期，日期格式为 YYYY-MM-DD；不含执行日和前一日
+    placeholder: "开始日期,结束日期"
+    format: YYYY-MM-DD
+    value_format: YYYY-MM-DD
+    max_policy: t_plus_2
+    required: true
+  - key: material_filter_sort
+    type: textarea
+    label: 筛选与排序条件
+    description: 可选；用自然语言描述指标阈值、排序字段和方向；不填写则保留连接器原始顺序
+    placeholder: "例如：整体消耗 >= 10000，再按净成交 ROI 降序"
+    required: false
+    rows: 3
+  - key: detail_top_n
+    type: number
+    label: 详情素材数
+    description: 需要获取互动时序、人群、脚本和可选高光帧详情的素材数量
+    required: true
+    default: 10
+    min: 1
+    step: 1
+    precision: 0
+    addon_after: 条
+  - key: highlight_mode
+    type: select
+    label: 是/否
+    description: 选择否时，以下高光帧字段不参与填写；选择是时，至少选择一个高光指标
+    required: true
+    default: "off"
+    options:
+      - label: 否
+        value: "off"
+      - label: 是
+        value: "on"
+  - key: highlight_include_cover
+    type: select
+    label: 是/否
+    description: 选择是否把视频封面加入高光帧结果
+    required: true
+    default: "true"
+    options:
+      - label: 是
+        value: "true"
+      - label: 否
+        value: "false"
+    visible_when:
+      field: highlight_mode
+      equals: "on"
+    depends_on:
+      highlight_mode: "on"
+
+  - key: highlight_click_enabled
+    type: select
+    label: 是否选择
+    required: true
+    default: "false"
+    options:
+      - label: 是
+        value: "true"
+      - label: 否
+        value: "false"
+    visible_when:
+      field: highlight_mode
+      equals: "on"
+    depends_on:
+      highlight_mode: "on"
+  - key: highlight_click_strategy
+    type: select
+    label: 局部峰值/最高值
+    options:
+      - label: 局部峰值
+        value: local_peaks
+      - label: 最高值
+        value: global_top_values
+    default: local_peaks
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_click_enabled: "true"
+  - key: highlight_click_limit
+    type: number
+    label: 帧数
+    default: 2
+    min: 1
+    step: 1
+    precision: 0
+    addon_after: 帧
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_click_enabled: "true"
+
+  - key: highlight_loss_enabled
+    type: select
+    label: 是否选择
+    required: true
+    default: "false"
+    options:
+      - label: 是
+        value: "true"
+      - label: 否
+        value: "false"
+    visible_when:
+      field: highlight_mode
+      equals: "on"
+    depends_on:
+      highlight_mode: "on"
+  - key: highlight_loss_strategy
+    type: select
+    label: 局部峰值/最高值
+    options:
+      - label: 局部峰值
+        value: local_peaks
+      - label: 最高值
+        value: global_top_values
+    default: local_peaks
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_loss_enabled: "true"
+  - key: highlight_loss_limit
+    type: number
+    label: 帧数
+    default: 2
+    min: 1
+    step: 1
+    precision: 0
+    addon_after: 帧
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_loss_enabled: "true"
+
+  - key: highlight_like_enabled
+    type: select
+    label: 是否选择
+    required: true
+    default: "false"
+    options:
+      - label: 是
+        value: "true"
+      - label: 否
+        value: "false"
+    visible_when:
+      field: highlight_mode
+      equals: "on"
+    depends_on:
+      highlight_mode: "on"
+  - key: highlight_like_strategy
+    type: select
+    label: 局部峰值/最高值
+    options:
+      - label: 局部峰值
+        value: local_peaks
+      - label: 最高值
+        value: global_top_values
+    default: local_peaks
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_like_enabled: "true"
+  - key: highlight_like_limit
+    type: number
+    label: 帧数
+    default: 2
+    min: 1
+    step: 1
+    precision: 0
+    addon_after: 帧
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_like_enabled: "true"
+
+  - key: highlight_comment_enabled
+    type: select
+    label: 是否选择
+    required: true
+    default: "false"
+    options:
+      - label: 是
+        value: "true"
+      - label: 否
+        value: "false"
+    visible_when:
+      field: highlight_mode
+      equals: "on"
+    depends_on:
+      highlight_mode: "on"
+  - key: highlight_comment_strategy
+    type: select
+    label: 局部峰值/最高值
+    options:
+      - label: 局部峰值
+        value: local_peaks
+      - label: 最高值
+        value: global_top_values
+    default: local_peaks
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_comment_enabled: "true"
+  - key: highlight_comment_limit
+    type: number
+    label: 帧数
+    default: 2
+    min: 1
+    step: 1
+    precision: 0
+    addon_after: 帧
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_comment_enabled: "true"
+
+  - key: highlight_share_enabled
+    type: select
+    label: 是否选择
+    required: true
+    default: "false"
+    options:
+      - label: 是
+        value: "true"
+      - label: 否
+        value: "false"
+    visible_when:
+      field: highlight_mode
+      equals: "on"
+    depends_on:
+      highlight_mode: "on"
+  - key: highlight_share_strategy
+    type: select
+    label: 局部峰值/最高值
+    options:
+      - label: 局部峰值
+        value: local_peaks
+      - label: 最高值
+        value: global_top_values
+    default: local_peaks
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_share_enabled: "true"
+  - key: highlight_share_limit
+    type: number
+    label: 帧数
+    default: 2
+    min: 1
+    step: 1
+    precision: 0
+    addon_after: 帧
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_share_enabled: "true"
+
+  - key: highlight_new_follower_enabled
+    type: select
+    label: 是否选择
+    required: true
+    default: "false"
+    options:
+      - label: 是
+        value: "true"
+      - label: 否
+        value: "false"
+    visible_when:
+      field: highlight_mode
+      equals: "on"
+    depends_on:
+      highlight_mode: "on"
+  - key: highlight_new_follower_strategy
+    type: select
+    label: 局部峰值/最高值
+    options:
+      - label: 局部峰值
+        value: local_peaks
+      - label: 最高值
+        value: global_top_values
+    default: local_peaks
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_new_follower_enabled: "true"
+  - key: highlight_new_follower_limit
+    type: number
+    label: 帧数
+    default: 2
+    min: 1
+    step: 1
+    precision: 0
+    addon_after: 帧
+    required: true
+    depends_on:
+      highlight_mode: "on"
+      highlight_new_follower_enabled: "true"

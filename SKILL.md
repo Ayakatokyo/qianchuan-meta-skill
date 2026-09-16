@@ -4,22 +4,20 @@ description: 适用于按店铺、广告主和日期范围筛选千川素材并�
 metadata:
   argument_hint: 输入查询范围、可选的素材筛选/排序条件和详情数量；高光帧默认不生成，按下方规则选择是否保留封面及提取指标。
   pre_input: |
-    请采集千川素材及相关诊断数据。
-    授权店铺ID是 ____（必填）。
-    广告主ID是 ____（必填）。
-    时间范围是 ____（填写起止日期）。
-    素材筛选及排序条件是 ____（可选；例如筛选“整体消耗”>=10000，再按“净成交ROI”降序；排序指标和排序方向均可留空）。
-    需要获取详情的素材数是 ____（包含互动时序、人群、脚本和高光帧数据，默认10）。
-
-    是否同时生成高光帧图片：____（是/否，可选，默认否）。
-    高光帧设置（选择否时，以下全部留空；选择是时，按需逐项填写）：
-    - 封面帧是否保留：____（是/否）。
-    - 整体点击次数：是否选择 ____；提取规则 ____（局部峰值/最高值）；帧数 ____（正整数）。
-    - 整体流失数：是否选择 ____；提取规则 ____（局部峰值/最高值）；帧数 ____（正整数）。
-    - 整体点赞次数：是否选择 ____；提取规则 ____（局部峰值/最高值）；帧数 ____（正整数）。
-    - 整体评论次数：是否选择 ____；提取规则 ____（局部峰值/最高值）；帧数 ____（正整数）。
-    - 整体转发次数：是否选择 ____；提取规则 ____（局部峰值/最高值）；帧数 ____（正整数）。
-    - 整体新增粉丝数：是否选择 ____；提取规则 ____（局部峰值/最高值）；帧数 ____（正整数）。
+    请采集千川素材及相关诊断数据
+    授权店铺 ID：__field:shop_id__（必填，魔方授权店铺）
+    广告主 ID：__field:advertiser_id__（必填，店铺下的子账号）
+    时间范围：__field:date_range__
+    素材筛选与排序：__field:material_filter_sort__（可选；例如筛选“整体消耗”>=10000，再按“净成交ROI”降序；排序指标和排序方向均可留空）。
+    详情素材数：__field:detail_top_n__（包含互动时序、人群、脚本和高光帧数据，默认10）
+    是否同时生成高光帧图片：__field:highlight_mode__ （如选择否，则可无视下方高光帧规则，选择是则反之）
+    - 封面是否保留：__field:highlight_include_cover__
+    - 整体点击次数：__field:highlight_click_enabled__；提取规则 __field:highlight_click_strategy__；帧数 __field:highlight_click_limit__。
+    - 整体流失数：__field:highlight_loss_enabled__；提取规则 __field:highlight_loss_strategy__；帧数 __field:highlight_loss_limit__。
+    - 整体点赞次数：__field:highlight_like_enabled__；提取规则 __field:highlight_like_strategy__；帧数 __field:highlight_like_limit__。
+    - 整体评论次数：__field:highlight_comment_enabled__；提取规则 __field:highlight_comment_strategy__；帧数 __field:highlight_comment_limit__。
+    - 整体转发次数：__field:highlight_share_enabled__；提取规则 __field:highlight_share_strategy__；帧数 __field:highlight_share_limit__。
+    - 整体新增粉丝数：__field:highlight_new_follower_enabled__；提取规则 __field:highlight_new_follower_strategy__；帧数 __field:highlight_new_follower_limit__。
 ---
 
 # 千川素材全景诊断

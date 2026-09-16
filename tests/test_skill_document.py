@@ -5,6 +5,7 @@ import yaml
 
 
 SKILL_PATH = Path(__file__).resolve().parents[1] / "SKILL.md"
+METADATA_PATH = Path(__file__).resolve().parents[1] / "metadata.yaml"
 
 
 def load_skill_document():
@@ -13,38 +14,49 @@ def load_skill_document():
     return yaml.safe_load(frontmatter), body
 
 
+def load_skill_form():
+    return yaml.safe_load(METADATA_PATH.read_text(encoding="utf-8"))["skill_form"]
+
+
 class SkillDocumentTests(unittest.TestCase):
     def test_pre_input_documents_conditional_highlight_rules_and_metrics(self):
         metadata, _ = load_skill_document()
         pre_input = metadata.get("metadata", {}).get("pre_input", "")
 
-        self.assertTrue(pre_input.startswith("请采集千川素材及相关诊断数据。"))
+        self.assertTrue(pre_input.startswith("请采集千川素材及相关诊断数据"))
         self.assertGreaterEqual(pre_input.count("\n"), 12)
         self.assertNotIn("<p>", pre_input)
         self.assertNotIn("data-pre-input-blank", pre_input)
-        self.assertIn("____", pre_input)
-        self.assertIn("授权店铺ID", pre_input)
-        self.assertIn("广告主ID", pre_input)
+        self.assertNotIn("____", pre_input)
+        self.assertIn("__field:shop_id__", pre_input)
+        self.assertIn("__field:advertiser_id__", pre_input)
         self.assertIn("时间范围", pre_input)
-        self.assertIn("素材筛选及排序条件", pre_input)
+        self.assertIn("素材筛选与排序", pre_input)
         self.assertIn("筛选“整体消耗”>=10000，再按“净成交ROI”降序", pre_input)
-        self.assertNotIn("排序指标是 ____（必填）", pre_input)
-        self.assertNotIn("排序方向是 ____（升序或降序）", pre_input)
-        self.assertIn("需要获取详情的素材数", pre_input)
+        self.assertIn("__field:detail_top_n__", pre_input)
         self.assertIn("是否同时生成高光帧图片", pre_input)
-        self.assertIn("默认否", pre_input)
-        self.assertIn("选择否时，以下全部留空", pre_input)
-        self.assertIn("选择是时，按需逐项填写", pre_input)
-        self.assertIn("封面帧是否保留", pre_input)
+        self.assertIn("__field:highlight_mode__", pre_input)
+        self.assertIn("封面是否保留", pre_input)
         for metric in (
             "整体点击次数", "整体流失数", "整体点赞次数", "整体评论次数", "整体转发次数", "整体新增粉丝数",
         ):
             self.assertIn(metric, pre_input)
-        self.assertIn("局部峰值/最高值", pre_input)
+        self.assertNotIn("局部峰值/最高值", pre_input)
         self.assertIn("帧数", pre_input)
-        self.assertLess(pre_input.index("授权店铺ID"), pre_input.index("素材筛选及排序条件"))
-        self.assertLess(pre_input.index("素材筛选及排序条件"), pre_input.index("是否同时生成高光帧图片"))
+        self.assertLess(pre_input.index("授权店铺 ID"), pre_input.index("素材筛选与排序"))
+        self.assertLess(pre_input.index("素材筛选与排序"), pre_input.index("是否同时生成高光帧图片"))
         self.assertNotIn("candidateTopN", pre_input)
+
+    def test_pre_input_references_every_typed_form_field_once(self):
+        metadata, _ = load_skill_document()
+        pre_input = metadata["metadata"]["pre_input"]
+        form = load_skill_form()
+        keys = [field["key"] for field in form]
+        references = __import__("re").findall(r"__field:([a-z0-9_]+)__", pre_input)
+
+        self.assertEqual(len(keys), 25)
+        self.assertEqual(set(references), set(keys))
+        self.assertEqual(len(references), len(keys))
 
     def test_skill_body_preserves_api_field_and_recovery_contract(self):
         _, body = load_skill_document()
