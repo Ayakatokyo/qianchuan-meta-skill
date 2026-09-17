@@ -2,15 +2,16 @@
 name: 千川素材全景诊断
 description: 适用于按店铺、广告主和日期范围分析千川素材，识别投放表现、内容结构与用户反馈；生成可审计的素材经营报告，并按需提取高光帧，为内容优化和经营决策提供依据。
 metadata:
-  argument_hint: 输入查询范围、可选的素材筛选/排序条件和详情数量；高光帧默认不生成，按下方规则选择是否保留封面及提取指标。
+  argument_hint: 依次选择报表授权店铺、该店铺下的投放广告主及同一投放主体的素材诊断授权账号，输入时间范围和详情素材数；可选配置素材筛选、排序与高光帧提取规则。
   pre_input: |
     请采集千川素材及相关诊断数据
-    授权店铺 ID：__field:shop_id__（必填，魔方授权店铺）
-    广告主 ID：__field:advertiser_id__（必填，店铺下的子账号）
+    千川授权店铺：__field:api_shop__（必填）
+    千川广告主（数字）：__field:advertiser_id__（必填，店铺下广告主ID）
+    千川广告主（邮箱）：__field:rpa_shop__（必填；请确认该邮箱账号与广告主ID为同一账号）
     时间范围：__field:date_range__
+    详情素材数：__field:top_n__（包含互动时序、人群、脚本和高光帧数据，默认10）
     素材筛选与排序：__field:material_filter_sort__（可选；例如筛选“整体消耗”>=10000，再按“净成交ROI”降序；排序指标和排序方向均可留空）。
-    详情素材数：__field:detail_top_n__（包含互动时序、人群、脚本和高光帧数据，默认10）
-    是否同时生成高光帧图片：__field:highlight_mode__ （如选择否，则可无视下方高光帧规则，选择是则反之）
+    是否同时生成高光帧图片：__field:highlight_mode__（选择否时无需填写下方高光帧规则）
     - 封面是否保留：__field:highlight_include_cover__
     - 整体点击次数：__field:highlight_click_enabled__；提取规则 __field:highlight_click_strategy__；帧数 __field:highlight_click_limit__。
     - 整体流失数：__field:highlight_loss_enabled__；提取规则 __field:highlight_loss_strategy__；帧数 __field:highlight_loss_limit__。
@@ -26,11 +27,11 @@ metadata:
 
 ## 输入
 
-自然语言入口从同一请求解析 `QuerySpec` 和 `HighlightSpec`；文件入口直接读取已保存的两份 JSON。解析成功后立即落盘并执行，缺少必填项或字段不合法时反馈具体错误。除用户明确要求预览、草稿或人工确认外，不等待二次确认。
+前置表单只提交店铺、广告主、RPA 授权账号、时间范围与 `top_n`：其中 `top_n` 必须写入 QuerySpec 的 `collection.targetTopN`，不能写成旧字段 `detail_top_n`；候选扩容数量由运行时决定，不能作为表单入参。自然语言入口据此解析 `QuerySpec`，仅在用户另行提出高光帧规则或文件入口提供时才解析 `HighlightSpec`。解析成功后立即落盘并执行，缺少必填项或字段不合法时反馈具体错误。除用户明确要求预览、草稿或人工确认外，不等待二次确认。
 
 ### 查询范围
 
-`shopId` 与 `advertiserId` 都必填且属于不同 ID 域：前者只用于报表连接器授权，后者只用于报表业务筛选。日期范围为闭区间，起止日期均使用 `YYYY-MM-DD`。字段和操作符只能来自 `config/asset-field-registry-v1.json`；维度和指标条件按 `AND` 处理。
+先通过 `api_shop` 选择报表店铺，再由 `api_advertiser` 按该店铺过滤广告主；二者构成同一投放主体。随后须选择同一投放主体的 `rpa_shop` 进行素材诊断。`api_shop.extra.shop_id`、`advertiser_id` 与 `rpa_shop.extra.shop_id` 分别属于 API 授权、报表业务和 RPA 授权三个 ID 域：前两者写入 QuerySpec 的 `scope.shopId` / `scope.advertiserId`，后者只作为 `--rpa-shop-id` 传给第二步。它们的 ID 格式可以不同，**不得比较是否相等**；RPA 阶段只核验所选账号仍在当前授权列表中。日期范围为闭区间，起止日期均使用 `YYYY-MM-DD`。字段和操作符只能来自 `config/asset-field-registry-v1.json`；维度和指标条件按 `AND` 处理。
 
 ### 指标筛选
 
@@ -102,7 +103,7 @@ python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" detail
 python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" schema
 python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" list-accounts
 python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" validate --params-file config/rpa-business-params.json
-python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" fetch --shop-id "<shop_id>" \
+python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" fetch --shop-id "<rpa_shop.extra.shop_id>" \
   --params-file config/rpa-business-params.json \
   --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD/rpa-result"
 ```
@@ -127,6 +128,7 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
   --execute-rpa \
+  --rpa-shop-id "<rpa_shop.extra.shop_id>" \
   --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD"
 
 # 单 skill 完整工作流入口（阶段一完成后暂停，等待第二次分析输入）
@@ -134,6 +136,7 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
   --query-spec /path/to/query-spec.json \
   --highlight-spec /path/to/highlight-spec.json \
   --execute-rpa \
+  --rpa-shop-id "<rpa_shop.extra.shop_id>" \
   --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD"
 
 # 阶段一取数、事实包构建和校验成功后，生成阶段一离线素材总览报告
@@ -162,7 +165,7 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
   --analysis-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD/analysis"
 ```
 
-`query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认同样只查询或复用候选工件，并写入 `run-receipt.json`；只有显式传入 `--execute-rpa` 才会解析唯一 RPA 授权账号，按候选排名执行受控波次、失败补位和恢复。每个成功详情素材的视频下载至运行目录的 `rpa/videos/`，并以相对路径、大小和 SHA-256 纳入 RPA 回执与事实包清单；高光帧仍只在提供 `HighlightSpec` 时抽取。
+`query` 只写入候选查询工件，不触发 RPA、视频下载、抽帧、AI 分析或报告生成。`run` 默认同样只查询或复用候选工件，并写入 `run-receipt.json`；显式传入 `--execute-rpa --rpa-shop-id <rpa_shop.extra.shop_id>` 后，才会先核验所选 ID 在当前 RPA 授权列表中，再按候选排名执行受控波次、失败补位和恢复。所选 ID 未授权时必须停止，不能改用其他账号，也不能以 API 报表店铺 ID 替代。每个成功详情素材的视频下载至运行目录的 `rpa/videos/`，并以相对路径、大小和 SHA-256 纳入 RPA 回执与事实包清单；高光帧仍只在提供 `HighlightSpec` 时抽取。
 
 执行 `run --execute-rpa` 前要向用户说明阶段顺序和主要耗时来源，并在 `query → RPA 详情任务与轮询 → 视频下载/可选抽帧 → 批量校验 → 事实包构建与校验 → render-overview` 各节点报告进度。详情任务与媒体后处理使用独立线程池：任一素材的详情结果返回并完成 CSV/JSON 持久化后，立即提交该素材的视频下载和可选抽帧，不等待当前详情波次的其他素材完成；其余详情轮询和后续补位可以与媒体后处理重叠。运行目录中已经出现 CSV、MP4 或 JPEG 只表示部分文件已落盘，不表示 RPA、事实包或阶段一已经完成；以进程完成回执和 `run-receipt.json` 各阶段终态为准。详情素材数、视频体积和高光帧规则决定前半段耗时，执行前可说明减少详情素材数或关闭高光帧的影响。
 

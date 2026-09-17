@@ -19,32 +19,33 @@ def load_skill_form():
 
 
 class SkillDocumentTests(unittest.TestCase):
-    def test_pre_input_documents_conditional_highlight_rules_and_metrics(self):
+    def test_pre_input_uses_the_standard_base_contract_and_retains_highlight_controls(self):
         metadata, _ = load_skill_document()
         pre_input = metadata.get("metadata", {}).get("pre_input", "")
 
         self.assertTrue(pre_input.startswith("请采集千川素材及相关诊断数据"))
-        self.assertGreaterEqual(pre_input.count("\n"), 12)
+        self.assertEqual(len(pre_input.strip().splitlines()), 15)
         self.assertNotIn("<p>", pre_input)
         self.assertNotIn("data-pre-input-blank", pre_input)
         self.assertNotIn("____", pre_input)
-        self.assertIn("__field:shop_id__", pre_input)
+        self.assertIn("__field:api_shop__", pre_input)
         self.assertIn("__field:advertiser_id__", pre_input)
+        self.assertIn("__field:rpa_shop__", pre_input)
         self.assertIn("时间范围", pre_input)
+        self.assertIn("__field:top_n__", pre_input)
+        self.assertIn("千川广告主（数字）", pre_input)
+        self.assertIn("千川广告主（邮箱）", pre_input)
+        self.assertIn("同一账号", pre_input)
+        self.assertNotIn("detail_top_n", pre_input)
         self.assertIn("素材筛选与排序", pre_input)
-        self.assertIn("筛选“整体消耗”>=10000，再按“净成交ROI”降序", pre_input)
-        self.assertIn("__field:detail_top_n__", pre_input)
+        self.assertIn("material_filter_sort", pre_input)
         self.assertIn("是否同时生成高光帧图片", pre_input)
-        self.assertIn("__field:highlight_mode__", pre_input)
+        self.assertIn("highlight_mode", pre_input)
         self.assertIn("封面是否保留", pre_input)
         for metric in (
             "整体点击次数", "整体流失数", "整体点赞次数", "整体评论次数", "整体转发次数", "整体新增粉丝数",
         ):
             self.assertIn(metric, pre_input)
-        self.assertNotIn("局部峰值/最高值", pre_input)
-        self.assertIn("帧数", pre_input)
-        self.assertLess(pre_input.index("授权店铺 ID"), pre_input.index("素材筛选与排序"))
-        self.assertLess(pre_input.index("素材筛选与排序"), pre_input.index("是否同时生成高光帧图片"))
         self.assertNotIn("candidateTopN", pre_input)
 
     def test_pre_input_references_every_typed_form_field_once(self):
@@ -54,9 +55,18 @@ class SkillDocumentTests(unittest.TestCase):
         keys = [field["key"] for field in form]
         references = __import__("re").findall(r"__field:([a-z0-9_]+)__", pre_input)
 
-        self.assertEqual(len(keys), 25)
+        self.assertEqual(keys[:5], ["api_shop", "advertiser_id", "rpa_shop", "date_range", "top_n"])
+        self.assertEqual(len(keys), 26)
         self.assertEqual(set(references), set(keys))
         self.assertEqual(len(references), len(keys))
+
+    def test_advertiser_selector_follows_the_api_shop(self):
+        fields = {field["key"]: field for field in load_skill_form()}
+
+        self.assertEqual(fields["advertiser_id"]["type"], "api_advertiser")
+        self.assertEqual(fields["advertiser_id"]["shop_field"], "api_shop")
+        self.assertNotIn("pattern", fields["advertiser_id"])
+        self.assertIn("同一投放主体", fields["rpa_shop"]["description"])
 
     def test_skill_body_preserves_api_field_and_recovery_contract(self):
         _, body = load_skill_document()

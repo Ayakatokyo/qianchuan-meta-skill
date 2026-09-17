@@ -1,5 +1,6 @@
 """Bounded, redacted adapter for Qianchuan material-diagnosis RPA."""
 
+import json
 import os
 from pathlib import Path
 import re
@@ -63,17 +64,42 @@ def redact_gateway_payload(value):
     return result
 
 
-def select_rpa_account(payload, platform):
+def _selected_rpa_shop_id(value):
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        extra = value.get("extra")
+        candidates = [
+            extra.get("shop_id") if isinstance(extra, dict) else None,
+            value.get("shop_id"), value.get("shopId"), value.get("id"),
+        ]
+    else:
+        text = str(value).strip()
+        if text.startswith("{"):
+            try:
+                return _selected_rpa_shop_id(json.loads(text))
+            except (TypeError, ValueError):
+                raise RpaAdapterError("rpa_shop must be a selected resource or a nonempty shop ID", "rpa_shop_invalid")
+        candidates = [text]
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    raise RpaAdapterError("rpa_shop must contain a shop ID", "rpa_shop_invalid")
+
+
+def select_rpa_account(payload, platform, *, rpa_shop_id=None):
     accounts = payload.get("data") if isinstance(payload, dict) else None
     if isinstance(accounts, dict):
         accounts = accounts.get("accounts") or accounts.get("list")
     if not isinstance(accounts, list):
         accounts = []
     matching = []
+    requested_shop_id = _selected_rpa_shop_id(rpa_shop_id)
     for item in accounts:
         if not isinstance(item, dict):
             continue
-        platform = item.get("platform")
+        item_platform = item.get("platform")
         account_id = str(
             item.get("accountId")
             or item.get("account_id")
@@ -82,10 +108,21 @@ def select_rpa_account(payload, platform):
             or item.get("shopId")
             or ""
         ).strip()
-        if account_id and (item.get("platform") in (None, "", platform)):
-            matching.append({"accountId": account_id, "platform": item.get("platform") or platform})
+        if account_id and item_platform in (None, "", platform):
+            matching.append({"accountId": account_id, "platform": item_platform or platform})
     if not matching:
         raise RpaAdapterError("rpa_account_unavailable: no authorized RPA account", "rpa_account_unavailable")
+    if requested_shop_id:
+        selected = next((item for item in matching if item["accountId"] == requested_shop_id), None)
+        if selected is None:
+            available = ", ".join(sorted({item["accountId"] for item in matching}))
+            raise RpaAdapterError(
+                "rpa_shop_not_authorized: selected RPA shop ID is not authorized for the current credentials"
+                + ("; available IDs: " + available if available else ""),
+                "rpa_shop_not_authorized",
+            )
+        selected["rpaShopId"] = selected["accountId"]
+        return selected
     unique = {(item["accountId"], item["platform"]) for item in matching}
     if len(unique) != 1:
         raise RpaAdapterError("rpa_account_ambiguous: multiple authorized RPA accounts", "rpa_account_ambiguous")
@@ -188,7 +225,7 @@ def fetch_connector_detail(*, environ=None, session=None):
     return matches[0]
 
 
-def list_rpa_accounts(*, environ=None, session=None):
+def list_rpa_accounts(*, rpa_shop_id=None, environ=None, session=None):
     context = runtime_context(environ)
     session = requests.Session() if session is None else session
     detail = fetch_connector_detail(environ=environ, session=session)
@@ -198,7 +235,9 @@ def list_rpa_accounts(*, environ=None, session=None):
         raise RpaAdapterError(str(exc)) from exc
     try:
         response = session.post(context["apiBase"] + "/adg/v1/agent/rpa/authorizations/query", json={"authorization": context["authorization"], "platform": platform}, headers={"Content-Type": "application/json"}, cookies={"YCSESSIONID": context["cookieSession"]}, timeout=30)
-        return select_rpa_account(_gateway_json(response, "list RPA accounts"), platform)
+        return select_rpa_account(
+            _gateway_json(response, "list RPA accounts"), platform, rpa_shop_id=rpa_shop_id
+        )
     except RpaAdapterError:
         raise
     except (requests.RequestException, ValueError) as exc:

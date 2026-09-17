@@ -28,19 +28,26 @@ market:
     - title: 已有数据继续分析
       prompt: "基于已有数据提炼优质素材共性，形成内容优化建议"
 skill_form:
-  - key: shop_id
-    type: input
-    label: 授权店铺 ID
-    description: 魔方授权店铺 ID；用于关联千川投放数据与素材诊断结果
-    placeholder: "请输入魔方授权店铺 ID"
+  - key: api_shop
+    type: api_shop
+    label: 千川授权店铺
+    description: 从千川 API 已授权店铺中选择；只用于第一步素材报表查询
+    application_id: OCEANENGINE
+    multiple: false
     required: true
   - key: advertiser_id
-    type: input
-    label: 广告主 ID
-    description: 用于千川报表业务筛选的广告主 ID，仅填写数字
-    placeholder: "请输入数字广告主 ID"
-    pattern: '^\d+$'
-    pattern_message: 广告主 ID 只能包含数字
+    type: api_advertiser
+    label: 千川广告主
+    description: 先选择报表授权店铺，再从该店铺的已授权广告主中选择；用于第一步素材报表查询
+    shop_field: api_shop
+    required: true
+  - key: rpa_shop
+    type: rpa_shop
+    label: 千川广告主
+    description: 请选择与广告主同一投放主体的千川 RPA 已授权账号；只用于第二步逐素材诊断，ID 格式不同，不直接比较
+    application_id: RPA_JULIANG_QC
+    value_format: both
+    multiple: false
     required: true
   - key: date_range
     type: daterange
@@ -51,14 +58,7 @@ skill_form:
     value_format: YYYY-MM-DD
     max_policy: t_plus_2
     required: true
-  - key: material_filter_sort
-    type: textarea
-    label: 筛选与排序条件
-    description: 可选；用自然语言描述指标阈值、排序字段和方向；不填写则保留连接器原始顺序
-    placeholder: "例如：整体消耗 >= 10000，再按净成交 ROI 降序"
-    required: false
-    rows: 3
-  - key: detail_top_n
+  - key: top_n
     type: number
     label: 详情素材数
     description: 需要获取互动时序、人群、脚本和可选高光帧详情的素材数量
@@ -68,6 +68,13 @@ skill_form:
     step: 1
     precision: 0
     addon_after: 条
+  - key: material_filter_sort
+    type: textarea
+    label: 筛选与排序条件
+    description: 可选；用自然语言描述指标阈值、排序字段和方向；不填写则保留连接器原始顺序
+    placeholder: "例如：整体消耗 >= 10000，再按净成交 ROI 降序"
+    required: false
+    rows: 3
   - key: highlight_mode
     type: select
     label: 是/否

@@ -660,7 +660,7 @@ class MetaSkillCliTests(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertIn(
-            "next_command=run --execute-rpa --config %s --output-dir %s" % (config_path, output_dir),
+            "next_command=run --execute-rpa --rpa-shop-id <RPA授权账号ID> --config %s --output-dir %s" % (config_path, output_dir),
             [call.args[0] for call in output.call_args_list],
         )
 

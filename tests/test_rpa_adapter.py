@@ -100,6 +100,26 @@ class RpaAdapterTests(unittest.TestCase):
         )
         self.assertEqual(legacy_account["rpaShopId"], "rpa-shop-1")
 
+    def test_selected_rpa_shop_must_be_in_current_authorization_list(self):
+        selected = rpa_adapter.select_rpa_account(
+            {
+                "data": [
+                    {"platform": "LIVE_PLATFORM", "accountId": "Krgt45EZVS"},
+                    {"platform": "LIVE_PLATFORM", "accountId": "408IGuUKaf"},
+                ]
+            },
+            "LIVE_PLATFORM",
+            rpa_shop_id={"id": "408IGuUKaf", "extra": {"shop_id": "408IGuUKaf"}},
+        )
+
+        self.assertEqual(selected["rpaShopId"], "408IGuUKaf")
+        with self.assertRaisesRegex(rpa_adapter.RpaAdapterError, "rpa_shop_not_authorized"):
+            rpa_adapter.select_rpa_account(
+                {"data": [{"platform": "LIVE_PLATFORM", "accountId": "Krgt45EZVS"}]},
+                "LIVE_PLATFORM",
+                rpa_shop_id="not-authorized",
+            )
+
     def test_builds_custom_period_without_reusing_shop_id_as_account_id(self):
         params = rpa_adapter.build_diagnosis_params("material-1", "2026-08-01", "2026-08-24")
 

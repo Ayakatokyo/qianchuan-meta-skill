@@ -340,6 +340,16 @@ def _rpa_options_from_args(args):
     return resolve_rpa_options({key: value for key, value in values.items() if value is not None})
 
 
+def _rpa_configuration_fingerprint(query_fingerprint, rpa_shop_id):
+    """Keep RPA artifacts scoped to the selected authorization account."""
+    payload = json.dumps(
+        {"queryFingerprint": query_fingerprint, "rpaShopId": str(rpa_shop_id)},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="Query Qianchuan assets, run authorized diagnosis, and build a redacted fact pack.")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -365,6 +375,7 @@ def build_parser():
     run.add_argument("--highlight-mode", choices=("on", "off"))
     run.add_argument("--output-dir", required=True)
     run.add_argument("--execute-rpa", action="store_true")
+    run.add_argument("--rpa-shop-id", help="rpa_shop 选择的素材诊断授权账号 ID")
     run.add_argument("--rpa-concurrency", type=int)
     run.add_argument("--material-timeout-sec", type=int)
     run.add_argument("--csv-max-bytes", type=int)
@@ -377,6 +388,7 @@ def build_parser():
     workflow.add_argument("--highlight-mode", choices=("on", "off"))
     workflow.add_argument("--output-dir", required=True)
     workflow.add_argument("--execute-rpa", action="store_true")
+    workflow.add_argument("--rpa-shop-id", help="rpa_shop 选择的素材诊断授权账号 ID")
     workflow.add_argument("--rpa-concurrency", type=int)
     workflow.add_argument("--material-timeout-sec", type=int)
     workflow.add_argument("--csv-max-bytes", type=int)
@@ -579,13 +591,17 @@ def main(argv=None):
             spec_args = "--config %s" % args.config if args.config else "--query-spec %s --highlight-spec %s" % (args.query_spec, args.highlight_spec)
             print("top_materials_json=%s" % (output_dir / "top_materials.json"))
             print("query_receipt=%s" % (output_dir / "query-receipt.json"))
-            print("next_command=run --execute-rpa %s --output-dir %s" % (spec_args, output_dir))
+            print("next_command=run --execute-rpa --rpa-shop-id <RPA授权账号ID> %s --output-dir %s" % (spec_args, output_dir))
             return 0
         options = _rpa_options_from_args(args)
-        _write_json(output_dir / "resolved-rpa-options.json", options)
         _set_run_phase(output_dir, "rpa_processing")
         receipt.start_stage("rpa")
-        account = list_rpa_accounts()
+        account = list_rpa_accounts(rpa_shop_id=args.rpa_shop_id)
+        rpa_shop_id = account.get("rpaShopId") or account["accountId"]
+        _write_json(output_dir / "resolved-rpa-options.json", {
+            **options,
+            "rpaShopId": rpa_shop_id,
+        })
 
         def fetch(entry, paths):
             return run_isolated(
@@ -607,10 +623,14 @@ def main(argv=None):
         outcome = run_rpa_pipeline(
             output_dir,
             top_materials,
-            configuration_fingerprint=fingerprint,
+            configuration_fingerprint=_rpa_configuration_fingerprint(fingerprint, rpa_shop_id),
             period=query["period"],
             options=options,
-            account={"accountId": account["accountId"], "platform": account["platform"]},
+            account={
+                "accountId": account["accountId"],
+                "rpaShopId": rpa_shop_id,
+                "platform": account["platform"],
+            },
             fetch_diagnosis=fetch,
             postprocess=build_postprocessor(policy if highlight_spec is not None else None, options),
             highlights_enabled=highlight_spec is not None,
