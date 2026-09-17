@@ -16,9 +16,6 @@ from rpa_adapter import DEFAULT_VIDEO_MAX_BYTES, DEFAULT_DOWNLOAD_DEADLINE_SEC, 
 DEFAULT_RPA_OPTIONS = {
     "rpaConcurrency": 3,
     "materialTimeoutSec": 600,
-    "csvWaitWindowSec": 120,
-    "recoveryAttempts": 2,
-    "recoveryBackoffSec": 2,
     "csvMaxBytes": 100 * 1024 * 1024,
     "videoMaxBytes": 1024 * 1024 * 1024,
     "downloadDeadlineSec": 600,
@@ -34,12 +31,10 @@ class RpaPipelineError(RuntimeError):
 def resolve_rpa_options(overrides=None):
     options = dict(DEFAULT_RPA_OPTIONS)
     options.update(overrides or {})
-    positive_integer_fields = ("rpaConcurrency", "materialTimeoutSec", "csvWaitWindowSec", "recoveryAttempts", "csvMaxBytes", "videoMaxBytes", "downloadDeadlineSec")
+    positive_integer_fields = ("rpaConcurrency", "materialTimeoutSec", "csvMaxBytes", "videoMaxBytes", "downloadDeadlineSec")
     for field in positive_integer_fields:
         if type(options.get(field)) is not int or options[field] <= 0:
             raise RpaPipelineError("RPA option %s must be a positive integer" % field, "invalid_rpa_options")
-    if not isinstance(options.get("recoveryBackoffSec"), (int, float)) or options["recoveryBackoffSec"] < 0:
-        raise RpaPipelineError("RPA option recoveryBackoffSec must be non-negative", "invalid_rpa_options")
     return options
 
 
@@ -416,27 +411,21 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
     def process_rpa(entry):
         started = time.monotonic()
         entry.update({"rpaStatus": "submitted", "status": "running", "failureReason": None})
-        entry["rpaRecoveryAttempts"] = []
         _write_json(artifact_path(paths["receipts"], entry["materialId"], ".json"), {
             "schemaVersion": 1,
             "materialId": entry["materialId"],
             "clientAttemptId": entry["materialId"],
             "state": "submitted",
         })
-        for attempt in range(options["recoveryAttempts"]):
-            try:
-                result = fetch_diagnosis(entry, paths)
-                records = _retain_records(entry, result, paths)
-                entry["timingsSec"]["rpa"] = time.monotonic() - started
-                return entry, records
-            except Exception as exc:
-                entry["rpaRecoveryAttempts"].append({"attempt": attempt + 1, "errorType": type(exc).__name__, "errorMessage": str(exc)})
-                if attempt + 1 < options["recoveryAttempts"]:
-                    time.sleep(min(options["csvWaitWindowSec"], options["recoveryBackoffSec"] * (2 ** attempt)))
-                    continue
-                _failure(entry, exc)
-                entry["timingsSec"]["rpa"] = time.monotonic() - started
-                return entry, None
+        try:
+            result = fetch_diagnosis(entry, paths)
+            records = _retain_records(entry, result, paths)
+            entry["timingsSec"]["rpa"] = time.monotonic() - started
+            return entry, records
+        except Exception as exc:
+            _failure(entry, exc)
+            entry["timingsSec"]["rpa"] = time.monotonic() - started
+            return entry, None
 
     def complete_postprocess(future, entry):
         try:

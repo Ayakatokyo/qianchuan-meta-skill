@@ -47,7 +47,7 @@ class RpaPipelineTests(unittest.TestCase):
                 },
                 configuration_fingerprint="fingerprint",
                 period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
-                options={"rpaConcurrency": 2, "recoveryAttempts": 1},
+                options={"rpaConcurrency": 2},
                 fetch_diagnosis=fetch,
                 postprocess=postprocess,
             )
@@ -91,7 +91,7 @@ class RpaPipelineTests(unittest.TestCase):
                 {"materials": [candidate("m-1", 1), candidate("m-2", 2)], "collection": {"candidateTopN": 2, "targetTopN": 1}},
                 configuration_fingerprint="fingerprint",
                 period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
-                options={"rpaConcurrency": 1, "recoveryAttempts": 1},
+                options={"rpaConcurrency": 1},
                 fetch_diagnosis=fetch,
                 postprocess=self._video_postprocess,
             )
@@ -101,6 +101,39 @@ class RpaPipelineTests(unittest.TestCase):
         self.assertEqual(calls, ["m-1", "m-2"])
         self.assertTrue(result["succeeded"])
         self.assertEqual([item["materialId"] for item in ready["materials"]], ["m-2"])
+
+    def test_rpa_failure_is_not_retried(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def fetch(entry, _paths):
+                calls.append(entry["materialId"])
+                if len(calls) == 1:
+                    raise RpaPipelineError(
+                        "rpa_csv_artifact_unavailable",
+                        "rpa_csv_artifact_unavailable",
+                    )
+                return {
+                    "records": [{"materialId": entry["materialId"]}],
+                    "csvPath": self._csv(root),
+                    "gatewayReceipt": {},
+                }
+
+            result = run_rpa_pipeline(
+                root,
+                {
+                    "materials": [candidate("m-1", 1)],
+                    "collection": {"candidateTopN": 1, "targetTopN": 1},
+                },
+                configuration_fingerprint="fingerprint",
+                period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
+                fetch_diagnosis=fetch,
+                postprocess=self._video_postprocess,
+            )
+
+        self.assertEqual(calls, ["m-1"])
+        self.assertFalse(result["succeeded"])
 
     def test_never_submits_or_returns_more_than_target_top_n(self):
         calls = []
@@ -114,7 +147,7 @@ class RpaPipelineTests(unittest.TestCase):
                 {"materials": [candidate("m-1", 1), candidate("m-2", 2), candidate("m-3", 3)], "collection": {"candidateTopN": 3, "targetTopN": 1}},
                 configuration_fingerprint="fingerprint",
                 period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
-                options={"rpaConcurrency": 3, "recoveryAttempts": 1},
+                options={"rpaConcurrency": 3},
                 fetch_diagnosis=fetch,
                 postprocess=self._video_postprocess,
             )

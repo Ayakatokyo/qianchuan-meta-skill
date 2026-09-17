@@ -333,9 +333,6 @@ def _rpa_options_from_args(args):
     values = {
         "rpaConcurrency": args.rpa_concurrency,
         "materialTimeoutSec": args.material_timeout_sec,
-        "csvWaitWindowSec": args.csv_wait_window_sec,
-        "recoveryAttempts": args.recovery_attempts,
-        "recoveryBackoffSec": args.recovery_backoff_sec,
         "csvMaxBytes": args.csv_max_bytes,
         "videoMaxBytes": args.video_max_bytes,
         "downloadDeadlineSec": args.download_deadline_sec,
@@ -370,9 +367,6 @@ def build_parser():
     run.add_argument("--execute-rpa", action="store_true")
     run.add_argument("--rpa-concurrency", type=int)
     run.add_argument("--material-timeout-sec", type=int)
-    run.add_argument("--csv-wait-window-sec", type=int)
-    run.add_argument("--recovery-attempts", type=int)
-    run.add_argument("--recovery-backoff-sec", type=float)
     run.add_argument("--csv-max-bytes", type=int)
     run.add_argument("--video-max-bytes", type=int)
     run.add_argument("--download-deadline-sec", type=int)
@@ -385,9 +379,6 @@ def build_parser():
     workflow.add_argument("--execute-rpa", action="store_true")
     workflow.add_argument("--rpa-concurrency", type=int)
     workflow.add_argument("--material-timeout-sec", type=int)
-    workflow.add_argument("--csv-wait-window-sec", type=int)
-    workflow.add_argument("--recovery-attempts", type=int)
-    workflow.add_argument("--recovery-backoff-sec", type=float)
     workflow.add_argument("--csv-max-bytes", type=int)
     workflow.add_argument("--video-max-bytes", type=int)
     workflow.add_argument("--download-deadline-sec", type=int)
