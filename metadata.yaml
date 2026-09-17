@@ -1,9 +1,6 @@
-short-description: "采集并诊断千川素材，生成含人群、脚本、互动时序与可选高光帧的阶段化报告"
+short-description: "分析千川素材的投放表现、人群、脚本与互动节奏，生成阶段化内容经营报告"
 tags:
   - 千川
-  - 短视频素材
-  - 素材诊断
-  - 高光帧
 compatibility:
   - data-analysis
   - python
@@ -16,29 +13,25 @@ requires:
     - YCSESSIONID
 market:
   title: "千川素材全景诊断"
-  summary: "按店铺、广告主和日期范围筛选千川素材，执行受控详情诊断，生成事实包、阶段一离线总览和可选高光帧资产，并在用户提出问题后继续商业分析。"
+  summary: "按店铺、广告主和日期范围分析千川素材，洞察投放表现、人群特征、脚本结构与互动节奏，沉淀可复用的优质内容资产，并支持进一步形成创作优化建议。"
   category:
     key: short_video_content
     label: 短视频内容
   badges:
     - label: 千川
       tone: blue
-    - label: 素材诊断
-      tone: green
-    - label: 高光帧
-      tone: orange
   examples:
     - title: 千川素材诊断
-      prompt: "按店铺和日期范围采集千川素材并生成阶段一诊断报告"
+      prompt: "洞察指定店铺目标周期内的千川素材表现，输出内容经营诊断"
     - title: 高光帧分析
-      prompt: "采集千川素材详情并生成点击和互动高光帧"
+      prompt: "识别千川素材中的点击与互动高光时刻，辅助优化内容节奏"
     - title: 已有数据继续分析
-      prompt: "基于已有千川事实包生成素材总览，并等待后续商业分析问题"
+      prompt: "基于已有数据提炼优质素材共性，形成内容优化建议"
 skill_form:
   - key: shop_id
     type: input
     label: 授权店铺 ID
-    description: 魔方授权店铺 ID；用于千川报表连接器与详情 RPA
+    description: 魔方授权店铺 ID；用于关联千川投放数据与素材诊断结果
     placeholder: "请输入魔方授权店铺 ID"
     required: true
   - key: advertiser_id
