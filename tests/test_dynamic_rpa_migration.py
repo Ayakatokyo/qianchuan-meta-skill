@@ -103,6 +103,22 @@ class DynamicRpaMigrationTests(unittest.TestCase):
         self.assertEqual(runtime["session_id"], "legacy-session")
         self.assertEqual(runtime["cookies"], {"YCSESSIONID": "legacy-session"})
 
+    def test_generated_client_uses_authorization_cookie_when_only_agent_session_exists(self):
+        client_path = ROOT / "scripts" / "rpa_dynamic_client.py"
+        spec = importlib.util.spec_from_file_location("qian_dynamic_auth_fallback_client", client_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with mock.patch.dict(module.os.environ, {
+            "ENV_BACKEND_HOST": "https://gateway.test",
+            "YUCE_AUTHORIZATION": "authorization",
+            "YUCE_SESSION_ID": "agent-session",
+        }, clear=True):
+            runtime = module.runtime_config(require_session=True)
+
+        self.assertEqual(runtime["session_id"], "agent-session")
+        self.assertEqual(runtime["cookies"], {"YCSESSIONID": "authorization"})
+
     def test_account_lookup_uses_live_connector_platform(self):
         session = RoutingSession()
         account = rpa_adapter.list_rpa_accounts(

@@ -61,7 +61,9 @@ def runtime_config(require_session: bool = False) -> dict[str, Any]:
     if missing:
         raise ContractError("缺少运行时环境变量：" + ", ".join(missing))
     authorization = os.environ["YUCE_AUTHORIZATION"]
-    cookie_session = os.environ.get("YCSESSIONID") or session_id or authorization
+    # YUCE_SESSION_ID identifies the agent run; it is not a gateway session
+    # cookie.  Keep the CLI client aligned with the RPA and report clients.
+    cookie_session = os.environ.get("YCSESSIONID") or authorization
     return {
         "api_base": os.environ["ENV_BACKEND_HOST"].rstrip("/"),
         "authorization": authorization,
