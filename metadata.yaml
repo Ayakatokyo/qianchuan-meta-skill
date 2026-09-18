@@ -1,4 +1,4 @@
-short-description: "分析千川素材的投放表现、人群、脚本与互动节奏，生成阶段化内容经营报告"
+short-description: "采集千川素材的投放、人群、脚本与互动事实，形成支持自定义分析的数据工作台"
 tags:
   - 千川
 compatibility:
@@ -12,8 +12,8 @@ requires:
     - YUCE_SESSION_ID
     - YCSESSIONID
 market:
-  title: "千川素材全景诊断"
-  summary: "按店铺、广告主和日期范围分析千川素材，洞察投放表现、人群特征、脚本结构与互动节奏，沉淀可复用的优质内容资产，并支持进一步形成创作优化建议。"
+  title: "千川素材数据工作台"
+  summary: "按店铺、广告主和日期范围采集千川素材及诊断事实，沉淀可审计的数据资产，支持客户后续自定义分析与内容经营。"
   category:
     key: short_video_content
     label: 短视频内容
@@ -21,10 +21,10 @@ market:
     - label: 千川
       tone: blue
   examples:
-    - title: 千川素材诊断
-      prompt: "洞察指定店铺目标周期内的千川素材表现，输出内容经营诊断"
-    - title: 高光帧分析
-      prompt: "识别千川素材中的点击与互动高光时刻，辅助优化内容节奏"
+    - title: 千川素材数据采集
+      prompt: "采集指定店铺目标周期内的千川素材、投放表现和详情事实，形成可审计数据工作台"
+    - title: 高光帧数据提取
+      prompt: "提取千川素材中的点击与互动高光时刻，为后续自定义分析提供证据"
     - title: 已有数据继续分析
       prompt: "基于已有数据提炼优质素材共性，形成内容优化建议"
 skill_form:
