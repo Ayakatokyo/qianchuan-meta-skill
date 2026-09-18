@@ -210,7 +210,7 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
   --analysis-request /path/to/analysis-request.json
 ```
 
-阶段二长任务可安全重试：入口会先检查分析配置，`prepare-analysis` 会复用同一事实包且未变化时的成功校验回执；事实包、manifest 或来源文件变化时会自动失效并重新校验。超时后优先读取 `run-receipt.json`、`analysis/analysis-receipt.json` 和已生成的 `analysis-input.json`，不要重新执行查询或 RPA。
+同一运行目录可以并行承载多个阶段二问题。每次 `continue-analysis` 或 `prepare-analysis` 未指定 `--output-dir` 时都会生成并返回唯一 `analysisId`，并将输入、回执、模型结果和报告写入 `analysis/<analysisId>/`；后续 `receive-analysis-result`、`verify-analysis` 应携带同一 `--analysis-id`。不同 ID 不会覆盖彼此的证据边界；阶段一事实包保持只读，不重新查询或 RPA。
 
 分析请求文件使用上述外层对象；阶段二由用户继续输入触发，当前对话模型先把自然语言标准化为 `FactRetrievalSpec` 或 `AnalysisSpec`，本地脚本只接受并校验对应嵌套对象。AnalysisSpec 必须声明一个或多个 `sections`（`material_leaderboard`、`audience`、`scripts`、`highlight_frames`）、素材 ID/rank 选择、目标/问题、字段与聚合、分组比较、显式派生计算、证据策略和输出格式。
 
@@ -224,7 +224,8 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
 
 ```bash
 uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/scripts/run_meta_skill.py" receive-analysis-result \
-  --run-dir /path/to/completed-run --analysis-result /path/to/analysis-result.json
+  --run-dir /path/to/completed-run --analysis-result /path/to/analysis-result.json \
+  --analysis-id "<analysisId>"
 ```
 
 当前运行时没有本地模型调用通道；`receive-analysis-result` 只负责接收对话模型交回的 JSON、执行离线证据/哈希校验并在成功后落盘报告，不会伪造模型调用，模型不得伪造调用已发生。缺失或非法 JSON 保持 `awaiting_model`，不生成成功报告；校验失败保持 `analysis_failed`，也不生成成功报告。

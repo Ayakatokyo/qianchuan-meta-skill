@@ -10,6 +10,7 @@ import os
 from pathlib import Path, PurePosixPath
 import tempfile
 from typing import Any
+from uuid import uuid4
 
 from fact_pack import file_hash_and_size, verify_fact_pack
 
@@ -1170,10 +1171,18 @@ def _fact_pack_fingerprint(run_dir: Path, fact_pack_dir: Path) -> str:
     return hashlib.sha256(json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None = None) -> dict[str, Any]:
+def analysis_context_dir(run_dir: Path, analysis_id: str) -> Path:
+    """Return one run-local phase-two context, rejecting path traversal."""
+    if not isinstance(analysis_id, str) or not analysis_id or not analysis_id.replace("-", "").isalnum():
+        raise AnalysisError("analysis_id must be a nonempty alphanumeric or hyphenated identifier")
+    return Path(run_dir).resolve() / "analysis" / analysis_id
+
+
+def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None = None, analysis_id: str | None = None) -> dict[str, Any]:
     run_dir = Path(run_dir).resolve()
     fact_pack_dir = run_dir / "fact-pack"
-    output_dir = Path(output_dir).resolve() if output_dir else run_dir / "analysis"
+    analysis_id = analysis_id or uuid4().hex
+    output_dir = Path(output_dir).resolve() if output_dir else analysis_context_dir(run_dir, analysis_id)
     output_dir.mkdir(parents=True, exist_ok=True)
     request = _read_json(Path(request_path), "analysis request")
     if not isinstance(request, dict):
@@ -1256,6 +1265,7 @@ def prepare_analysis(run_dir: Path, request_path: Path, output_dir: Path | None 
     status = "awaiting_model_with_missing_data" if evidence["missingItems"] else "awaiting_model"
     receipt = {
         "schemaVersion": 1,
+        "analysisId": analysis_id,
         "runId": run_dir.name,
         "stage": "analysis_prepared",
         "factPackFingerprint": fact_pack_fingerprint,
@@ -1523,10 +1533,10 @@ def _mark_model_awaiting(analysis_dir: Path, error: str, error_detail: dict[str,
     return {"status": "awaiting_model", "errors": errors}
 
 
-def receive_analysis_result(run_dir: Path, result_path: Path, analysis_dir: Path | None = None) -> dict[str, Any]:
+def receive_analysis_result(run_dir: Path, result_path: Path, analysis_dir: Path | None = None, analysis_id: str | None = None) -> dict[str, Any]:
     """Receive a model-produced JSON result, then run the offline verifier."""
     run_dir = Path(run_dir).resolve()
-    analysis_dir = Path(analysis_dir).resolve() if analysis_dir else run_dir / "analysis"
+    analysis_dir = Path(analysis_dir).resolve() if analysis_dir else (analysis_context_dir(run_dir, analysis_id) if analysis_id else run_dir / "analysis")
     result_path = Path(result_path)
     if not result_path.is_file():
         return _mark_model_awaiting(analysis_dir, "analysis result is missing; model handoff is incomplete")
@@ -1658,9 +1668,9 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
     _write_text(output_dir / "report.md", "\n".join(lines))
 
 
-def verify_analysis(run_dir: Path, analysis_dir: Path | None = None) -> dict[str, Any]:
+def verify_analysis(run_dir: Path, analysis_dir: Path | None = None, analysis_id: str | None = None) -> dict[str, Any]:
     run_dir = Path(run_dir).resolve()
-    analysis_dir = Path(analysis_dir).resolve() if analysis_dir else run_dir / "analysis"
+    analysis_dir = Path(analysis_dir).resolve() if analysis_dir else (analysis_context_dir(run_dir, analysis_id) if analysis_id else run_dir / "analysis")
     receipt_path = analysis_dir / "analysis-receipt.json"
     try:
         receipt = _read_json(receipt_path, "analysis receipt")

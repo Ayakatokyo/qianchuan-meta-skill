@@ -135,6 +135,27 @@ def analysis_fact_pack(root):
     return fact_dir
 
 
+class AnalysisContextIsolationTests(unittest.TestCase):
+    def test_default_phase_two_contexts_are_distinct_for_one_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            request = {
+                "stage": "analysis", "runId": root.name,
+                "factPackManifestSha256": hashlib.sha256((fact_dir / "manifest.json").read_bytes()).hexdigest(),
+                "sections": ["material_leaderboard"], "materialScope": {"type": "top_n", "value": 1},
+                "requestText": "比较素材", "analysisSpec": spec("material_leaderboard"),
+            }
+            request_path = root / "request.json"
+            request_path.write_text(json.dumps(request), encoding="utf-8")
+            with patch("analysis.verify_fact_pack", return_value={"status": "succeeded", "errors": []}):
+                first = prepare_analysis(root, request_path)
+                second = prepare_analysis(root, request_path)
+            self.assertNotEqual(first["analysisId"], second["analysisId"])
+            self.assertTrue((root / "analysis" / first["analysisId"] / "analysis-input.json").is_file())
+            self.assertTrue((root / "analysis" / second["analysisId"] / "analysis-input.json").is_file())
+
+
 class AnalysisSpecTests(unittest.TestCase):
     def test_accepts_versioned_outer_request_and_rejects_mixed_shapes_with_repair_metadata(self):
         registry = load_analysis_registry(REGISTRY_PATH)

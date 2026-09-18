@@ -220,7 +220,7 @@ def _load_handoff(run_dir):
     return handoff
 
 
-def continue_analysis(run_dir, analysis_request, output_dir=None):
+def continue_analysis(run_dir, analysis_request, output_dir=None, analysis_id=None):
     """Resume stage two without invoking query, RPA, or fact-pack collection."""
     from analysis import validate_analysis_handoff
 
@@ -247,7 +247,7 @@ def continue_analysis(run_dir, analysis_request, output_dir=None):
     with tempfile.TemporaryDirectory() as temp_dir:
         normalized_request = Path(temp_dir) / "analysis-request.json"
         _write_json(normalized_request, validated)
-        result = prepare_analysis(run_dir, normalized_request, Path(output_dir) if output_dir else None)
+        result = prepare_analysis(run_dir, normalized_request, Path(output_dir) if output_dir else None, analysis_id)
     if "factRetrievalSpec" in validated:
         _set_run_phase(
             run_dir,
@@ -256,7 +256,8 @@ def continue_analysis(run_dir, analysis_request, output_dir=None):
             retrievalGoal=validated["factRetrievalSpec"].get("retrievalGoal"),
         )
     phase = "analysis_prepared" if result.get("status", "").startswith("awaiting_model") else "analysis_failed"
-    _set_run_phase(run_dir, phase, analysisReceipt=str((Path(output_dir) if output_dir else run_dir / "analysis") / "analysis-receipt.json"))
+    context = Path(output_dir) if output_dir else run_dir / "analysis" / result["analysisId"]
+    _set_run_phase(run_dir, phase, analysisReceipt=str(context / "analysis-receipt.json"))
     return result
 
 
@@ -412,17 +413,21 @@ def build_parser():
     prepare_analysis_parser.add_argument("--run-dir", required=True)
     prepare_analysis_parser.add_argument("--analysis-request", required=True)
     prepare_analysis_parser.add_argument("--output-dir")
+    prepare_analysis_parser.add_argument("--analysis-id")
     verify_analysis_parser = commands.add_parser("verify-analysis", help="verify a model result and render the standard analysis report offline")
     verify_analysis_parser.add_argument("--run-dir", required=True)
     verify_analysis_parser.add_argument("--analysis-dir")
+    verify_analysis_parser.add_argument("--analysis-id")
     continue_analysis_parser = commands.add_parser("continue-analysis", help="resume commercial analysis from a fact-pack handoff")
     continue_analysis_parser.add_argument("--run-dir", required=True)
     continue_analysis_parser.add_argument("--analysis-request", required=True)
     continue_analysis_parser.add_argument("--output-dir")
+    continue_analysis_parser.add_argument("--analysis-id")
     receive_analysis_parser = commands.add_parser("receive-analysis-result", help="receive and verify a model-produced analysis result")
     receive_analysis_parser.add_argument("--run-dir", required=True)
     receive_analysis_parser.add_argument("--analysis-result", required=True)
     receive_analysis_parser.add_argument("--analysis-dir")
+    receive_analysis_parser.add_argument("--analysis-id")
     return parser
 
 
@@ -453,7 +458,8 @@ def main(argv=None):
         if args.command == "continue-analysis":
             try:
                 _ensure_analysis_assets()
-                result = continue_analysis(Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
+                continue_args = (Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
+                result = continue_analysis(*continue_args, args.analysis_id) if args.analysis_id else continue_analysis(*continue_args)
             except (MetaSkillError, AnalysisError) as exc:
                 try:
                     request_payload = _read_json(Path(args.analysis_request), "analysis request")
@@ -472,11 +478,8 @@ def main(argv=None):
         if args.command == "receive-analysis-result":
             _set_run_phase(Path(args.run_dir), "analysis_verifying", progress={"completed": 0, "total": 1}, currentObject="analysis-result.json")
             try:
-                result = receive_analysis_result(
-                    Path(args.run_dir),
-                    Path(args.analysis_result),
-                    Path(args.analysis_dir) if args.analysis_dir else None,
-                )
+                receive_args = (Path(args.run_dir), Path(args.analysis_result), Path(args.analysis_dir) if args.analysis_dir else None)
+                result = receive_analysis_result(*receive_args, args.analysis_id) if args.analysis_id else receive_analysis_result(*receive_args)
             except (MetaSkillError, AnalysisError) as exc:
                 _set_run_phase(Path(args.run_dir), "analysis_failed", error=str(exc))
                 raise
@@ -509,7 +512,8 @@ def main(argv=None):
             _ensure_analysis_assets()
             _set_run_phase(Path(args.run_dir), "analysis_preparing", progress={"completed": 0, "total": 1}, currentObject="analysis-input.json")
             try:
-                result = prepare_analysis(Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
+                prepare_args = (Path(args.run_dir), Path(args.analysis_request), Path(args.output_dir) if args.output_dir else None)
+                result = prepare_analysis(*prepare_args, args.analysis_id) if args.analysis_id else prepare_analysis(*prepare_args)
             except (MetaSkillError, AnalysisError) as exc:
                 _set_run_phase(Path(args.run_dir), "analysis_failed", error=str(exc))
                 raise
@@ -519,13 +523,14 @@ def main(argv=None):
                 _set_run_phase(
                     Path(args.run_dir),
                     "analysis_prepared",
-                    analysisReceipt=str((Path(args.output_dir) if args.output_dir else Path(args.run_dir) / "analysis") / "analysis-receipt.json"),
+                    analysisReceipt=str((Path(args.output_dir) if args.output_dir else Path(args.run_dir) / "analysis" / result.get("analysisId", "legacy")) / "analysis-receipt.json"),
                 )
             print(json.dumps(result, ensure_ascii=False))
             return 0
         if args.command == "verify-analysis":
             _set_run_phase(Path(args.run_dir), "analysis_verifying", progress={"completed": 0, "total": 1}, currentObject="analysis-result.json")
-            result = verify_analysis(Path(args.run_dir), Path(args.analysis_dir) if args.analysis_dir else None)
+            verify_args = (Path(args.run_dir), Path(args.analysis_dir) if args.analysis_dir else None)
+            result = verify_analysis(*verify_args, args.analysis_id) if args.analysis_id else verify_analysis(*verify_args)
             if result.get("status") == "succeeded":
                 _set_run_phase(Path(args.run_dir), "analysis_verifying", progress={"completed": 1, "total": 1}, currentObject="analysis-result.json", phaseComplete=True)
                 _set_run_phase(Path(args.run_dir), "analysis_verified", lastSuccessfulPhase="analysis_verified")
