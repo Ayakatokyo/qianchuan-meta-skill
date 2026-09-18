@@ -37,8 +37,9 @@ skill_form:
     required: true
   - key: advertiser_id
     type: api_advertiser
-    label: 千川广告主
+    label: 千川广告主（ID）
     description: 先选择报表授权店铺，再从该店铺的已授权广告主中选择；用于第一步素材报表查询
+    application_id: OCEANENGINE
     shop_field: api_shop
     required: true
   - key: rpa_shop

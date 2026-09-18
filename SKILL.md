@@ -6,7 +6,7 @@ metadata:
   pre_input: |
     请采集千川素材及相关诊断数据
     千川授权店铺：__field:api_shop__（必填）
-    千川广告主（数字）：__field:advertiser_id__（必填，店铺下广告主ID）
+    千川广告主（ID）：__field:advertiser_id__（必填，店铺下广告主 ID）
     千川广告主（邮箱）：__field:rpa_shop__（必填；请确认该邮箱账号与广告主ID为同一账号）
     时间范围：__field:date_range__
     详情素材数：__field:top_n__（包含互动时序、人群、脚本和高光帧数据，默认10）

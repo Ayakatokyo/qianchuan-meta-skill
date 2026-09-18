@@ -33,7 +33,8 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("__field:rpa_shop__", pre_input)
         self.assertIn("时间范围", pre_input)
         self.assertIn("__field:top_n__", pre_input)
-        self.assertIn("千川广告主（数字）", pre_input)
+        self.assertIn("千川广告主（ID）", pre_input)
+        self.assertNotIn("千川广告主（数字）", pre_input)
         self.assertIn("千川广告主（邮箱）", pre_input)
         self.assertIn("同一账号", pre_input)
         self.assertNotIn("detail_top_n", pre_input)
@@ -64,6 +65,8 @@ class SkillDocumentTests(unittest.TestCase):
         fields = {field["key"]: field for field in load_skill_form()}
 
         self.assertEqual(fields["advertiser_id"]["type"], "api_advertiser")
+        self.assertEqual(fields["advertiser_id"]["label"], "千川广告主（ID）")
+        self.assertEqual(fields["advertiser_id"]["application_id"], "OCEANENGINE")
         self.assertEqual(fields["advertiser_id"]["shop_field"], "api_shop")
         self.assertNotIn("pattern", fields["advertiser_id"])
         self.assertIn("同一投放主体", fields["rpa_shop"]["description"])
