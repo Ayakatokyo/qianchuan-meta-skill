@@ -284,6 +284,9 @@ class OverviewProjectionTests(unittest.TestCase):
             self.assertEqual(io_cache.read_count(video), 1)
             copied = next(output_dir.glob("assets/single-material/videos/*.mp4"))
             self.assertEqual(copied.read_bytes(), b"fixture-video")
+            rendered_video = model["singleMaterialOverview"]["materials"][0]["highlights"]["video"]
+            self.assertEqual(rendered_video["status"], "available")
+            self.assertEqual(rendered_video["path"], copied.relative_to(output_dir).as_posix())
 
     def test_build_overview_projects_all_source_rows_with_verified_field_labels(self):
         with tempfile.TemporaryDirectory() as temp_dir:

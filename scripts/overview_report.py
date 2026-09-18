@@ -2191,6 +2191,7 @@ def _copy_single_material_assets(model, run_dir, output_dir, io_cache=None, copi
         except (OSError, ValueError) as exc:
             raise OverviewReportError("single-material preview asset hash or size mismatch") from exc
         projected = {
+            **({"status": artifact["status"]} if "status" in artifact else {}),
             "path": (Path("assets") / folder / destination.name).as_posix(),
             "sha256": actual_hash,
             "sizeBytes": actual_size,
