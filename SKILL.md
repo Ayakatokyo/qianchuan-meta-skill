@@ -232,7 +232,11 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
 
 `prepare-analysis` 只允许读取已通过 `verify-fact-pack` 的完整事实包，并写入 `analysis-request.json`、`analysis-spec.json`、`analysis-input.json`、`analysis-receipt.json`。输入只包含声明字段和选择范围的切片；每个来源保留 manifest/sourceRef/哈希。`analysis-input.json` 是模型交接边界，模型应返回带 `contractVersion=2` 的 `analysis-result.json`；每条 claim 必须带 `claimType`、`section`、`priority`、`evidenceRefs`、`confidence`，可选 businessImplication，计算另带 formula/inputs。事实包正文按素材榜单、人群、脚本、高光帧固定分区；人群结论只能表达相关性，脚本必须引用逐字稿原文，高光帧视觉观察必须标记为 AI 推断并引用 JPEG artifact。历史结果缺少 section/priority 时按来源路径兼容归类，无法唯一归类的进入 synthesis。
 
-`verify-analysis` 完全离线校验结果契约、事实包、证据路径与哈希，并生成 `report.json`、`report.md`。报告固定按“核心商业结论、优先行动建议、素材榜单分析、人群分析、脚本分析、高光帧分析、跨分区综合洞察、数据限制与下一步、附录 A：证据索引、附录 B：结论审计”输出；正文只展示 `[E1]` 等短证据标记，confidence、完整来源路径、公式和归类方式仅保留在 JSON 与审计附录，并保留 `claimsByType` 兼容字段。缺少模型结果、query-only、事实包不完整、请求字段未知、素材越权、缺失类别或未声明计算时，只能保持 `blocked`/`awaiting_model`/`failed`/`incomplete`，禁止声称商业分析完成。任何证据缺失、脚本 `missing|failed` 或无高光帧都不会被推断为零或成功事实。当前 Markdown 为无外部依赖的唯一渲染格式；HTML/PDF 导出属于后续可选扩展，本次链路不依赖也不声称已生成。
+`verify-analysis` 完全离线校验结果契约、事实包、证据路径与哈希，并生成 `report.json`、`report.md`。Markdown 保留“核心商业结论、优先行动建议、素材榜单分析、人群分析、脚本分析、高光帧分析、跨分区综合洞察、数据限制与下一步、附录 A：证据索引、附录 B：结论审计”的稳定业务顺序，作为无外部依赖的兜底交付；HTML/PDF 的布局、组件和图表类型不固定，可按用户问题自由设计。正文只展示 `[依据1]` 等短证据标记，confidence、完整来源路径、公式和归类方式仅保留在 JSON 与审计附录，并保留 `claimsByType` 兼容字段。缺少模型结果、query-only、事实包不完整、请求字段未知、素材越权、缺失类别或未声明计算时，只能保持 `blocked`/`awaiting_model`/`failed`/`incomplete`，禁止声称商业分析完成。任何证据缺失、脚本 `missing|failed` 或无高光帧都不会被推断为零或成功事实。
+
+第二阶段展示遵循 `analysis-input.json.reportPresentationGuidance` 与 `report.json.presentationGuidance`，但这些是非阻断式呈现建议，不新增模型轮次，也不因图表数量、样式或个别字段无中文标签而判失败。证据索引应直接展示素材名称或榜单位置、业务字段名称和真实数值；结论审计除依据编号外还应展示能核对该结论的真实数据参考。`report.json.evidenceIndex[].dataPreview` 和 `chartCandidates` 提供已绑定事实的展示数据；HTML 报告应优先据此为证据索引和结论审计选择合适的可视化，数据不可比较时明确写出缺口，不拼凑图表。技术路径、哈希和原始字段只放在折叠追溯区，不作为用户侧主要内容。
+
+用户要求 HTML 时，先一次性确定信息架构、所需数据、组件和文件清单，再集中生成完整交付物；仅在出现明确校验失败或用户反馈后局部修改。不得把“先写入口、再反复补 JS/CSS/manifest”作为默认工作流，也不得为了避免修改而固定报告版式。
 
 独立抽帧仅在已有本地视频与互动曲线时执行，不会发起报表查询；`run` 内部会自动准备这些输入：
 

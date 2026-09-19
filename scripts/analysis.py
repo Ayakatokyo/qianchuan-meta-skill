@@ -121,6 +121,22 @@ _CLAIM_TYPE_LABELS = {
     "recommendation": "行动建议",
 }
 _PRIORITY_LABELS = {"high": "高", "medium": "中", "low": "低"}
+_REPORT_PRESENTATION_GUIDANCE = {
+    "layoutPolicy": "flexible",
+    "validationMode": "advisory",
+    "evidenceIndex": [
+        "优先展示素材名称或榜单位置、业务字段名称和真实数据值；事实路径与原始字段只放技术追溯区。",
+        "有两条及以上可比较数据时，至少使用一张合适的可视化呈现关键业务指标；图表类型由报告设计自行选择。",
+    ],
+    "conclusionAudit": [
+        "每条结论除依据编号外，应展示一组可直接核对的真实数据参考。",
+        "优先使用真实业务指标对比图；不可横向比较时，可使用结论类型、可信度或证据覆盖的可视化辅助阅读。",
+    ],
+    "deliveryWorkflow": [
+        "先一次性确定报告信息架构、数据字段和文件清单，再集中生成 HTML 报告组件；只在明确校验失败或用户反馈后局部修正。",
+        "不固定页面布局、图表数量或组件实现，不因展示偏好增加模型轮次或阻断式校验。",
+    ],
+}
 
 
 def _read_json(path: Path, label: str) -> Any:
@@ -1127,6 +1143,7 @@ def compile_model_input(
             "recommendationsRequire": ["evidenceRefs", "businessImplication"],
             "reportLanguage": "优先使用业务字段名称；无需新增模型轮次，也不要因为个别字段缺少标签而阻断结果。",
         },
+        "reportPresentationGuidance": deepcopy(_REPORT_PRESENTATION_GUIDANCE),
     }
     if request_text is not None:
         model_input["requestText"] = request_text
@@ -1574,6 +1591,8 @@ def validate_analysis_input(run_dir: Path, fact_pack_dir: Path, model_input: dic
         expected["retrievalTrace"] = deepcopy(model_input.get("retrievalTrace", expected.get("retrievalTrace", [])))
     expected_json = json.loads(json.dumps(expected, ensure_ascii=False))
     actual_json = json.loads(json.dumps(model_input, ensure_ascii=False))
+    if "reportPresentationGuidance" not in actual_json:
+        expected_json.pop("reportPresentationGuidance", None)
     difference = _first_difference(expected_json, actual_json)
     if difference:
         path, expected_value, actual_value = difference
@@ -1708,6 +1727,101 @@ def _md_cell(value: Any) -> str:
     return str(value if value is not None else "—").replace("|", "\\|").replace("\n", " ")
 
 
+def _display_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if isinstance(value, int):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:,.4f}".rstrip("0").rstrip(".")
+    if isinstance(value, list) and all(not isinstance(item, (dict, list)) for item in value):
+        return "、".join(str(item) for item in value[:5])
+    return str(value)
+
+
+def _evidence_rows(model_input: dict[str, Any], ref: dict[str, Any]) -> list[dict[str, Any]]:
+    expected = _source_key(ref)
+    matches: list[dict[str, Any]] = []
+    for section in (model_input.get("sections") or {}).values():
+        rows = ((section or {}).get("evidence") or {}).get("rows", []) if isinstance(section, dict) else []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict) or not isinstance(row.get("sourceRef"), dict):
+                continue
+            if _source_key(row["sourceRef"]) == expected:
+                matches.append(row)
+    return matches
+
+
+def _evidence_data_preview(
+    model_input: dict[str, Any], ref: dict[str, Any], field_labels: dict[str, str]
+) -> list[dict[str, Any]]:
+    previews: list[dict[str, Any]] = []
+    for row in _evidence_rows(model_input, ref)[:3]:
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        object_label = fields.get("materialName") or row.get("materialName") or row.get("materialId") or "事实记录"
+        values: list[dict[str, Any]] = []
+        for field, value in fields.items():
+            if field in {"materialId", "materialName"} or value in (None, "", [], {}):
+                continue
+            label = field_labels.get(field)
+            if not label:
+                continue
+            values.append({"label": label, "value": deepcopy(value), "displayValue": _display_value(value)})
+            if len(values) >= 6:
+                break
+        previews.append({"objectLabel": str(object_label), "businessValues": values})
+    return previews
+
+
+def _preview_summary(previews: list[dict[str, Any]]) -> str:
+    summaries = []
+    for preview in previews[:2]:
+        values = "；".join(
+            f"{item['label']}：{item['displayValue']}"
+            for item in preview.get("businessValues", [])
+        )
+        if values:
+            summaries.append(f"{preview.get('objectLabel', '事实记录')}（{values}）")
+    return "；".join(summaries) or "暂无可展示的结构化数值"
+
+
+def _chart_candidates(evidence_index: list[dict], claim_audit: list[dict]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    evidence_rows = []
+    for item in evidence_index:
+        for preview in item.get("dataPreview", []):
+            metrics = {
+                value["label"]: value["value"]
+                for value in preview.get("businessValues", [])
+                if isinstance(value.get("value"), (int, float)) and not isinstance(value.get("value"), bool)
+            }
+            if metrics:
+                evidence_rows.append({"label": preview.get("objectLabel"), "metrics": metrics, "evidence": item.get("displayId")})
+    if evidence_rows:
+        candidates.append({
+            "section": "evidence_index",
+            "title": "证据中的真实业务指标对比",
+            "recommendedType": "bar_or_dot",
+            "data": evidence_rows,
+        })
+    if claim_audit:
+        candidates.append({
+            "section": "claim_audit",
+            "title": "结论可信度与证据覆盖",
+            "recommendedType": "bar_or_matrix",
+            "data": [
+                {
+                    "label": item.get("id"),
+                    "confidence": item.get("confidence"),
+                    "evidenceCount": len(item.get("evidenceIds", [])),
+                    "claimType": item.get("claimTypeLabel"),
+                }
+                for item in claim_audit
+            ],
+        })
+    return candidates
+
+
 def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[str, Any], receipt: dict[str, Any]) -> None:
     output_dir = Path(output_dir)
     claims = [deepcopy(claim) for claim in result.get("claims", [])]
@@ -1732,11 +1846,17 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
                     "sourceLabel": _evidence_source_label(ref.get("path", ""), claim.get("section", "synthesis")),
                     "coverage": _evidence_coverage(ref),
                     "supportingClaimCount": 0,
+                    "dataPreview": _evidence_data_preview(model_input, ref, field_labels),
                     "ref": deepcopy(ref),
                 })
             evidence_index[int(evidence_ids[key][1:]) - 1]["supportingClaimCount"] += 1
     claim_audit = []
     for index, claim in enumerate(claims):
+        evidence_labels = [f"依据{int(evidence_ids[json.dumps(_source_key(ref), ensure_ascii=False, sort_keys=True)][1:])}" for ref in claim.get("evidenceRefs", [])]
+        evidence_previews = [
+            evidence_index[int(evidence_ids[json.dumps(_source_key(ref), ensure_ascii=False, sort_keys=True)][1:]) - 1].get("dataPreview", [])
+            for ref in claim.get("evidenceRefs", [])
+        ]
         claim_audit.append({
             "id": claim.get("id", f"claim-{index + 1}"),
             "claimType": claim.get("claimType"),
@@ -1749,7 +1869,8 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
             "inputs": _businessize_value(claim.get("inputs"), field_labels) if "inputs" in claim else None,
             "classificationMode": claim.get("classificationMode", "explicit"),
             "evidenceIds": [evidence_ids[json.dumps(_source_key(ref), ensure_ascii=False, sort_keys=True)] for ref in claim.get("evidenceRefs", [])],
-            "evidenceLabels": [f"依据{int(evidence_ids[json.dumps(_source_key(ref), ensure_ascii=False, sort_keys=True)][1:])}" for ref in claim.get("evidenceRefs", [])],
+            "evidenceLabels": evidence_labels,
+            "evidenceDataSummary": _preview_summary([item for group in evidence_previews for item in group]),
             "claimTypeLabel": _CLAIM_TYPE_LABELS.get(claim.get("claimType"), "分析结论"),
             "sectionLabel": _SECTION_LABELS.get(claim.get("section", "synthesis"), "综合分析"),
             "priorityLabel": _PRIORITY_LABELS.get(claim.get("priority", "medium"), "中"),
@@ -1783,7 +1904,9 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
         "chapters": chapters,
         "missingItems": deepcopy(receipt.get("missingItems", [])),
         "sourceRefs": deepcopy(model_input.get("sourceRefs", [])),
+        "presentationGuidance": deepcopy(_REPORT_PRESENTATION_GUIDANCE),
     }
+    report["chartCandidates"] = _chart_candidates(evidence_index, claim_audit)
     _write_json(output_dir / "report.json", report)
     def claim_lines(claims, include_implication=True):
         lines = []
@@ -1815,11 +1938,13 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
         elif chapter["id"] == "evidence_index":
             if evidence_index:
                 lines.extend([
-                    "| 依据 | 业务来源 | 覆盖范围 | 支持结论 | 追溯编号 |",
-                    "| --- | --- | --- | ---: | --- |",
+                    "| 依据 | 业务来源 | 数据对象 | 真实数据参考 | 支持结论 |",
+                    "| --- | --- | --- | --- | ---: |",
                 ])
                 lines.extend(
-                    f"| {_md_cell(item['displayId'])} | {_md_cell(item['sourceLabel'])} | {_md_cell(item['coverage'])} | {item['supportingClaimCount']} 条 | {_md_cell(item['id'])} |"
+                    f"| {_md_cell(item['displayId'])} | {_md_cell(item['sourceLabel'])} | "
+                    f"{_md_cell('、'.join(preview.get('objectLabel', '事实记录') for preview in item.get('dataPreview', [])) or item['coverage'])} | "
+                    f"{_md_cell(_preview_summary(item.get('dataPreview', [])))} | {item['supportingClaimCount']} 条 |"
                     for item in evidence_index
                 )
             else:
@@ -1828,11 +1953,11 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
         else:
             if claim_audit:
                 lines.extend([
-                    "| 结论 | 结论类型 | 分析板块 | 优先级 | 可信度 | 主要依据 |",
-                    "| --- | --- | --- | --- | ---: | --- |",
+                    "| 结论 | 结论类型 | 分析板块 | 优先级 | 可信度 | 主要依据 | 证据数据参考 |",
+                    "| --- | --- | --- | --- | ---: | --- | --- |",
                 ])
                 lines.extend(
-                    f"| {_md_cell(item['statement'])} | {_md_cell(item['claimTypeLabel'])} | {_md_cell(item['sectionLabel'])} | {_md_cell(item['priorityLabel'])} | {_md_cell(item['confidenceLabel'])} | {_md_cell('、'.join(item['evidenceLabels']))} |"
+                    f"| {_md_cell(item['statement'])} | {_md_cell(item['claimTypeLabel'])} | {_md_cell(item['sectionLabel'])} | {_md_cell(item['priorityLabel'])} | {_md_cell(item['confidenceLabel'])} | {_md_cell('、'.join(item['evidenceLabels']))} | {_md_cell(item['evidenceDataSummary'])} |"
                     for item in claim_audit
                 )
             else:

@@ -618,6 +618,12 @@ class AnalysisInputTests(unittest.TestCase):
             "综合成本",
         )
         self.assertIn("业务字段", model_input["modelConstraints"]["businessLanguage"])
+        guidance = model_input["reportPresentationGuidance"]
+        self.assertEqual(guidance["layoutPolicy"], "flexible")
+        self.assertEqual(guidance["validationMode"], "advisory")
+        self.assertIn("真实数据", " ".join(guidance["evidenceIndex"]))
+        self.assertIn("可视化", " ".join(guidance["conclusionAudit"]))
+        self.assertIn("一次性", " ".join(guidance["deliveryWorkflow"]))
 
     def test_slices_only_requested_leaderboard_fields_and_selected_rank(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -720,7 +726,16 @@ class AnalysisResultTests(unittest.TestCase):
             "promptVersion": "qianchuan-analysis-prompt-v1",
             "analysisSpecFingerprint": "a" * 64,
             "sourceRefs": [source_ref],
-            "sections": {"material_leaderboard": {"evidence": {"rows": [{"sourceRef": source_ref}]}}},
+            "sections": {"material_leaderboard": {"evidence": {"rows": [{
+                "materialId": "m-1",
+                "fields": {
+                    "materialName": "燕窝早餐场景素材",
+                    "rank": 1,
+                    "metrics.stat_cost_for_overall_roi2": 100,
+                },
+                "sourceRef": source_ref,
+            }]}}},
+            "analysisSpec": {"sections": ["material_leaderboard"]},
             "resultSchema": {"claimRequired": ["claimType", "statement", "section", "priority", "evidenceRefs", "confidence"]},
         }, source_ref
 
@@ -1016,6 +1031,23 @@ class AnalysisResultTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "analysis_input_mismatch")
         self.assertIn("path", context.exception.to_dict())
 
+    def test_validation_accepts_legacy_model_input_without_presentation_guidance(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fact_dir = analysis_fact_pack(root)
+            registry = load_analysis_registry(REGISTRY_PATH)
+            materials = json.loads((fact_dir / "material-leaderboard.json").read_text())["materials"]
+            resolved = resolve_analysis_spec(
+                spec("material_leaderboard"),
+                registry,
+                {"materialLeaderboard": {"materials": materials}},
+            )
+            evidence = slice_fact_pack(root, fact_dir, resolved, registry)
+            legacy_input = compile_model_input(root, resolved, evidence, registry)
+            legacy_input.pop("reportPresentationGuidance")
+
+            validate_analysis_input(root, fact_dir, legacy_input, resolved, registry)
+
     def test_real_run_replay_is_read_only_and_preserves_top3_script_and_frame_scope(self):
         run_dir = Path("/Users/shuzida/Desktop/FDE客户/小仙炖/qianchuan-meta-skill/runs/run-20260830-20260904")
         if not run_dir.is_dir():
@@ -1074,7 +1106,7 @@ class AnalysisResultTests(unittest.TestCase):
         self.assertEqual(report["claimsByType"]["recommendation"][0]["id"], "i1")
         self.assertEqual(report["resultStatus"], "verified")
         self.assertNotIn("source/facts.json", markdown)
-        self.assertIn("| 依据 | 业务来源 | 覆盖范围 | 支持结论 | 追溯编号 |", markdown)
+        self.assertIn("| 依据 | 业务来源 | 数据对象 | 真实数据参考 | 支持结论 |", markdown)
 
     def test_renders_fixed_business_chapters_in_markdown_order(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1145,6 +1177,18 @@ class AnalysisResultTests(unittest.TestCase):
         self.assertEqual(report["claimAudit"][0]["evidenceLabels"], ["依据1"])
         self.assertEqual(report["claimAudit"][0]["claimTypeLabel"], "数据事实")
         self.assertEqual(report["claimAudit"][0]["classificationMode"], "explicit")
+        self.assertEqual(report["evidenceIndex"][0]["dataPreview"][0]["objectLabel"], "燕窝早餐场景素材")
+        self.assertEqual(
+            report["evidenceIndex"][0]["dataPreview"][0]["businessValues"],
+            [
+                {"label": "榜单排名", "value": 1, "displayValue": "1"},
+                {"label": "综合成本", "value": 100, "displayValue": "100"},
+            ],
+        )
+        self.assertIn("综合成本：100", report["claimAudit"][0]["evidenceDataSummary"])
+        self.assertEqual(report["presentationGuidance"]["layoutPolicy"], "flexible")
+        self.assertEqual(report["presentationGuidance"]["validationMode"], "advisory")
+        self.assertTrue(report["chartCandidates"])
 
     def test_markdown_uses_business_order_and_keeps_audit_fields_in_appendices(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1170,8 +1214,8 @@ class AnalysisResultTests(unittest.TestCase):
         body, audit = markdown.split("## 附录 A：证据索引", 1)
         self.assertNotIn("confidence=", body)
         self.assertNotIn("source/facts.json", body)
-        self.assertIn("| 依据 | 业务来源 | 覆盖范围 | 支持结论 | 追溯编号 |", audit)
-        self.assertIn("| 结论 | 结论类型 | 分析板块 | 优先级 | 可信度 | 主要依据 |", audit)
+        self.assertIn("| 依据 | 业务来源 | 数据对象 | 真实数据参考 | 支持结论 |", audit)
+        self.assertIn("| 结论 | 结论类型 | 分析板块 | 优先级 | 可信度 | 主要依据 | 证据数据参考 |", audit)
         self.assertIn("依据1", audit)
         self.assertIn("素材榜单事实", audit)
         self.assertNotIn("confidence=", audit)
