@@ -611,6 +611,13 @@ class AnalysisInputTests(unittest.TestCase):
         self.assertEqual(model_input["inputContract"]["factPackRootType"], "object")
         self.assertEqual(model_input["sections"]["material_leaderboard"]["contract"]["collectionPath"], "materials")
         self.assertIn("analysis-registry-v1.json", model_input["sections"]["material_leaderboard"]["contract"]["fieldRegistry"])
+        selected_field = model_input["sections"]["material_leaderboard"]["contract"]["selectedFields"][0]
+        self.assertEqual(selected_field["businessLabel"], "综合成本")
+        self.assertEqual(
+            model_input["sections"]["material_leaderboard"]["businessFieldLabels"]["metrics.stat_cost_for_overall_roi2"],
+            "综合成本",
+        )
+        self.assertIn("业务字段", model_input["modelConstraints"]["businessLanguage"])
 
     def test_slices_only_requested_leaderboard_fields_and_selected_rank(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1066,7 +1073,8 @@ class AnalysisResultTests(unittest.TestCase):
         self.assertEqual(report["claimsByType"]["fact"][0]["id"], "f1")
         self.assertEqual(report["claimsByType"]["recommendation"][0]["id"], "i1")
         self.assertEqual(report["resultStatus"], "verified")
-        self.assertIn("source/facts.json", markdown)
+        self.assertNotIn("source/facts.json", markdown)
+        self.assertIn("| 依据 | 业务来源 | 覆盖范围 | 支持结论 | 追溯编号 |", markdown)
 
     def test_renders_fixed_business_chapters_in_markdown_order(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1130,7 +1138,12 @@ class AnalysisResultTests(unittest.TestCase):
             report = json.loads((root / "analysis" / "report.json").read_text(encoding="utf-8"))
 
         self.assertEqual(report["evidenceIndex"][0]["id"], "E1")
+        self.assertEqual(report["evidenceIndex"][0]["displayId"], "依据1")
+        self.assertEqual(report["evidenceIndex"][0]["sourceLabel"], "素材榜单事实")
+        self.assertEqual(report["evidenceIndex"][0]["supportingClaimCount"], 1)
         self.assertEqual(report["claimAudit"][0]["evidenceIds"], ["E1"])
+        self.assertEqual(report["claimAudit"][0]["evidenceLabels"], ["依据1"])
+        self.assertEqual(report["claimAudit"][0]["claimTypeLabel"], "数据事实")
         self.assertEqual(report["claimAudit"][0]["classificationMode"], "explicit")
 
     def test_markdown_uses_business_order_and_keeps_audit_fields_in_appendices(self):
@@ -1143,7 +1156,7 @@ class AnalysisResultTests(unittest.TestCase):
                 "analysisSpecFingerprint": "a" * 64,
                 "claims": [
                     {"id": "rec-low", "statement": "低优先建议", "claimType": "recommendation", "section": "material_leaderboard", "priority": "low", "businessImplication": "观察", "evidenceRefs": [source_ref], "confidence": 0.4},
-                    {"id": "fact", "statement": "素材关键发现", "claimType": "fact", "section": "material_leaderboard", "priority": "high", "businessImplication": "优先投入", "evidenceRefs": [source_ref], "confidence": 0.9},
+                    {"id": "fact", "statement": "metrics.stat_cost_for_overall_roi2 较高", "claimType": "fact", "section": "material_leaderboard", "priority": "high", "businessImplication": "优先投入", "evidenceRefs": [source_ref], "confidence": 0.9},
                     {"id": "rec-high", "statement": "高优先建议", "claimType": "recommendation", "section": "synthesis", "priority": "high", "businessImplication": "立即执行", "evidenceRefs": [source_ref], "confidence": 0.8},
                 ],
             }
@@ -1157,8 +1170,14 @@ class AnalysisResultTests(unittest.TestCase):
         body, audit = markdown.split("## 附录 A：证据索引", 1)
         self.assertNotIn("confidence=", body)
         self.assertNotIn("source/facts.json", body)
-        self.assertIn("confidence=", audit)
-        self.assertIn("source/facts.json", audit)
+        self.assertIn("| 依据 | 业务来源 | 覆盖范围 | 支持结论 | 追溯编号 |", audit)
+        self.assertIn("| 结论 | 结论类型 | 分析板块 | 优先级 | 可信度 | 主要依据 |", audit)
+        self.assertIn("依据1", audit)
+        self.assertIn("素材榜单事实", audit)
+        self.assertNotIn("confidence=", audit)
+        self.assertNotIn("source/facts.json", audit)
+        self.assertIn("综合成本较高", markdown)
+        self.assertNotIn("metrics.stat_cost_for_overall_roi2", markdown)
         self.assertEqual(report["claimAudit"][1]["businessImplication"], "优先投入")
 
     def test_prepare_real_top6_offline_writes_model_input_and_waits_for_model(self):

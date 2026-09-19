@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import tempfile
 from typing import Any
 from uuid import uuid4
@@ -73,6 +74,54 @@ _SECTION_COLLECTIONS = {
     "highlight_frames": "highlightFrames",
 }
 
+_SECTION_LABELS = {
+    "material_leaderboard": "素材榜单",
+    "audience": "人群分析",
+    "scripts": "脚本分析",
+    "highlight_frames": "高光帧分析",
+    "synthesis": "综合分析",
+}
+_BASE_FIELD_LABELS = {
+    "rank": "榜单排名",
+    "materialId": "素材ID",
+    "materialName": "素材名称",
+    "materialType": "素材类型",
+    "videoType": "视频类型",
+    "rankingMetric": "排序指标",
+    "sortValue": "排序指标值",
+    "actualStartDate": "分析开始日期",
+    "actualEndDate": "分析结束日期",
+    "dimensionKey": "人群维度",
+    "dimensionName": "人群维度名称",
+    "audienceValue": "人群标签",
+    "displayMetric": "展示指标",
+    "displayMetricName": "展示指标名称",
+    "metricValue": "人群规模",
+    "metricPercentage": "人群占比",
+    "dimensionTotal": "维度总量",
+    "Dimensions.user_group_label_name": "人群标签名称",
+    "parseStatus": "脚本解析状态",
+    "text": "视频脚本",
+    "formula": "脚本公式",
+    "detail": "脚本详情",
+    "data": "脚本结构化内容",
+    "completeness": "脚本完整度",
+    "frameSequence": "画面序号",
+    "durationSec": "视频时间点（秒）",
+    "artifact": "高光画面",
+    "selectionEvidence": "高光入选依据",
+    "highlightPolicy": "高光选择规则",
+    "unavailableMetrics": "不可用指标",
+    "interactionSeries.recordCount": "互动时间序列记录数",
+}
+_CLAIM_TYPE_LABELS = {
+    "fact": "数据事实",
+    "calculation": "指标计算",
+    "inference": "商业解读",
+    "recommendation": "行动建议",
+}
+_PRIORITY_LABELS = {"high": "高", "medium": "中", "low": "低"}
+
 
 def _read_json(path: Path, label: str) -> Any:
     try:
@@ -90,12 +139,19 @@ def load_analysis_registry(path: Path) -> dict[str, Any]:
         asset_registry = _read_json(asset_registry_path, "asset field registry")
         material_schema = payload["sections"].get("material_leaderboard", {})
         explicit_fields = set(material_schema.get("fields", []))
+        field_labels = dict(_BASE_FIELD_LABELS)
         for entry in asset_registry.get("fields", []):
+            if isinstance(entry.get("id"), str) and isinstance(entry.get("label"), str):
+                field = f"metrics.{entry['id']}" if entry.get("kind") == "metric" else entry["id"]
+                field_labels[field] = entry["label"]
             if entry.get("kind") == "metric" and isinstance(entry.get("id"), str):
                 field = f"metrics.{entry['id']}"
                 if field not in explicit_fields:
                     material_schema.setdefault("fields", []).append(field)
         payload["sections"]["material_leaderboard"] = material_schema
+        payload["fieldLabels"] = field_labels
+    else:
+        payload["fieldLabels"] = dict(_BASE_FIELD_LABELS)
     return payload
 
 
@@ -974,14 +1030,21 @@ def compile_model_input(
     request_text: str | None = None,
 ) -> dict[str, Any]:
     sections = {}
+    field_labels = registry.get("fieldLabels", {})
     for section in spec["sections"]:
         section_evidence = evidence["sections"].get(section, {"rows": [], "sourceRefs": []})
         selected_fields = _requested_fields(spec, section)
+        business_labels = {
+            field: field_labels[field]
+            for field, _aggregation in selected_fields
+            if field in field_labels
+        }
         sections[section] = {
             "prompt": _PROMPT_INSTRUCTIONS[section],
             "objective": spec["objective"],
             "questions": spec["questions"],
             "metrics": selected_fields,
+            "businessFieldLabels": business_labels,
             "groupComparisons": [item for item in spec["groupComparisons"] if item["section"] == section],
             "evidence": section_evidence,
             "contract": {
@@ -990,7 +1053,14 @@ def compile_model_input(
                 "collectionPath": _SECTION_COLLECTIONS[section],
                 "inputRowsPath": f"sections.{section}.evidence.rows",
                 "fieldRegistry": f"config/analysis-registry-v1.json#/sections/{section}/fields",
-                "selectedFields": [{"field": field, "aggregation": aggregation} for field, aggregation in selected_fields],
+                "selectedFields": [
+                    {
+                        "field": field,
+                        "businessLabel": field_labels.get(field, field),
+                        "aggregation": aggregation,
+                    }
+                    for field, aggregation in selected_fields
+                ],
                 "rowIdentity": "materialId",
                 "sourceRefPath": "rows[].sourceRef and nested artifact refs",
                 "missingSemantics": "missingItems records absent, unavailable or truncated evidence; never infer zero",
@@ -1044,6 +1114,7 @@ def compile_model_input(
             "claimsMustUseSelectedSectionsOrSynthesis": True,
             "recommendationsMustReferenceEvidence": True,
             "businessImplicationExplainsAction": True,
+            "businessLanguage": "商业结论、建议和报告正文优先使用 businessFieldLabels 中的业务字段名称；原始字段名只用于取数与内部追溯，不作为用户侧主要文案。",
         },
         "resultSchema": deepcopy(_MODEL_RESULT_SCHEMA_SUMMARY),
         "missingItems": deepcopy(evidence["missingItems"]),
@@ -1054,6 +1125,7 @@ def compile_model_input(
             "allClaimsRequire": ["claimType", "section", "priority", "evidenceRefs", "confidence"],
             "sectionOrder": [*_HANDOFF_SECTIONS, "synthesis"],
             "recommendationsRequire": ["evidenceRefs", "businessImplication"],
+            "reportLanguage": "优先使用业务字段名称；无需新增模型轮次，也不要因为个别字段缺少标签而阻断结果。",
         },
     }
     if request_text is not None:
@@ -1575,9 +1647,75 @@ def receive_analysis_result(run_dir: Path, result_path: Path, analysis_dir: Path
     return verification
 
 
+def _report_field_labels(model_input: dict[str, Any]) -> dict[str, str]:
+    labels = dict(_BASE_FIELD_LABELS)
+    registry_path = Path(__file__).resolve().parents[1] / "config" / "analysis-registry-v1.json"
+    try:
+        labels.update(load_analysis_registry(registry_path).get("fieldLabels", {}))
+    except AnalysisError:
+        pass
+    for section in (model_input.get("sections") or {}).values():
+        if isinstance(section, dict) and isinstance(section.get("businessFieldLabels"), dict):
+            labels.update({str(key): str(value) for key, value in section["businessFieldLabels"].items()})
+    return labels
+
+
+def _businessize_text(value: Any, labels: dict[str, str]) -> str:
+    text = str(value)
+    for field in sorted(labels, key=len, reverse=True):
+        pattern = re.escape(field)
+        if field.replace("_", "").isalnum() and "." not in field:
+            pattern = rf"(?<![A-Za-z0-9_.]){pattern}(?![A-Za-z0-9_.])"
+        text = re.sub(pattern + r"\s*", labels[field], text)
+    return text
+
+
+def _businessize_value(value: Any, labels: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        return _businessize_text(value, labels)
+    if isinstance(value, list):
+        return [_businessize_value(item, labels) for item in value]
+    if isinstance(value, dict):
+        return {key: _businessize_value(item, labels) for key, item in value.items()}
+    return deepcopy(value)
+
+
+def _evidence_source_label(path: str, section: str) -> str:
+    lowered = path.lower()
+    if "audience" in lowered or section == "audience":
+        return "人群分析事实"
+    if "script" in lowered or section == "scripts":
+        return "脚本内容事实"
+    if "frame" in lowered or lowered.endswith((".jpg", ".jpeg", ".png")) or section == "highlight_frames":
+        return "高光画面事实"
+    if "manifest" in lowered:
+        return "本次分析范围清单"
+    if "material" in lowered or section == "material_leaderboard":
+        return "素材榜单事实"
+    return "分析事实来源"
+
+
+def _evidence_coverage(ref: dict[str, Any]) -> str:
+    indexes = ref.get("recordIndexes")
+    if indexes is None and "recordIndex" in ref:
+        indexes = [ref["recordIndex"]]
+    if isinstance(indexes, list) and indexes:
+        return f"覆盖 {len(set(indexes))} 条记录"
+    return "文件级证据"
+
+
+def _md_cell(value: Any) -> str:
+    return str(value if value is not None else "—").replace("|", "\\|").replace("\n", " ")
+
+
 def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[str, Any], receipt: dict[str, Any]) -> None:
     output_dir = Path(output_dir)
     claims = [deepcopy(claim) for claim in result.get("claims", [])]
+    field_labels = _report_field_labels(model_input)
+    for claim in claims:
+        claim["statement"] = _businessize_text(claim.get("statement", ""), field_labels)
+        if claim.get("businessImplication"):
+            claim["businessImplication"] = _businessize_text(claim["businessImplication"], field_labels)
     claims_by_type = {claim_type: [] for claim_type in ("fact", "calculation", "inference", "recommendation")}
     for claim in claims:
         claims_by_type.setdefault(claim["claimType"], []).append(claim)
@@ -1588,7 +1726,15 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
             key = json.dumps(_source_key(ref), ensure_ascii=False, sort_keys=True)
             if key not in evidence_ids:
                 evidence_ids[key] = f"E{len(evidence_index) + 1}"
-                evidence_index.append({"id": evidence_ids[key], "ref": deepcopy(ref)})
+                evidence_index.append({
+                    "id": evidence_ids[key],
+                    "displayId": f"依据{len(evidence_index) + 1}",
+                    "sourceLabel": _evidence_source_label(ref.get("path", ""), claim.get("section", "synthesis")),
+                    "coverage": _evidence_coverage(ref),
+                    "supportingClaimCount": 0,
+                    "ref": deepcopy(ref),
+                })
+            evidence_index[int(evidence_ids[key][1:]) - 1]["supportingClaimCount"] += 1
     claim_audit = []
     for index, claim in enumerate(claims):
         claim_audit.append({
@@ -1597,11 +1743,17 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
             "section": claim.get("section", "synthesis"),
             "priority": claim.get("priority", "medium"),
             "confidence": claim.get("confidence"),
+            "confidenceLabel": f"{round(float(claim.get('confidence', 0)) * 100)}%",
             "businessImplication": claim.get("businessImplication"),
             "formula": deepcopy(claim.get("formula")) if "formula" in claim else None,
-            "inputs": deepcopy(claim.get("inputs")) if "inputs" in claim else None,
+            "inputs": _businessize_value(claim.get("inputs"), field_labels) if "inputs" in claim else None,
             "classificationMode": claim.get("classificationMode", "explicit"),
             "evidenceIds": [evidence_ids[json.dumps(_source_key(ref), ensure_ascii=False, sort_keys=True)] for ref in claim.get("evidenceRefs", [])],
+            "evidenceLabels": [f"依据{int(evidence_ids[json.dumps(_source_key(ref), ensure_ascii=False, sort_keys=True)][1:])}" for ref in claim.get("evidenceRefs", [])],
+            "claimTypeLabel": _CLAIM_TYPE_LABELS.get(claim.get("claimType"), "分析结论"),
+            "sectionLabel": _SECTION_LABELS.get(claim.get("section", "synthesis"), "综合分析"),
+            "priorityLabel": _PRIORITY_LABELS.get(claim.get("priority", "medium"), "中"),
+            "statement": claim.get("statement", ""),
         })
     chapters = [
         {"order": 1, "id": "executive_summary", "title": "核心商业结论"},
@@ -1637,8 +1789,9 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
         lines = []
         for claim in claims:
             ids = [evidence_ids[json.dumps(_source_key(ref), ensure_ascii=False, sort_keys=True)] for ref in claim.get("evidenceRefs", [])]
+            labels = [f"依据{int(item[1:])}" for item in ids]
             suffix = f"；业务含义：{claim['businessImplication']}" if include_implication and claim.get("businessImplication") else ""
-            lines.append(f"- {claim['statement']}（证据：{', '.join(f'[{item}]' for item in ids)}{suffix}）")
+            lines.append(f"- {claim['statement']}（依据：{', '.join(f'[{item}]' for item in labels)}{suffix}）")
         return lines or ["（无）"]
 
     selected_sections = set((model_input.get("analysisSpec") or {}).get("sections", []))
@@ -1660,10 +1813,30 @@ def render_reports(output_dir: Path, model_input: dict[str, Any], result: dict[s
         elif chapter["id"] == "limitations":
             lines.extend([f"- 缺失项：{len(report['missingItems'])}", f"- 可追溯证据：{len(evidence_index)} 条", ""])
         elif chapter["id"] == "evidence_index":
-            lines.extend([f"- [{item['id']}] {item['ref'].get('path', '')}" for item in evidence_index] or ["（无）"])
+            if evidence_index:
+                lines.extend([
+                    "| 依据 | 业务来源 | 覆盖范围 | 支持结论 | 追溯编号 |",
+                    "| --- | --- | --- | ---: | --- |",
+                ])
+                lines.extend(
+                    f"| {_md_cell(item['displayId'])} | {_md_cell(item['sourceLabel'])} | {_md_cell(item['coverage'])} | {item['supportingClaimCount']} 条 | {_md_cell(item['id'])} |"
+                    for item in evidence_index
+                )
+            else:
+                lines.append("（无）")
             lines.append("")
         else:
-            lines.extend([f"- {item['id']}：{item['claimType']} / {item['section']} / {item['priority']} / confidence={item['confidence']} / evidence={', '.join(item['evidenceIds'])}" for item in claim_audit] or ["（无）"])
+            if claim_audit:
+                lines.extend([
+                    "| 结论 | 结论类型 | 分析板块 | 优先级 | 可信度 | 主要依据 |",
+                    "| --- | --- | --- | --- | ---: | --- |",
+                ])
+                lines.extend(
+                    f"| {_md_cell(item['statement'])} | {_md_cell(item['claimTypeLabel'])} | {_md_cell(item['sectionLabel'])} | {_md_cell(item['priorityLabel'])} | {_md_cell(item['confidenceLabel'])} | {_md_cell('、'.join(item['evidenceLabels']))} |"
+                    for item in claim_audit
+                )
+            else:
+                lines.append("（无）")
             lines.append("")
     _write_text(output_dir / "report.md", "\n".join(lines))
 
