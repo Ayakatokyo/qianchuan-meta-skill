@@ -19,12 +19,12 @@ def load_skill_form():
 
 
 class SkillDocumentTests(unittest.TestCase):
-    def test_pre_input_uses_the_standard_base_contract_and_retains_highlight_controls(self):
+    def test_pre_input_uses_the_natural_language_highlight_rule_contract(self):
         metadata, _ = load_skill_document()
         pre_input = metadata.get("metadata", {}).get("pre_input", "")
 
         self.assertTrue(pre_input.startswith("请采集千川素材及相关诊断数据"))
-        self.assertEqual(len(pre_input.strip().splitlines()), 15)
+        self.assertEqual(len(pre_input.strip().splitlines()), 9)
         self.assertNotIn("<p>", pre_input)
         self.assertNotIn("data-pre-input-blank", pre_input)
         self.assertNotIn("____", pre_input)
@@ -42,11 +42,15 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("material_filter_sort", pre_input)
         self.assertIn("是否同时生成高光帧图片", pre_input)
         self.assertIn("highlight_mode", pre_input)
-        self.assertIn("封面是否保留", pre_input)
+        self.assertIn("highlight_rules", pre_input)
+        self.assertIn("可用指标：整体点击次数、整体流失数、整体点赞次数、整体评论次数、整体转发次数、整体新增粉丝数", pre_input)
+        self.assertIn("保留封面，提取整体点击次数局部峰值3帧、整体转发次数最高值2帧", pre_input)
         for metric in (
             "整体点击次数", "整体流失数", "整体点赞次数", "整体评论次数", "整体转发次数", "整体新增粉丝数",
         ):
             self.assertIn(metric, pre_input)
+        self.assertNotIn("highlight_include_cover", pre_input)
+        self.assertNotIn("highlight_click_enabled", pre_input)
         self.assertNotIn("candidateTopN", pre_input)
 
     def test_pre_input_references_every_typed_form_field_once(self):
@@ -57,9 +61,19 @@ class SkillDocumentTests(unittest.TestCase):
         references = __import__("re").findall(r"__field:([a-z0-9_]+)__", pre_input)
 
         self.assertEqual(keys[:5], ["api_shop", "advertiser_id", "rpa_shop", "date_range", "top_n"])
-        self.assertEqual(len(keys), 26)
+        self.assertEqual(len(keys), 8)
         self.assertEqual(set(references), set(keys))
         self.assertEqual(len(references), len(keys))
+
+    def test_highlight_rules_is_a_conditional_textarea(self):
+        fields = {field["key"]: field for field in load_skill_form()}
+
+        self.assertEqual(fields["highlight_rules"]["type"], "textarea")
+        self.assertTrue(fields["highlight_rules"]["required"])
+        self.assertEqual(fields["highlight_rules"]["visible_when"], {"field": "highlight_mode", "equals": "on"})
+        self.assertEqual(fields["highlight_rules"]["depends_on"], {"highlight_mode": "on"})
+        self.assertIn("封面", fields["highlight_rules"]["description"])
+        self.assertIn("整体点击次数", fields["highlight_rules"]["placeholder"])
 
     def test_advertiser_selector_follows_the_api_shop(self):
         fields = {field["key"]: field for field in load_skill_form()}

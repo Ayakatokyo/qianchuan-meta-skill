@@ -11,14 +11,8 @@ metadata:
     时间范围：__field:date_range__
     详情素材数：__field:top_n__（包含互动时序、人群、脚本和高光帧数据，默认10）
     素材筛选与排序：__field:material_filter_sort__（可选；例如筛选“整体消耗”>=10000，再按“净成交ROI”降序；排序指标和排序方向均可留空）。
-    是否同时生成高光帧图片：__field:highlight_mode__（选择否时无需填写下方高光帧规则）
-    - 封面是否保留：__field:highlight_include_cover__
-    - 整体点击次数：__field:highlight_click_enabled__；提取规则 __field:highlight_click_strategy__；帧数 __field:highlight_click_limit__。
-    - 整体流失数：__field:highlight_loss_enabled__；提取规则 __field:highlight_loss_strategy__；帧数 __field:highlight_loss_limit__。
-    - 整体点赞次数：__field:highlight_like_enabled__；提取规则 __field:highlight_like_strategy__；帧数 __field:highlight_like_limit__。
-    - 整体评论次数：__field:highlight_comment_enabled__；提取规则 __field:highlight_comment_strategy__；帧数 __field:highlight_comment_limit__。
-    - 整体转发次数：__field:highlight_share_enabled__；提取规则 __field:highlight_share_strategy__；帧数 __field:highlight_share_limit__。
-    - 整体新增粉丝数：__field:highlight_new_follower_enabled__；提取规则 __field:highlight_new_follower_strategy__；帧数 __field:highlight_new_follower_limit__。
+    是否同时生成高光帧图片：__field:highlight_mode__（选择否时无需填写高光帧规则）
+    高光帧规则：__field:highlight_rules__（选择是时填写；可用指标：整体点击次数、整体流失数、整体点赞次数、整体评论次数、整体转发次数、整体新增粉丝数；规则案例：保留封面，提取整体点击次数局部峰值3帧、整体转发次数最高值2帧，不提取其他指标）
 ---
 
 # 千川素材数据工作台
