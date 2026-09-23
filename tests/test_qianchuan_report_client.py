@@ -72,6 +72,16 @@ class FakeSession:
 
 
 class QianchuanReportClientTests(unittest.TestCase):
+    def test_lists_api_shop_advertiser_authorizations(self):
+        rows = [{"shop_id": "api-9", "advertiser_id": "12345"}]
+        session = FakeSession(FakeResponse({"success": True, "data": rows}))
+
+        self.assertEqual(client.list_authorized_advertisers(environ=valid_env(), session=session), rows)
+        self.assertEqual(session.post_call["args"][0],
+                         "http://gateway.test/api/adg/v1/agent/api-platform/shops/advertisers")
+        self.assertEqual(session.post_call["json"]["platform"], "OCEANENGINE")
+        self.assertEqual(session.post_call["cookies"], {"YCSESSIONID": "cookie-session"})
+
     def test_default_contract_is_an_aggregate_eight_dimension_102_metric_request(self):
         self.assertEqual(client.DEFAULT_DIMENSIONS, [
             "ecp_app_id",

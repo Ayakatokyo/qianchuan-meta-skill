@@ -24,19 +24,18 @@ class SkillDocumentTests(unittest.TestCase):
         pre_input = metadata.get("metadata", {}).get("pre_input", "")
 
         self.assertTrue(pre_input.startswith("请采集千川素材及相关诊断数据"))
-        self.assertEqual(len(pre_input.strip().splitlines()), 9)
+        self.assertEqual(len(pre_input.strip().splitlines()), 8)
         self.assertNotIn("<p>", pre_input)
         self.assertNotIn("data-pre-input-blank", pre_input)
         self.assertNotIn("____", pre_input)
         self.assertIn("__field:api_shop__", pre_input)
-        self.assertIn("__field:advertiser_id__", pre_input)
+        self.assertNotIn("__field:advertiser_id__", pre_input)
         self.assertIn("__field:rpa_shop__", pre_input)
         self.assertIn("时间范围", pre_input)
         self.assertIn("__field:top_n__", pre_input)
-        self.assertIn("千川广告主（ID）", pre_input)
+        self.assertIn("千川广告主ID：__field:rpa_shop__", pre_input)
         self.assertNotIn("千川广告主（数字）", pre_input)
-        self.assertIn("千川广告主（邮箱）", pre_input)
-        self.assertIn("同一账号", pre_input)
+        self.assertNotIn("千川广告主（邮箱）", pre_input)
         self.assertNotIn("detail_top_n", pre_input)
         self.assertIn("素材筛选与排序", pre_input)
         self.assertIn("material_filter_sort", pre_input)
@@ -60,8 +59,8 @@ class SkillDocumentTests(unittest.TestCase):
         keys = [field["key"] for field in form]
         references = __import__("re").findall(r"__field:([a-z0-9_]+)__", pre_input)
 
-        self.assertEqual(keys[:5], ["api_shop", "advertiser_id", "rpa_shop", "date_range", "top_n"])
-        self.assertEqual(len(keys), 8)
+        self.assertEqual(keys[:4], ["api_shop", "rpa_shop", "date_range", "top_n"])
+        self.assertEqual(len(keys), 7)
         self.assertEqual(set(references), set(keys))
         self.assertEqual(len(references), len(keys))
 
@@ -75,15 +74,18 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("封面", fields["highlight_rules"]["description"])
         self.assertIn("整体点击次数", fields["highlight_rules"]["placeholder"])
 
-    def test_advertiser_selector_follows_the_api_shop(self):
+    def test_rpa_selector_resolves_advertiser_id_under_api_shop(self):
         fields = {field["key"]: field for field in load_skill_form()}
 
-        self.assertEqual(fields["advertiser_id"]["type"], "api_advertiser")
-        self.assertEqual(fields["advertiser_id"]["label"], "千川广告主（ID）")
-        self.assertEqual(fields["advertiser_id"]["application_id"], "OCEANENGINE")
-        self.assertEqual(fields["advertiser_id"]["shop_field"], "api_shop")
-        self.assertNotIn("pattern", fields["advertiser_id"])
-        self.assertIn("同一投放主体", fields["rpa_shop"]["description"])
+        self.assertNotIn("advertiser_id", fields)
+        self.assertEqual(fields["api_shop"]["application_id"], "OCEANENGINE")
+        self.assertEqual(fields["rpa_shop"]["type"], "rpa_shop")
+        self.assertEqual(fields["rpa_shop"]["label"], "千川广告主ID")
+        self.assertEqual(fields["rpa_shop"]["application_id"], "RPA_JULIANG_QC")
+        self.assertIn("account 为千川广告主 ID", fields["rpa_shop"]["description"])
+        _, body = load_skill_document()
+        self.assertIn("resolve_advertiser_id.py", body)
+        self.assertIn("广告主授权关系中恰好出现一次", body)
 
     def test_skill_body_preserves_api_field_and_recovery_contract(self):
         _, body = load_skill_document()

@@ -159,6 +159,30 @@ def _runtime_context(environ):
     }
 
 
+def list_authorized_advertisers(*, environ=None, session=None):
+    """Read the current API shop-to-advertiser authorization relationships."""
+    context = _runtime_context(os.environ if environ is None else environ)
+    session = requests.Session() if session is None else session
+    try:
+        response = session.post(
+            context["apiBase"] + "/adg/v1/agent/api-platform/shops/advertisers",
+            json={"authorization": context["authorization"], "platform": "OCEANENGINE"},
+            headers={"Content-Type": "application/json"},
+            cookies={"YCSESSIONID": context["cookieSession"]},
+            timeout=30,
+        )
+        response.raise_for_status()
+        body = response.json()
+    except (requests.RequestException, TypeError, ValueError) as exc:
+        raise ReportClientError("API advertiser authorization query failed") from exc
+    if not isinstance(body, dict) or body.get("success") is not True:
+        raise ReportClientError("API advertiser authorization query was not successful")
+    rows = body.get("data")
+    if not isinstance(rows, list):
+        raise ReportClientError("API advertiser authorization response has no data list")
+    return rows
+
+
 def _validate_field_contract(order_by):
     if len(DEFAULT_DIMENSIONS) > 10:
         raise ReportClientError("material aggregate query exceeds 10 dimension limit")

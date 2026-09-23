@@ -2,12 +2,11 @@
 name: 千川素材数据工作台
 description: 适用于按店铺、广告主和日期范围采集千川素材及诊断事实，形成可审计的数据资产和素材数据工作台，供后续自定义分析与内容经营使用。
 metadata:
-  argument_hint: 依次选择报表授权店铺、该店铺下的投放广告主及同一投放主体的素材诊断授权账号，输入时间范围和详情素材数；可选配置素材筛选、排序与高光帧提取规则。
+  argument_hint: 依次选择报表授权店铺和千川广告主 ID 对应的 RPA 授权账号，输入时间范围和详情素材数；可选配置素材筛选、排序与高光帧提取规则。
   pre_input: |
     请采集千川素材及相关诊断数据
     千川授权店铺：__field:api_shop__（必填）
-    千川广告主（ID）：__field:advertiser_id__（必填，店铺下广告主 ID）
-    千川广告主（邮箱）：__field:rpa_shop__（必填；请确认该邮箱账号与广告主ID为同一账号）
+    千川广告主ID：__field:rpa_shop__（必填）
     时间范围：__field:date_range__
     详情素材数：__field:top_n__（包含互动时序、人群、脚本和高光帧数据，默认10）
     素材筛选与排序：__field:material_filter_sort__（可选；例如筛选“整体消耗”>=10000，再按“净成交ROI”降序；排序指标和排序方向均可留空）。
@@ -21,11 +20,11 @@ metadata:
 
 ## 输入
 
-前置表单只提交店铺、广告主、RPA 授权账号、时间范围与 `top_n`：其中 `top_n` 必须写入 QuerySpec 的 `collection.targetTopN`，不能写成旧字段 `detail_top_n`；候选扩容数量由运行时决定，不能作为表单入参。自然语言入口据此解析 `QuerySpec`，仅在用户另行提出高光帧规则或文件入口提供时才解析 `HighlightSpec`。解析成功后立即落盘并执行，缺少必填项或字段不合法时反馈具体错误。除用户明确要求预览、草稿或人工确认外，不等待二次确认。
+前置表单只提交 API 授权店铺、千川广告主 ID 对应的 RPA 授权账号、时间范围与 `top_n`，不再单独收集 `advertiser_id`。其中 `top_n` 必须写入 QuerySpec 的 `collection.targetTopN`，不能写成旧字段 `detail_top_n`；候选扩容数量由运行时决定，不能作为表单入参。先按下述授权关系解析广告主 ID，再生成 `QuerySpec`；仅在用户另行提出高光帧规则或文件入口提供时才解析 `HighlightSpec`。解析成功后立即落盘并执行，缺少必填项或字段不合法时反馈具体错误。除用户明确要求预览、草稿或人工确认外，不等待二次确认。
 
 ### 查询范围
 
-先通过 `api_shop` 选择报表店铺，再由 `api_advertiser` 按该店铺过滤广告主；二者构成同一投放主体。随后须选择同一投放主体的 `rpa_shop` 进行素材诊断。`api_shop.extra.shop_id`、`advertiser_id` 与 `rpa_shop.extra.shop_id` 分别属于 API 授权、报表业务和 RPA 授权三个 ID 域：前两者写入 QuerySpec 的 `scope.shopId` / `scope.advertiserId`，后者只作为 `--rpa-shop-id` 传给第二步。它们的 ID 格式可以不同，**不得比较是否相等**；RPA 阶段只核验所选账号仍在当前授权列表中。日期范围为闭区间，起止日期均使用 `YYYY-MM-DD`。字段和操作符只能来自 `config/asset-field-registry-v1.json`；维度和指标条件按 `AND` 处理。
+先通过 `api_shop` 选择报表店铺，再通过 `rpa_shop` 选择 `account` 为数字千川广告主 ID 的 RPA 授权账号。报表取数前运行 `python "$SKILL_ROOT/scripts/resolve_advertiser_id.py" --shop-id "<api_shop.extra.shop_id>" --rpa-shop-id "<rpa_shop.extra.shop_id>"`，按所选 RPA 授权项查询当前授权列表，要求恰好一条记录且其 `account` 是数字 ID；再确认该 ID 在所选 API 店铺的广告主授权关系中恰好出现一次。无法确认时停止，不提交报表或 RPA 任务。将 `api_shop.extra.shop_id` 与命令返回的 `advertiserId` 写入 QuerySpec 的 `scope.shopId` / `scope.advertiserId`，将 `rpa_shop.extra.shop_id` 仅作为 `--rpa-shop-id` 传给诊断步骤。API 店铺 ID 与 RPA 授权项 ID 属于不同 ID 域，**不得比较是否相等**。日期范围为闭区间，起止日期均使用 `YYYY-MM-DD`。字段和操作符只能来自 `config/asset-field-registry-v1.json`；维度和指标条件按 `AND` 处理。
 
 ### 指标筛选
 

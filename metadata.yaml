@@ -35,17 +35,10 @@ skill_form:
     application_id: OCEANENGINE
     multiple: false
     required: true
-  - key: advertiser_id
-    type: api_advertiser
-    label: 千川广告主（ID）
-    description: 先选择报表授权店铺，再从该店铺的已授权广告主中选择；用于第一步素材报表查询
-    application_id: OCEANENGINE
-    shop_field: api_shop
-    required: true
   - key: rpa_shop
     type: rpa_shop
-    label: 千川广告主
-    description: 请选择与广告主同一投放主体的千川 RPA 已授权账号；只用于第二步逐素材诊断，ID 格式不同，不直接比较
+    label: 千川广告主ID
+    description: 选择 account 为千川广告主 ID 的 RPA 授权账号；执行前核对该 ID 属于所选 API 店铺，授权项 ID 仅用于逐素材诊断
     application_id: RPA_JULIANG_QC
     value_format: both
     multiple: false
