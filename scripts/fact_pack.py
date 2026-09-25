@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from path_safety import artifact_path, validate_material_id
+from diagnosis_quality import assess_diagnosis_attribution
 
 
 SCHEMA_VERSION = 1
@@ -265,7 +266,7 @@ def _completed_selection(run_dir: Path, top: dict[str, Any]) -> tuple[int, list[
     return target_top_n, result
 
 
-def _build_materials(run_dir: Path, materials_in: list[dict[str, Any]], diagnosis: dict[str, tuple[Path, list[dict[str, Any]]]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _build_materials(run_dir: Path, materials_in: list[dict[str, Any]], diagnosis: dict[str, tuple[Path, list[dict[str, Any]]]], excluded_ids: set[str] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     materials: list[dict[str, Any]] = []
     refs: list[dict[str, Any]] = [_source_ref(run_dir, run_dir / "top_materials.json")]
     top_ref = refs[0]
@@ -281,6 +282,7 @@ def _build_materials(run_dir: Path, materials_in: list[dict[str, Any]], diagnosi
             "rank": top_material.get("rank"),
             "materialId": material_id,
             "materialName": _sanitize(top_material.get("materialName", "")),
+            "diagnosisAttributionStatus": "unverified" if material_id in (excluded_ids or set()) else "available",
             "materialType": _sanitize(top_material.get("materialType")),
             "videoType": _sanitize(top_material.get("videoType")),
             "platformDimensions": {"materialType": _sanitize(top_material.get("materialType")), "videoType": _sanitize(top_material.get("videoType"))},
@@ -331,7 +333,7 @@ def _build_audience(run_dir: Path, material_ids: list[str], diagnosis: dict[str,
     return {"schemaVersion": SCHEMA_VERSION, "status": status, "audience": facts, "sourceRefs": _aggregate_refs(refs)}, refs
 
 
-def _build_scripts(run_dir: Path, material_ids: list[str], diagnosis: dict[str, tuple[Path, list[dict[str, Any]]]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _build_scripts(run_dir: Path, material_ids: list[str], diagnosis: dict[str, tuple[Path, list[dict[str, Any]]]], excluded_ids: set[str] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     facts: list[dict[str, Any]] = []
     refs: list[dict[str, Any]] = []
     for material_id in material_ids:
@@ -355,19 +357,24 @@ def _build_scripts(run_dir: Path, material_ids: list[str], diagnosis: dict[str, 
         if status == "parsed":
             fact.update({"formula": parsed.get("formula", {}), "detail": parsed.get("detail", {}), "text": parsed.get("text", ""), "data": parsed.get("data", [])})
         else:
-            fact["error"] = {"code": "script_missing" if status == "missing" else "script_parse_failed", "message": "script source is missing" if status == "missing" else "script source could not be parsed"}
+            if material_id in (excluded_ids or set()):
+                fact["error"] = {"code": "diagnosis_attribution_unverified", "message": "diagnosis facts cannot be attributed to this source material"}
+            else:
+                fact["error"] = {"code": "script_missing" if status == "missing" else "script_parse_failed", "message": "script source is missing" if status == "missing" else "script source could not be parsed"}
             if status == "failed":
                 fact["rawScriptInfo"] = parsed
         facts.append(fact)
     return {"schemaVersion": SCHEMA_VERSION, "status": "available", "scripts": facts, "sourceRefs": _aggregate_refs(refs)}, refs
 
 
-def _build_highlights(run_dir: Path, material_ids: list[str], diagnosis: dict[str, tuple[Path, list[dict[str, Any]]]], *, requested: bool) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _build_highlights(run_dir: Path, material_ids: list[str], diagnosis: dict[str, tuple[Path, list[dict[str, Any]]]], *, requested: bool, excluded_ids: set[str] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not requested:
         return {"schemaVersion": SCHEMA_VERSION, "status": "not_requested", "highlightFrames": [], "sourceRefs": []}, []
     frames: list[dict[str, Any]] = []
     refs: list[dict[str, Any]] = []
     for material_id in material_ids:
+        if material_id in (excluded_ids or set()):
+            continue
         records_path, records = diagnosis[material_id]
         frame_dir = artifact_path(run_dir / "rpa" / "peak-frames", material_id)
         summary_path = frame_dir / "summary.json"
@@ -394,12 +401,12 @@ def _build_highlights(run_dir: Path, material_ids: list[str], diagnosis: dict[st
     return {"schemaVersion": SCHEMA_VERSION, "status": status, "highlightFrames": frames, "sourceRefs": _aggregate_refs(refs)}, refs
 
 
-def _video_artifacts(run_dir: Path, material_ids: list[str]) -> list[dict[str, Any]]:
+def _video_artifacts(run_dir: Path, material_ids: list[str], excluded_ids: set[str] | None = None) -> list[dict[str, Any]]:
     ready = _load_json(run_dir / "rpa" / "top_materials_rpa_ready.json")
     materials = ready.get("materials") if isinstance(ready, dict) else None
     if not isinstance(materials, list):
         raise FactPackError("RPA ready materials are invalid")
-    selected = {material_id: None for material_id in material_ids}
+    selected = {material_id: None for material_id in material_ids if material_id not in (excluded_ids or set())}
     for item in materials:
         if not isinstance(item, dict):
             continue
@@ -419,7 +426,7 @@ def _video_artifacts(run_dir: Path, material_ids: list[str]) -> list[dict[str, A
         if Path(path).suffix.lower() not in {".mp4", ".webm"}:
             raise FactPackError(f"video artifact extension is invalid for {material_id}")
         selected[material_id] = {"materialId": material_id, **ref}
-    return [selected[material_id] for material_id in material_ids if selected[material_id] is not None]
+    return [selected[material_id] for material_id in material_ids if material_id in selected and selected[material_id] is not None]
 
 
 def _assert_no_sensitive(value: Any, location: str = "root") -> None:
@@ -450,13 +457,18 @@ def build_fact_pack(run_dir: Path, output_dir: Path | None = None) -> dict[str, 
         path = artifact_path(run_dir / "rpa" / "diagnosis-records", material_id, ".json")
         diagnosis[material_id] = (path, _records_for(path))
 
+    attribution = assess_diagnosis_attribution(selected_materials, diagnosis)
+    excluded_ids = set(attribution["excludedMaterialIds"])
+    usable_diagnosis = {material_id: (path, [] if material_id in excluded_ids else records)
+                        for material_id, (path, records) in diagnosis.items()}
+
     output_dir.mkdir(parents=True, exist_ok=True)
-    materials, material_refs = _build_materials(run_dir, selected_materials, diagnosis)
-    audience, audience_refs = _build_audience(run_dir, material_ids, diagnosis)
-    scripts, script_refs = _build_scripts(run_dir, material_ids, diagnosis)
+    materials, material_refs = _build_materials(run_dir, selected_materials, usable_diagnosis, excluded_ids)
+    audience, audience_refs = _build_audience(run_dir, material_ids, usable_diagnosis)
+    scripts, script_refs = _build_scripts(run_dir, material_ids, usable_diagnosis, excluded_ids)
     highlights_requested = any((run_dir / "rpa" / "peak-frames" / material_id / "summary.json").is_file() for material_id in material_ids)
-    highlights, highlight_refs = _build_highlights(run_dir, material_ids, diagnosis, requested=highlights_requested)
-    video_artifacts = _video_artifacts(run_dir, material_ids)
+    highlights, highlight_refs = _build_highlights(run_dir, material_ids, usable_diagnosis, requested=highlights_requested, excluded_ids=excluded_ids)
+    video_artifacts = _video_artifacts(run_dir, material_ids, excluded_ids)
     category_payloads = (
         ("material-leaderboard.json", materials), ("audience.json", audience),
         ("scripts.json", scripts), ("highlight-frames.json", highlights),
@@ -465,8 +477,11 @@ def build_fact_pack(run_dir: Path, output_dir: Path | None = None) -> dict[str, 
         _assert_no_sensitive(payload)
         _write_json(output_dir / name, payload)
 
-    errors = []
+    errors = [_category_error("diagnosis", "diagnosis_attribution_unverified", item["message"])
+              for item in attribution["evidence"]]
     for script in scripts["scripts"]:
+        if script["materialId"] in excluded_ids:
+            continue
         if script["parseStatus"] == "missing":
             errors.append(_category_error("scripts", "script_missing", f"script source is missing for {script['materialId']}"))
         elif script["parseStatus"] == "failed":
@@ -500,6 +515,7 @@ def build_fact_pack(run_dir: Path, output_dir: Path | None = None) -> dict[str, 
             "errors": errors,
             "categoryStatuses": {"materialLeaderboard": "available", "audience": audience["status"], "scripts": "available", "highlightFrames": highlights["status"]},
             "scriptParseStatuses": [item["parseStatus"] for item in scripts["scripts"]],
+            "diagnosisAttribution": attribution,
         },
     }
     _assert_no_sensitive(manifest)
@@ -513,6 +529,8 @@ def build_fact_pack(run_dir: Path, output_dir: Path | None = None) -> dict[str, 
 - `scripts.json`：脚本结构化内容，以及 `missing`/`failed`/`parsed` 状态。
 - `highlight-frames.json`：高光帧、JPEG 哈希、选帧证据；没有帧时 `status=no_highlight_frames`。
 - `manifest.json`：TopN、分类计数、来源哈希、脱敏和质量状态。
+
+若 `quality.diagnosisAttribution.status=suspect`，报表素材榜单仍有效；`excludedMaterialIds` 的诊断详情、人群、脚本、高光帧和视频不进入可分析事实，仅保留缺口。请勿将此告警描述成「素材重复」。
 
 所有 `sourceRef`/`artifact` 都是运行目录内的相对路径并带 SHA-256 与大小。事实包不包含签名媒体 URL、绝对路径、账号、会话或凭证，也不把 `materialType`/`videoType` 推断成业务结论。
 
@@ -576,6 +594,21 @@ def verify_fact_pack(run_dir: Path, fact_pack_dir: Path) -> dict[str, Any]:
         scripts = payloads["scripts.json"]["scripts"]
         highlights_payload = payloads["highlight-frames.json"]
         highlights = highlights_payload["highlightFrames"]
+        diagnosis = {material_id: (artifact_path(run_dir / "rpa" / "diagnosis-records", material_id, ".json"),
+                                   _records_for(artifact_path(run_dir / "rpa" / "diagnosis-records", material_id, ".json")))
+                     for material_id in [str(item["materialId"]) for item in selected]}
+        attribution = assess_diagnosis_attribution(selected, diagnosis)
+        if ((manifest.get("quality") or {}).get("diagnosisAttribution")) != attribution:
+            errors.append("diagnosis attribution assessment does not match source")
+        excluded_ids = set(attribution["excludedMaterialIds"])
+        if any(str(item.get("materialId")) in excluded_ids and (item.get("materialInfo", {}).get("materialName") or item.get("dailyDetails")) for item in materials):
+            errors.append("unverified diagnosis details are present in material leaderboard")
+        if any(str(item.get("materialId")) in excluded_ids for item in audience_payload.get("audience", []) + highlights):
+            errors.append("unverified diagnosis facts are present in audience or highlights")
+        if any(str(item.get("materialId")) in excluded_ids and item.get("parseStatus") == "parsed" for item in scripts):
+            errors.append("unverified diagnosis script is present")
+        if any(str(item.get("materialId")) in excluded_ids for item in manifest.get("videoArtifacts", [])):
+            errors.append("unverified diagnosis video is present")
         manifest_sources = manifest.get("sourceFiles")
         if not isinstance(manifest_sources, list):
             errors.append("manifest sourceFiles are invalid")
@@ -614,7 +647,7 @@ def verify_fact_pack(run_dir: Path, fact_pack_dir: Path) -> dict[str, Any]:
             errors.append("highlight frames contain a material outside targetTopN")
         source_frame_count = 0
         if highlights_payload.get("status") != "not_requested":
-            for material_id in expected_ids:
+            for material_id in expected_ids - excluded_ids:
                 summary = _load_json(artifact_path(run_dir / "rpa" / "peak-frames", material_id) / "summary.json")
                 source_frame_count += len(summary.get("frames", []))
         if len(highlights) != source_frame_count:

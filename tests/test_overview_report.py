@@ -231,6 +231,20 @@ def _attach_highlight_facts(run_dir, *, valid=True):
 
 
 class OverviewProjectionTests(unittest.TestCase):
+    def test_overview_exposes_diagnosis_warning_without_labelling_materials_duplicates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = _make_run(Path(temp_dir))
+            _write_json(run_dir / "fact-pack" / "manifest.json", {
+                "quality": {"diagnosisAttribution": {
+                    "status": "suspect", "excludedMaterialIds": ["m-2"], "evidence": []
+                }}
+            })
+            model = build_overview_data(run_dir, REGISTRY_PATH)
+            html = render_overview_html(model)
+            self.assertEqual(model["diagnosisAttribution"]["excludedMaterialIds"], ["m-2"])
+            self.assertIn("报表中的素材 ID 与榜单指标各自独立", html)
+            self.assertIn("归属未获证实", html)
+
     def test_combined_highlight_copy_uses_independent_cards_and_one_physical_source_copy(self):
         from test_single_material_overview import _make_run as make_single_run
 

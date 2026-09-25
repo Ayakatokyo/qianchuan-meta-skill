@@ -166,6 +166,8 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
 
 事实包只保留可追溯事实，不生成商业结论。所有 `sourceRef`/`artifact` 都是运行目录内的相对 POSIX 路径并带 SHA-256 与大小；视频以 `manifest.json.videoArtifacts` 按素材 ID 绑定，只有已在 `sourceFiles` 中声明且通过哈希校验的 MP4/WebM 才可进入报告。文件哈希在一次进程运行内按规范化绝对路径缓存，避免对大 records 文件重复计算。签名媒体 URL、绝对路径、账号、会话和凭证字段会被移除。`verify-fact-pack` 完全离线校验 TopN、分类计数、来源哈希、JPEG、已声明视频及敏感字段。
 
+诊断记录中的 `materialId` 可能由请求参数写入，不能单独证明 RPA 返回了该素材。构建事实包时，必须对比报表素材身份与跨素材诊断内容：只有视频标识、诊断素材名及至少两类独立诊断记录均一致，且报表素材名不同时，才标记 `quality.diagnosisAttribution.status=suspect`；仅视频相同不触发此告警。若诊断名仅与其中一条报表素材精确匹配，只保留该条的诊断事实；其余素材的诊断详情、人群、脚本、高光帧和视频从可分析事实包排除，并在 `excludedMaterialIds`、各素材 `diagnosisAttributionStatus` 和阶段一总览显式说明。报表榜单的素材 ID、名称与指标继续保留。告警必须写“报表素材各自独立，诊断事实归属未证实”，不得写成“素材重复”或凭本地现象断言连接器服务端的具体回退实现。派生 Skill 必须保留这个事实包门禁及其回归用例，不得仅依赖提示词或视频哈希去重。
+
 ## 商业分析交接
 
 采集、阶段一报告和商业分析分为两个阶段。阶段一完成查询、RPA、四类事实包和离线校验后，先执行 `render-overview` 生成素材总览报告；总览报告生成成功即代表阶段一成功，阶段一成功后必须停止并提示用户进入阶段二，运行状态按交接协议进入 `awaiting_analysis_input`。阶段一报告只呈现已落盘事实，不自动生成商业结论。状态链路为：`awaiting_query_input → querying → rpa_processing → fact_pack_building → fact_pack_verifying → fact_pack_ready → [render-overview] → awaiting_analysis_input → analysis_preparing → awaiting_model → analysis_verifying → analysis_verified → report_ready`；`render-overview` 是离线报告产物步骤，不改变事实包或分析交接文件。长阶段回执持续记录开始/结束时间、进度和当前素材，失败时保留 `query_failed`、`fact_pack_failed` 或 `analysis_failed` 及可重试原因。

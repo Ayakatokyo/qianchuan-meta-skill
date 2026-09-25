@@ -120,6 +120,44 @@ def make_run(root, target_top_n, *, no_highlight=False, script_modes=None, inclu
 
 
 class FactPackTests(unittest.TestCase):
+    def test_repeated_diagnosis_is_not_misreported_as_duplicate_source_materials(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            make_run(run_dir, 3, include_video=True)
+            source = json.loads((run_dir / "rpa" / "diagnosis-records" / "m-1.json").read_text(encoding="utf-8"))
+            source[0]["materialUri"] = "shared-video-uri"
+            for rank in (1, 2, 3):
+                material_id = f"m-{rank}"
+                records = [{**row, "materialId": material_id} for row in source]
+                _write_json(run_dir / "rpa" / "diagnosis-records" / f"{material_id}.json", records)
+            manifest = build_fact_pack(run_dir)
+            quality = manifest["quality"]["diagnosisAttribution"]
+            self.assertEqual(quality["status"], "suspect")
+            self.assertEqual(quality["excludedMaterialIds"], ["m-2", "m-3"])
+            self.assertEqual(verify_fact_pack(run_dir, run_dir / "fact-pack")["status"], "succeeded")
+            materials = json.loads((run_dir / "fact-pack" / "material-leaderboard.json").read_text(encoding="utf-8"))["materials"]
+            self.assertEqual([item["materialName"] for item in materials], ["素材1", "素材2", "素材3"])
+            self.assertEqual(materials[1]["materialInfo"], {"materialId": "m-2"})
+            audience = json.loads((run_dir / "fact-pack" / "audience.json").read_text(encoding="utf-8"))["audience"]
+            self.assertEqual({item["materialId"] for item in audience}, {"m-1"})
+            highlights = json.loads((run_dir / "fact-pack" / "highlight-frames.json").read_text(encoding="utf-8"))["highlightFrames"]
+            self.assertEqual({item["materialId"] for item in highlights}, {"m-1"})
+            self.assertEqual([item["materialId"] for item in manifest["videoArtifacts"]], ["m-1"])
+
+    def test_shared_video_without_matching_diagnosis_body_is_not_an_alert(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            make_run(run_dir, 2)
+            for rank in (1, 2):
+                path = run_dir / "rpa" / "diagnosis-records" / f"m-{rank}.json"
+                records = json.loads(path.read_text(encoding="utf-8"))
+                records[0]["materialUri"] = "shared-video-uri"
+                records[0]["materialName"] = "共同视频"
+                records[2]["metricValue"] = str(rank)
+                _write_json(path, records)
+            quality = build_fact_pack(run_dir)["quality"]["diagnosisAttribution"]
+            self.assertEqual(quality["status"], "clear")
+
     def test_manifest_binds_retained_video_artifacts_to_selected_materials(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"

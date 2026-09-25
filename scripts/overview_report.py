@@ -422,6 +422,13 @@ def build_overview_data(run_dir, registry_path, io_cache=None):
         "defaultFieldIds": default_field_ids,
         "rows": rows,
     }
+    manifest_path = run_root / "fact-pack" / "manifest.json"
+    if manifest_path.is_file():
+        manifest = _read_json(manifest_path, "fact-pack manifest", dict)
+        quality = manifest.get("quality") if isinstance(manifest.get("quality"), dict) else {}
+        model["diagnosisAttribution"] = quality.get("diagnosisAttribution", {"status": "not_assessed", "excludedMaterialIds": []})
+    else:
+        model["diagnosisAttribution"] = {"status": "not_assessed", "excludedMaterialIds": []}
     try:
         model["audienceOverview"] = build_audience_overview(run_root, io_cache=io_cache)
     except AudienceOverviewError:
@@ -486,6 +493,8 @@ def render_overview_html(model):
 body { margin: 0; padding: 32px; background: var(--bg); }
 main { max-width: 1120px; margin: 0 auto; }
 h1 { margin: 0 0 22px; font-size: 30px; line-height: 1.25; letter-spacing: -.02em; }
+.quality-alert { margin: 0 0 18px; padding: 14px 16px; border: 1px solid #f59e0b; border-radius: 12px; background: #fffbeb; color: #78350f; line-height: 1.5; }
+.quality-alert[hidden] { display: none; }
 .toolbar, .summary, .pager { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .toolbar { padding: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(34, 64, 112, .06); }
 input[type=search] { min-width: 300px; flex: 1; height: 44px; padding: 10px 13px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); color: var(--text); font-size: 15px; outline: none; }
@@ -763,6 +772,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 <body>
 <main>
 <h1>千川素材榜单数据工作台</h1>
+<div id="quality-alert" class="quality-alert" role="alert" hidden></div>
 <nav class="section-nav" aria-label="报告部分">
   <button type="button" class="active" data-section="filters">素材筛选条件</button>
   <button type="button" data-section="materials">素材榜单</button>
@@ -894,6 +904,13 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 <script>
 (() => {
   const model = JSON.parse(document.getElementById("overview-model").textContent);
+  const attribution = model.diagnosisAttribution || {};
+  if (attribution.status === "suspect") {
+    const alert = document.getElementById("quality-alert");
+    const ids = Array.isArray(attribution.excludedMaterialIds) ? attribution.excludedMaterialIds : [];
+    alert.textContent = `数据质量提示：报表中的素材 ID 与榜单指标各自独立；部分 RPA 诊断内容跨素材高度一致，归属未获证实。已从可分析的诊断事实中排除素材 ${ids.join("、")}；其报表指标仍可使用。请勿将此理解为素材重复。`;
+    alert.hidden = false;
+  }
   const pageSize = 10;
   const storageKey = `qianchuan-overview:${model.runId}:v${model.schemaVersion}`;
   const initialSort = model.queryContext.ranking || {};
