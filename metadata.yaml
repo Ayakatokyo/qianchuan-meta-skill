@@ -1,10 +1,6 @@
 short-description: "采集千川素材的投放、人群、脚本与互动事实，形成支持自定义分析的数据工作台"
 tags:
   - 千川
-compatibility:
-  - data-analysis
-  - python
-  - html-report
 requires:
   env:
     - ENV_BACKEND_HOST
@@ -27,6 +23,15 @@ market:
       prompt: "提取千川素材中的点击与互动高光时刻，为后续自定义分析提供证据"
     - title: 已有数据继续分析
       prompt: "基于已有数据提炼优质素材共性，形成内容优化建议"
+pre_input: |
+  请采集千川素材及相关诊断数据
+  千川授权店铺：__field:api_shop__（必填）
+  千川广告主ID：__field:rpa_shop__（必填）
+  时间范围：__field:date_range__
+  详情素材数：__field:top_n__（包含互动时序、人群、脚本和高光帧数据，默认10）
+  素材筛选与排序：__field:material_filter_sort__（可选；例如筛选“整体消耗”>=10000，再按“净成交ROI”降序；排序指标和排序方向均可留空）。
+  是否同时生成高光帧图片：__field:highlight_mode__（选择否时无需填写高光帧规则）
+  高光帧规则：__field:highlight_rules__（选择是时填写；可用指标：整体点击次数、整体流失数、整体点赞次数、整体评论次数、整体转发次数、整体新增粉丝数；规则案例：保留封面，提取整体点击次数局部峰值3帧、整体转发次数最高值2帧，不提取其他指标）
 skill_form:
   - key: api_shop
     type: api_shop
