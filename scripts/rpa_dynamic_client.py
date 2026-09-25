@@ -509,28 +509,9 @@ def cmd_list_accounts(_args: argparse.Namespace) -> None:
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
-    detail = fetch_connector_detail()
-    params = validate_business_params(detail, load_params(args))
-    result = invoke(detail, args.shop_id, params)
-    output_dir = external_runtime_path(
-        workspace_root / args.output_dir,
-        label="RPA output directory",
-    )
-    file_summaries = [] if args.no_download else download_and_parse_files(detail, result, output_dir, args.preview_limit)
-    print(
-        json.dumps(
-            {
-                "connectorCode": _connector_code(),
-                "connectorName": detail.get("name"),
-                "status": result.get("status"),
-                "taskGroupId": result.get("task_group_id"),
-                "errors": result.get("errors") or [],
-                "files": file_summaries,
-                "rawResult": result if args.include_raw_result else None,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+    raise ContractError(
+        "独立详情 fetch 无法执行首批 CSV 门禁，已禁止提交；请使用 "
+        "run_meta_skill.py run/workflow --execute-rpa 的受保护批次入口。"
     )
 
 
@@ -598,7 +579,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_params_source(validate_parser)
     validate_parser.set_defaults(func=cmd_validate)
 
-    fetch_parser = subparsers.add_parser("fetch", help="校验、异步取数、下载并解析 CSV")
+    fetch_parser = subparsers.add_parser("fetch", help="已禁用；使用 run_meta_skill.py run/workflow 的受保护批次入口")
     fetch_parser.add_argument("--shop-id", required=True, help="RPA 授权账号对应的 shop_id")
     add_params_source(fetch_parser)
     fetch_parser.add_argument("--output-dir", required=True, help="输出目录；必须位于技能安装目录之外")

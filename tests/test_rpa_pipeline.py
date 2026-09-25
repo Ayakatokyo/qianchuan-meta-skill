@@ -31,7 +31,7 @@ class RpaPipelineTests(unittest.TestCase):
                     )
                 return {
                     "records": [{"materialId": entry["materialId"]}],
-                    "csvPath": self._csv(root),
+                    "csvPath": self._csv(root, entry["materialId"]),
                 }
 
             def postprocess(entry, records, paths):
@@ -65,7 +65,7 @@ class RpaPipelineTests(unittest.TestCase):
                 configuration_fingerprint="fingerprint",
                 period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
                 options={"rpaConcurrency": 1},
-                fetch_diagnosis=lambda entry, _paths: {"records": [{"materialId": entry["materialId"]}], "csvPath": self._csv(root)},
+                fetch_diagnosis=lambda entry, _paths: {"records": [{"materialId": entry["materialId"]}], "csvPath": self._csv(root, entry["materialId"])},
                 postprocess=self._video_postprocess,
                 progress_callback=lambda phase, progress, current: events.append((phase, progress, current)),
             )
@@ -81,26 +81,26 @@ class RpaPipelineTests(unittest.TestCase):
             def fetch(entry, _paths):
                 calls.append(entry["materialId"])
                 if entry["materialId"] == "m-1":
-                    raise RpaPipelineError("rpa_request_timeout", "rpa_request_timeout")
-                csv_path = root / "input.csv"
-                csv_path.write_text("data", encoding="utf-8")
+                    raise RpaPipelineError("remote task failed", "rpa_task_failed")
+                csv_path = self._csv(root, entry["materialId"])
                 return {"records": [{"materialId": entry["materialId"]}], "csvPath": csv_path, "gatewayReceipt": {}}
 
             result = run_rpa_pipeline(
                 root,
-                {"materials": [candidate("m-1", 1), candidate("m-2", 2)], "collection": {"candidateTopN": 2, "targetTopN": 1}},
+                {"materials": [candidate("m-1", 1), candidate("m-2", 2), candidate("m-3", 3)], "collection": {"candidateTopN": 3, "targetTopN": 2}},
                 configuration_fingerprint="fingerprint",
                 period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
-                options={"rpaConcurrency": 1},
+                options={"rpaConcurrency": 2},
                 fetch_diagnosis=fetch,
                 postprocess=self._video_postprocess,
             )
 
             ready = json.loads((root / "rpa" / "top_materials_rpa_ready.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(calls, ["m-1", "m-2"])
+        self.assertEqual(set(calls[:2]), {"m-1", "m-2"})
+        self.assertEqual(calls[2:], ["m-3"])
         self.assertTrue(result["succeeded"])
-        self.assertEqual([item["materialId"] for item in ready["materials"]], ["m-2"])
+        self.assertEqual([item["materialId"] for item in ready["materials"]], ["m-2", "m-3"])
 
     def test_rpa_failure_is_not_retried(self):
         calls = []
@@ -116,7 +116,7 @@ class RpaPipelineTests(unittest.TestCase):
                     )
                 return {
                     "records": [{"materialId": entry["materialId"]}],
-                    "csvPath": self._csv(root),
+                    "csvPath": self._csv(root, entry["materialId"]),
                     "gatewayReceipt": {},
                 }
 
@@ -141,7 +141,7 @@ class RpaPipelineTests(unittest.TestCase):
             root = Path(directory)
             def fetch(entry, _paths):
                 calls.append(entry["materialId"])
-                return {"records": [{"materialId": entry["materialId"]}], "csvPath": self._csv(root), "gatewayReceipt": {}}
+                return {"records": [{"materialId": entry["materialId"]}], "csvPath": self._csv(root, entry["materialId"]), "gatewayReceipt": {}}
             result = run_rpa_pipeline(
                 root,
                 {"materials": [candidate("m-1", 1), candidate("m-2", 2), candidate("m-3", 3)], "collection": {"candidateTopN": 3, "targetTopN": 1}},
@@ -161,7 +161,7 @@ class RpaPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             csv_path = root / "input.csv"
-            csv_path.write_text("data", encoding="utf-8")
+            csv_path.write_text("materialId\x01recordType\x01videoUrl\n" + "m-1\x01material_info\x01https://video.test/m-1\n", encoding="utf-8")
 
             def fetch(entry, _paths):
                 calls.append(entry["materialId"])
@@ -277,7 +277,7 @@ class RpaPipelineTests(unittest.TestCase):
                 configuration_fingerprint="fingerprint",
                 period={"startDate": "2026-08-01", "endDate": "2026-08-02"},
                 options={"rpaConcurrency": 1},
-                fetch_diagnosis=lambda entry, _paths: {"records": [{"recordType": "material_info", "materialId": entry["materialId"], "videoUrl": "https://video.test/m-1"}], "csvPath": self._csv(root), "gatewayReceipt": {}},
+                fetch_diagnosis=lambda entry, _paths: {"records": [{"recordType": "material_info", "materialId": entry["materialId"], "videoUrl": "https://video.test/m-1"}], "csvPath": self._csv(root, entry["materialId"]), "gatewayReceipt": {}},
                 postprocess=postprocess,
             )
 
@@ -318,7 +318,7 @@ class RpaPipelineTests(unittest.TestCase):
                 options={"rpaConcurrency": 1},
                 fetch_diagnosis=lambda entry, _paths: {
                     "records": [{"recordType": "material_info", "materialId": entry["materialId"], "videoUrl": "https://video.test/m-1"}],
-                    "csvPath": self._csv(root),
+                    "csvPath": self._csv(root, entry["materialId"]),
                 },
                 postprocess=postprocess,
             )
@@ -346,7 +346,7 @@ class RpaPipelineTests(unittest.TestCase):
         return {"frames": [], "videoPath": str(video_path)}
 
     @staticmethod
-    def _csv(root):
-        path = root / "input.csv"
-        path.write_text("data", encoding="utf-8")
+    def _csv(root, material_id="m-1"):
+        path = root / (material_id + ".input.csv")
+        path.write_text("materialId\x01recordType\x01videoUrl\n" + material_id + "\x01material_info\x01https://video.test/video\n", encoding="utf-8")
         return path

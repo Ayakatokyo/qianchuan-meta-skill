@@ -183,3 +183,34 @@ class RpaAdapterTests(unittest.TestCase):
                 )
         self.assertEqual(records, [{"materialId": "m-1"}])
         self.assertIsNone(csv_path)
+
+    def test_unknown_status_remains_unconfirmed_for_first_batch_barrier(self):
+        for status, expected in [('mystery', 'rpa_result_unconfirmed'), ('failed', 'rpa_gateway_client_error')]:
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                session = SequenceSession([
+                    FakeResponse(connector_detail()),
+                    FakeResponse({'success': True, 'data': {'task_group_id': 'tg-1'}}),
+                    FakeResponse({'success': True, 'data': {'status': status}}),
+                ])
+                with mock.patch.object(rpa_adapter.time, 'sleep'), self.assertRaises(rpa_adapter.RpaAdapterError) as caught:
+                    rpa_adapter.fetch_diagnosis(shop_id='report-shop', rpa_account_id='rpa-shop', material_id='m-1',
+                        start_date='2026-08-01', end_date='2026-08-02', csv_dir=Path(directory),
+                        environ={'ENV_BACKEND_HOST': 'https://gateway.test', 'YUCE_AUTHORIZATION': 'auth', 'YUCE_SESSION_ID': 'session'}, session=session)
+                self.assertEqual(caught.exception.error_type, expected)
+
+    def test_downloads_csv_when_success_response_also_contains_record_payload(self):
+        session = SequenceSession([
+            FakeResponse(connector_detail()),
+            FakeResponse({'success': True, 'data': {'task_group_id': 'tg-1'}}),
+            FakeResponse({'success': True, 'data': {'status': 'completed', 'payload': [{'materialId': 'm-1'}],
+                                                   'files': [{'fileUrl': 'https://example.test/result.csv'}]}}),
+        ])
+        def download(_url, target, **kwargs):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('materialId\x01recordType\nm-1\x01material_info\n')
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(rpa_adapter.time, 'sleep'), mock.patch.object(rpa_adapter, 'download_file', download):
+            records, csv_path, _ = rpa_adapter.fetch_diagnosis(shop_id='report-shop', rpa_account_id='rpa-shop', material_id='m-1',
+                start_date='2026-08-01', end_date='2026-08-02', csv_dir=Path(directory),
+                environ={'ENV_BACKEND_HOST': 'https://gateway.test', 'YUCE_AUTHORIZATION': 'auth', 'YUCE_SESSION_ID': 'session'}, session=session)
+            self.assertIsNotNone(csv_path)
+            self.assertEqual(records[0]['recordType'], 'material_info')

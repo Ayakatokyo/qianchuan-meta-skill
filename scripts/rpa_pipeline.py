@@ -8,6 +8,8 @@ from pathlib import Path
 import tempfile
 import time
 
+from rpa_csv_parser import RpaCsvError, parse_diagnosis_csv
+from rpa_dynamic_client import CONNECTOR_CODE
 from frame_extractor import extract_highlight_frames
 from path_safety import artifact_path, validate_material_id
 from rpa_adapter import DEFAULT_VIDEO_MAX_BYTES, DEFAULT_DOWNLOAD_DEADLINE_SEC, download_file
@@ -26,6 +28,49 @@ class RpaPipelineError(RuntimeError):
     def __init__(self, message, error_type="rpa_pipeline_error"):
         super().__init__(message)
         self.error_type = error_type
+
+
+FIRST_BATCH_NO_CSV_MESSAGE = "首批素材详情 RPA 未返回有效 CSV，当前入参可能有问题，已暂停后续所有 RPA。请检查账号、日期和素材定位参数，修正后使用新运行目录重新验证首批。"
+FIRST_BATCH_UNCONFIRMED_MESSAGE = "首批素材详情 RPA 结果尚未确认，已暂停后续所有 RPA。请先核实已提交任务的远端状态，不要直接重提或补位；确认旧任务结束并复核入参后使用新运行目录。"
+
+
+def assert_detail_rpa_not_paused(output_dir):
+    """Reusable preflight for derived skills; call before any new remote work."""
+    path = _paths(output_dir)["manifest"]
+    if not path.exists():
+        return
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RpaPipelineError("RPA manifest is unreadable; refusing new submissions") from exc
+    if not isinstance(manifest, dict):
+        raise RpaPipelineError("RPA manifest must be an object; refusing new submissions")
+    gate = manifest.get("firstBatchCsvGate") or {}
+    if not isinstance(gate, dict) or (gate and gate.get("status") not in {"pending", "passed", "blocked", "unconfirmed"}):
+        raise RpaPipelineError("RPA first-batch gate is invalid; refusing new submissions")
+    if gate.get("status") in {"pending", "blocked", "unconfirmed"}:
+        if gate["status"] == "pending":
+            gate.update(status="unconfirmed", errorCode="first_batch_results_unconfirmed", message=FIRST_BATCH_UNCONFIRMED_MESSAGE)
+            manifest.update(status="paused", firstBatchCsvGate=gate)
+            _write_json(path, manifest)
+        error = RpaPipelineError(gate.get("message") or FIRST_BATCH_UNCONFIRMED_MESSAGE,
+                                 gate.get("errorCode") or "first_batch_results_unconfirmed")
+        error.first_batch_csv_gate = gate
+        raise error
+
+
+def _update_first_batch_gate(gate, entries):
+    first = [entry for entry in entries if entry["materialId"] in gate["materialIds"]]
+    gate["outcomes"] = {entry["materialId"]: (
+        "unconfirmed" if entry.get("rpaStatus") == "unconfirmed" else
+        "valid_csv" if entry.get("validDiagnosisCsv") else "no_valid_csv") for entry in first}
+    gate["validCsvCount"] = sum(entry.get("validDiagnosisCsv") is True for entry in first)
+    if "unconfirmed" in gate["outcomes"].values():
+        gate.update(status="unconfirmed", errorCode="first_batch_results_unconfirmed", message=FIRST_BATCH_UNCONFIRMED_MESSAGE)
+    elif gate["validCsvCount"]:
+        gate.update(status="passed", errorCode=None, message=None)
+    else:
+        gate.update(status="blocked", errorCode="first_batch_no_valid_csv", message=FIRST_BATCH_NO_CSV_MESSAGE)
 
 
 def resolve_rpa_options(overrides=None):
@@ -201,13 +246,15 @@ def _load_resume(paths, fingerprint, period):
     return {item.get("materialId"): item for item in entries if isinstance(item, dict) and item.get("materialId")}
 
 
-def _persist(paths, entries, fingerprint, period, options, account=None):
+def _persist(paths, entries, fingerprint, period, options, account=None, gate=None):
     payload = {
         "schemaVersion": 1,
         "configurationFingerprint": fingerprint,
         "period": period,
         "rpaOptions": options,
         "rpaAccount": account,
+        "firstBatchCsvGate": gate,
+        "status": "paused" if gate and gate.get("status") in {"blocked", "unconfirmed"} else "running",
         "materials": entries,
         "updatedAtEpochSec": time.time(),
     }
@@ -220,10 +267,20 @@ def _retain_records(entry, result, paths):
     if not isinstance(records, list) or not any(isinstance(item, dict) and str(item.get("materialId") or "") == entry["materialId"] for item in records):
         raise RpaPipelineError("rpa_records_invalid: records do not contain the candidate material", "rpa_records_invalid")
     csv_path = result.get("csvPath")
-    retained_csv = None
-    if csv_path:
-        retained_csv = artifact_path(paths["csv"], entry["materialId"], ".csv")
-        _copy_file_atomically(csv_path, retained_csv)
+    if not csv_path:
+        raise RpaPipelineError("RPA returned no downloadable CSV", "rpa_csv_artifact_unavailable")
+    try:
+        csv_records = parse_diagnosis_csv(csv_path)
+    except RpaCsvError as exc:
+        raise RpaPipelineError(str(exc), "rpa_csv_invalid") from exc
+    if not any(str(record.get("materialId") or "") == entry["materialId"] and
+               record.get("recordType") == "material_info" for record in csv_records):
+        raise RpaPipelineError("CSV has no material_info for the requested material", "rpa_csv_invalid")
+    # CSV validity is independent of subsequent persistence/video/frame failures.
+    entry["validDiagnosisCsv"] = True
+    records = csv_records
+    retained_csv = artifact_path(paths["csv"], entry["materialId"], ".csv")
+    _copy_file_atomically(csv_path, retained_csv)
     records_path = artifact_path(paths["records"], entry["materialId"], ".json")
     _write_json(records_path, records)
     run_root = paths["root"].parent
@@ -263,7 +320,7 @@ def _retain_records(entry, result, paths):
 
 def _failure(entry, error):
     error_type = error.error_type if isinstance(error, RpaPipelineError) else getattr(error, "error_type", "rpa_gateway_client_error")
-    entry.update({"rpaStatus": "rejected", "postprocessStatus": "not_started", "status": "failed", "failureReason": error_type, "errorType": type(error).__name__, "errorMessage": str(error)})
+    entry.update({"rpaStatus": "unconfirmed" if error_type in {"rpa_result_unconfirmed", "rpa_request_timeout"} or "rpa_request_timeout" in str(error) else "rejected", "postprocessStatus": "not_started", "status": "failed", "failureReason": error_type, "errorType": type(error).__name__, "errorMessage": str(error)})
 
 
 def _ready_payload(entries, fingerprint):
@@ -380,6 +437,7 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
     ``fetch_diagnosis`` and ``postprocess`` isolate external effects for deterministic
     tests and for the CLI's concrete RPA/video adapters.
     """
+    assert_detail_rpa_not_paused(output_dir)
     options = resolve_rpa_options(options)
     collection = candidate_payload.get("collection") if isinstance(candidate_payload, dict) else None
     candidates = candidate_payload.get("materials") if isinstance(candidate_payload, dict) else None
@@ -406,7 +464,10 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
     material_ids = [entry["materialId"] for entry in entries]
     if len(material_ids) != len(set(material_ids)):
         raise RpaPipelineError("candidate_pool_invalid: duplicate candidate material IDs are not allowed", "candidate_pool_invalid")
-    _persist(paths, entries, configuration_fingerprint, period, options, account)
+    gate = None
+    if paths["manifest"].exists():
+        gate = json.loads(paths["manifest"].read_text(encoding="utf-8")).get("firstBatchCsvGate")
+    _persist(paths, entries, configuration_fingerprint, period, options, account, gate)
 
     def process_rpa(entry):
         started = time.monotonic()
@@ -438,7 +499,7 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
             entry["highlightSummaryPath"] = postprocessed.get("summaryPath")
         except Exception as exc:
             entry.update({"postprocessStatus": "failed", "status": "partial", "failureReason": getattr(exc, "error_type", "frame_extraction_failed"), "errorType": type(exc).__name__, "errorMessage": str(exc)})
-        _persist(paths, entries, configuration_fingerprint, period, options, account)
+        _persist(paths, entries, configuration_fingerprint, period, options, account, gate)
         if progress_callback:
             try:
                 progress_callback("rpa_processing", {"completed": sum(_source_completed(item) for item in entries), "total": target_top_n}, entry["materialId"])
@@ -455,6 +516,10 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
             next_index += wave_size
             if not wave:
                 continue
+            if gate is None:
+                gate = {"status": "pending", "connectorCode": CONNECTOR_CODE, "materialIds": [item["materialId"] for item in wave],
+                        "validCsvCount": 0, "outcomes": {}}
+                _persist(paths, entries, configuration_fingerprint, period, options, account, gate)
             if progress_callback:
                 for item in wave:
                     try:
@@ -468,19 +533,29 @@ def run_rpa_pipeline(output_dir, candidate_payload, *, configuration_fingerprint
                     if records is not None:
                         entry["postprocessAttemptCount"] += 1
                         entry["postprocessStatus"] = "running"
-                        _persist(paths, entries, configuration_fingerprint, period, options, account)
+                        _persist(paths, entries, configuration_fingerprint, period, options, account, gate)
                         media_future = postprocess_executor.submit(postprocess, entry, records, paths)
                         pending_postprocess[media_future] = entry
                     for media_future in [item for item in pending_postprocess if item.done()]:
                         complete_postprocess(media_future, pending_postprocess.pop(media_future))
-            _persist(paths, entries, configuration_fingerprint, period, options, account)
+            if gate["status"] == "pending":
+                _update_first_batch_gate(gate, entries)
+            _persist(paths, entries, configuration_fingerprint, period, options, account, gate)
+            if gate["status"] in {"blocked", "unconfirmed"}:
+                break
 
         for media_future in as_completed(list(pending_postprocess)):
             complete_postprocess(media_future, pending_postprocess[media_future])
 
     verification = _verify(paths, entries, configuration_fingerprint, target_top_n)
+    if gate and gate["status"] in {"blocked", "unconfirmed"}:
+        verification.update(status="paused", firstBatchCsvGate=gate)
+        _write_json(paths["verification"], verification)
+    manifest = _persist(paths, entries, configuration_fingerprint, period, options, account, gate)
+    manifest["status"] = verification["status"]
+    _write_json(paths["manifest"], manifest)
     if verification["status"] == "succeeded":
         _write_json(paths["ready"], _ready_payload(entries, configuration_fingerprint))
     else:
         paths["ready"].unlink(missing_ok=True)
-    return {"succeeded": verification["status"] == "succeeded", "manifestPath": str(paths["manifest"]), "verificationPath": str(paths["verification"]), "readyPath": str(paths["ready"]), "entries": entries}
+    return {"succeeded": verification["status"] == "succeeded", "firstBatchCsvGate": gate, "manifestPath": str(paths["manifest"]), "verificationPath": str(paths["verification"]), "readyPath": str(paths["ready"]), "entries": entries}

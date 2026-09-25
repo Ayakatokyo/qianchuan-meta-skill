@@ -83,16 +83,13 @@ QuerySpec 的 `field` 必须来自 `config/asset-field-registry-v1.json`。注�
 
 `validate` 不访问外部服务；`query` 使用 `ENV_BACKEND_HOST`、`YUCE_AUTHORIZATION`，以及 `YUCE_SESSION_ID` 或 `YCSESSIONID` 调用千川报表连接器。`YUCE_SESSION_ID` 仅用于 Agent 会话标识；RPA 与报表连接器的网关 Cookie 一律采用 `YCSESSIONID` → `YUCE_AUTHORIZATION`，不得将短会话标识写入 `YCSESSIONID`。凭证不得进入 Spec、Git、日志或运行工件。
 
-详情 RPA 的唯一静态身份是 `rpa.conn.juliang.qc.material.analysis.video.live.diagnosis`，只保存在 `scripts/rpa_dynamic_client.py`。每次取数先执行 `detail`/`schema` 获取实时 `platformCode`、`inParamJsonSchemaText` 或 `inParamList`，再用一个完整业务 JSON 执行 `validate`；`fetch` 会再次反查详情、重复校验、走异步 task/status，并下载解析 CSV。禁止把详情返回的 `id` 当作 connector code，禁止补 `_ACCOUNT_PASSWORD`，也不能继续使用同步 `/invoke` 执行详情 RPA。外层工具执行真实 `fetch` 时显式设置 3600 秒超时。
+详情 RPA 的唯一静态身份是 `rpa.conn.juliang.qc.material.analysis.video.live.diagnosis`，只保存在 `scripts/rpa_dynamic_client.py`。每次取数先执行 `detail`/`schema` 获取实时 `platformCode`、`inParamJsonSchemaText` 或 `inParamList`，再用一个完整业务 JSON 执行 `validate`；完整 `run/workflow --execute-rpa` 会再次反查详情、重复校验、走异步 task/status，并下载解析 CSV。独立动态详情 `fetch`（包括 `--no-download`）在任何远端请求前拒绝，必须使用带首批门禁的完整入口。禁止把详情返回的 `id` 当作 connector code，禁止补 `_ACCOUNT_PASSWORD`，也不能继续使用同步 `/invoke` 执行详情 RPA。外层工具执行真实详情采集时显式设置 3600 秒超时。
 
 ```bash
 python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" detail
 python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" schema
 python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" list-accounts
 python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" validate --params-file config/rpa-business-params.json
-python "$SKILL_ROOT/scripts/rpa_dynamic_client.py" fetch --shop-id "<rpa_shop.extra.shop_id>" \
-  --params-file config/rpa-business-params.json \
-  --output-dir "$WORKSPACE_ROOT/千川数据资源/run-YYYYMMDD-YYYYMMDD/rpa-result"
 ```
 
 执行前保持当前目录为用户工作对象目录，并先保存 `WORKSPACE_ROOT="$PWD"`；技能脚本和依赖清单通过技能安装目录的绝对路径读取，运行产物一律显式写入 `$WORKSPACE_ROOT`。不得 `cd` 到技能目录后创建运行目录，也不得把技能目录赋给 `WORKSPACE_ROOT`。在未预装依赖的本地 Codex 运行面，使用 `uv run --with-requirements "$SKILL_ROOT/requirements.txt" python` 按本技能清单解析依赖，避免 `requests` 缺失被误判为鉴权故障。不要把凭证写入命令行。
@@ -167,6 +164,14 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
 事实包只保留可追溯事实，不生成商业结论。所有 `sourceRef`/`artifact` 都是运行目录内的相对 POSIX 路径并带 SHA-256 与大小；视频以 `manifest.json.videoArtifacts` 按素材 ID 绑定，只有已在 `sourceFiles` 中声明且通过哈希校验的 MP4/WebM 才可进入报告。文件哈希在一次进程运行内按规范化绝对路径缓存，避免对大 records 文件重复计算。签名媒体 URL、绝对路径、账号、会话和凭证字段会被移除。`verify-fact-pack` 完全离线校验 TopN、分类计数、来源哈希、JPEG、已声明视频及敏感字段。
 
 诊断记录中的 `materialId` 可能由请求参数写入，不能单独证明 RPA 返回了该素材。构建事实包时，必须对比报表素材身份与跨素材诊断内容：只有视频标识、诊断素材名及至少两类独立诊断记录均一致，且报表素材名不同时，才标记 `quality.diagnosisAttribution.status=suspect`；仅视频相同不触发此告警。若诊断名仅与其中一条报表素材精确匹配，只保留该条的诊断事实；其余素材的诊断详情、人群、脚本、高光帧和视频从可分析事实包排除，并在 `excludedMaterialIds`、各素材 `diagnosisAttributionStatus` 和阶段一总览显式说明。报表榜单的素材 ID、名称与指标继续保留。告警必须写“报表素材各自独立，诊断事实归属未证实”，不得写成“素材重复”或凭本地现象断言连接器服务端的具体回退实现。派生 Skill 必须保留这个事实包门禁及其回归用例，不得仅依赖提示词或视频哈希去重。
+
+## 首批素材详情 CSV 门禁
+
+对 `rpa_rpa.conn.juliang.qc.material.analysis.video.live.diagnosis`（运行时 connector code 为 `rpa.conn.juliang.qc.material.analysis.video.live.diagnosis`）先提交首批，批量为当前并发数、目标数和剩余候选数的最小值；必须收齐首批结果并检查实际下载的 CSV 后，才能提交下一批。有效 CSV 必须非空、可按诊断格式解析，并包含与请求素材 ID 匹配的 `material_info` 记录；只有任务成功状态、下载链接、JSON payload、空表头、HTML 登录页或错误素材数据均不能放行。视频下载或抽帧失败不算 CSV 失败。
+
+首批已结束且有效 CSV 数为 0 时，`rpa/batch-manifest.json` 的 `firstBatchCsvGate.status=blocked`、`status=paused`，错误码为 `first_batch_no_valid_csv`。必须向使用者提示：“首批素材详情 RPA 未返回有效 CSV，当前入参可能有问题，已暂停后续所有 RPA。请检查账号、日期和素材定位参数，修正后使用新运行目录重新验证首批。” 保留逐素材错误与回执，禁止继续后续批次、补位、自动重试或普通续跑。不得断言入参一定错误。
+
+首批存在轮询超时、未知状态或执行中断时，门禁为 `unconfirmed`，同样禁止新的 RPA；先核实已提交任务的远端状态，不把未知当确定失败。本元技能不会自动重新提交这些任务，待旧任务结束和参数复核后用新运行目录重新执行首批；不能通过同目录改参数或改变并发来清除门禁。首批全部已终态且至少一份有效 CSV 时，继续原候选补位规则。`run` / `workflow` / `query` 在外部请求之前检查持久门禁，`run_rpa_pipeline` 自身也执行同一检查。
 
 ## 商业分析交接
 
@@ -252,3 +257,8 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
 派生 Skill 的日期表单须声明 `max_policy: t_plus_2`，说明“前天及以前”，但表单只是第一道提示。新 Skill 的每条实时取数路径在请求报表或诊断 RPA **之前**都必须调用随包交付的 `scripts/date_policy.py` 的 `validate_period`（或委托本元技能的 `QuerySpec`/取数入口），并让非零退出阻断网络请求。若新 Skill 独立安装，须将该日期校验代码与调用点、测试一同纳入自己的包；仅引用本文件或只复制表单不算完成。日报需同时取统计日 T 和 T-1 时，默认 T 为北京时间前天；明确请求昨天时返回可用上限并请用户改选，不自动替用户改日。可用命令：`python "$SKILL_ROOT/scripts/date_policy.py" --start-date YYYY-MM-DD --end-date YYYY-MM-DD`。
 
 交付派生包前至少验证北京时间边界 T-2 通过、T-1/今天/未来拒绝、开始晚于结束拒绝；断言非法日期不会调用报表或 RPA；检查新包中的脚本、表单、依赖、报告资源和回执路径均存在且可从干净解包目录运行。若该流程引入直接连接器调用，不得绕过上述日期门禁、授权关系与事实校验。
+
+
+派生 Skill 的详情采集还必须继承上述首批 CSV 门禁：委托 `scripts/run_meta_skill.py run/workflow` 或 `scripts/rpa_pipeline.py::run_rpa_pipeline`；若自建编排，须在其每条提交/补位/恢复路径交付同等运行时检查及持久暂停状态，不能只复制提示词。可复用 `rpa_pipeline.assert_detail_rpa_not_paused(output_dir)` 做请求前检查，但单独调用预检不能替代首批结果判定。禁止绕过守卫直接循环调用单素材 `fetch`。
+
+派生包交付前用离线模拟远端、真实临时 CSV 和实际调度器验证：首批全部无文件/空CSV/损坏CSV/错误素材仅提交首批；部分有效且结果收齐允许下一批；首批未知或中断不再提交；视频/抽帧失败不误触无CSV；重启/补位仍暂停。干净解包后重验入口与这些行为，纳入所需运行代码及依赖。既有独立派生包不会自动更新，须在其源仓升级并重新打包验收。

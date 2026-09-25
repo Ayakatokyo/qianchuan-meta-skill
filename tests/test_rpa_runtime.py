@@ -19,3 +19,7 @@ class RpaRuntimeTests(unittest.TestCase):
     def test_timeout_terminates_isolated_material_process(self):
         with self.assertRaisesRegex(RpaRuntimeError, "rpa_request_timeout"):
             run_isolated({}, timeout_sec=0.01, worker=slow_worker)
+
+
+def unknown_worker(_params):
+    raise RuntimeError('unexpected worker exit; remote result unknown')

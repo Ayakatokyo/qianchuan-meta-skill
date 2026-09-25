@@ -21,7 +21,7 @@ from material_query import MaterialQueryError, execute_material_query
 from overview_report import OverviewReportError, write_overview
 from qianchuan_report_client import ReportClientError, fetch_material_report
 from rpa_adapter import RpaAdapterError, fetch_diagnosis_worker, list_rpa_accounts
-from rpa_pipeline import RpaPipelineError, build_postprocessor, resolve_rpa_options, run_rpa_pipeline
+from rpa_pipeline import assert_detail_rpa_not_paused, RpaPipelineError, build_postprocessor, resolve_rpa_options, run_rpa_pipeline
 from rpa_runtime import RpaRuntimeError, run_isolated
 from run_receipt import RunReceipt
 from run_verifier import RunVerificationError, verify_completed_run
@@ -50,7 +50,7 @@ def _ensure_analysis_assets():
 PHASES = (
     "awaiting_query_input", "querying", "rpa_processing", "fact_pack_building", "fact_pack_verifying", "fact_pack_ready",
     "awaiting_analysis_input", "planning_fact_retrieval", "fact_retrieval_ready", "analysis_preparing", "analysis_prepared", "awaiting_model", "analysis_verifying", "analysis_verified", "report_ready",
-    "query_failed", "fact_pack_failed", "fact_retrieval_failed", "analysis_failed",
+    "rpa_paused", "query_failed", "fact_pack_failed", "fact_retrieval_failed", "analysis_failed",
 )
 PHASE_STATES = PHASES
 
@@ -198,6 +198,9 @@ def _set_run_phase(run_dir, phase, **details):
         state["status"] = "succeeded"
         state["finishedAtEpochSec"] = now
         state["durationSec"] = max(0, now - (state.get("startedAtEpochSec") or now))
+    if phase == "rpa_paused":
+        state["status"] = "paused"
+        receipt["status"] = "paused"
     receipt["phase"] = phase
     for key, value in details.items():
         if value is not None:
@@ -449,6 +452,8 @@ def main(argv=None):
     try:
         args = build_parser().parse_args(argv)
         _enforce_external_runtime_paths(args)
+        if args.command in {"run", "workflow", "query"}:
+            assert_detail_rpa_not_paused(args.output_dir)
         if args.command == "render-overview":
             run_dir = Path(args.run_dir)
             output_dir = Path(args.output_dir)
@@ -646,15 +651,15 @@ def main(argv=None):
         receipt.finish_stage("rpa")
         receipt.start_stage("batchVerification")
         if not outcome["succeeded"]:
-            receipt.fail_stage("batchVerification", RpaPipelineError("RPA batch partial failure"))
+            gate = outcome.get("firstBatchCsvGate") or {}
+            paused = gate.get("status") in {"blocked", "unconfirmed"}
+            message = gate.get("message") if paused else "RPA batch partial failure"
+            receipt.fail_stage("batchVerification", RpaPipelineError(message))
             receipt.finish(False)
-            _set_run_phase(
-                output_dir,
-                "fact_pack_failed",
-                lastSuccessfulPhase="rpa_processing",
-                error="RPA batch partial failure",
-            )
-            print("rpa batch partial failure; verification=%s" % outcome["verificationPath"], file=sys.stderr)
+            _set_run_phase(output_dir, "rpa_paused" if paused else "fact_pack_failed",
+                           lastSuccessfulPhase="rpa_processing", error=message,
+                           firstBatchCsvGate=gate if paused else None)
+            print("%s; verification=%s" % (message, outcome["verificationPath"]), file=sys.stderr)
             return 2
         receipt.finish_stage("batchVerification", verificationPath=outcome["verificationPath"])
         receipt.start_stage("factPack")
@@ -712,6 +717,8 @@ def main(argv=None):
                 lastSuccessfulPhase="querying" if failed_stage and failed_stage != "query" else None,
                 error=str(exc),
             )
+        if getattr(exc, "first_batch_csv_gate", None) and getattr(args, "output_dir", None):
+            _set_run_phase(args.output_dir, "rpa_paused", error=str(exc), firstBatchCsvGate=exc.first_batch_csv_gate)
         if isinstance(exc, AnalysisError):
             print(json.dumps({"error": exc.to_dict()}, ensure_ascii=False), file=sys.stderr)
         else:

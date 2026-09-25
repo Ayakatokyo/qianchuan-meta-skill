@@ -251,6 +251,8 @@ def fetch_diagnosis(*, shop_id, rpa_account_id, material_id, start_date, end_dat
     context = runtime_context(environ)
     session = requests.Session() if session is None else session
     params = build_diagnosis_params(material_id, start_date, end_date)
+    submission_attempted = False
+    remote_terminal = False
     try:
         detail = fetch_connector_detail(environ=environ, session=session)
         dynamic_rpa.validate_business_params(detail, params)
@@ -264,6 +266,7 @@ def fetch_diagnosis(*, shop_id, rpa_account_id, material_id, start_date, end_dat
             "business_params": params,
             "shop_id": str(shop_id).strip(),
         }
+        submission_attempted = True
         response = session.post(
             context["apiBase"] + dynamic_rpa.FETCH_SUBMIT_PATH,
             json=submit_payload,
@@ -294,17 +297,24 @@ def fetch_diagnosis(*, shop_id, rpa_account_id, material_id, start_date, end_dat
             result.setdefault("task_group_id", task_group_id)
             status = str(result.get("status") or "").lower()
             if status in dynamic_rpa.SUCCESS_STATUSES:
+                remote_terminal = True
                 break
             if status == "failed":
+                remote_terminal = True
                 raise RpaAdapterError(f"RPA fetch task failed: {task_group_id}")
             if status not in dynamic_rpa.RUNNING_STATUSES:
                 raise RpaAdapterError(f"RPA fetch task returned unknown status: {status}")
+    except RpaAdapterError as exc:
+        if submission_attempted and not remote_terminal:
+            raise RpaAdapterError(str(exc), "rpa_result_unconfirmed") from exc
+        raise
     except (dynamic_rpa.ContractError, requests.RequestException, ValueError) as exc:
-        raise RpaAdapterError("unable to fetch RPA material diagnosis") from exc
+        error_type = "rpa_result_unconfirmed" if submission_attempted and not remote_terminal else "rpa_gateway_client_error"
+        raise RpaAdapterError("unable to fetch RPA material diagnosis", error_type) from exc
     records = result.get("payload") or result.get("records")
-    if isinstance(records, list):
-        return records, None, redact_gateway_payload(result)
     files = list(dynamic_rpa._iter_file_objects(result))
+    if isinstance(records, list) and not files:
+        return records, None, redact_gateway_payload(result)
     if files:
         try:
             url = dynamic_rpa._file_url(files[0])

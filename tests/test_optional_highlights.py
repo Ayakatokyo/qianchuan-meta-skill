@@ -30,7 +30,7 @@ class OptionalHighlightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             csv_path = root / "input.csv"
-            csv_path.write_text("data", encoding="utf-8")
+            csv_path.write_text("materialId\x01recordType\nm-1\x01material_info\n", encoding="utf-8")
 
             def postprocess(entry, _records, paths):
                 video_path = paths["videos"] / (entry["materialId"] + ".mp4")

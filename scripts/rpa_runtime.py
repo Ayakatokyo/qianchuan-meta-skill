@@ -7,7 +7,7 @@ import time
 
 
 class RpaRuntimeError(RuntimeError):
-    pass
+    error_type = "rpa_result_unconfirmed"
 
 
 def _context():
@@ -56,7 +56,7 @@ def run_isolated(params, *, timeout_sec, worker):
         if kind == "error":
             name, message, error_type = payload
             error = RpaRuntimeError("%s: %s" % (error_type or name, message))
-            error.error_type = error_type or "rpa_gateway_client_error"
+            error.error_type = error_type or "rpa_result_unconfirmed"
             raise error
         return payload
     finally:
