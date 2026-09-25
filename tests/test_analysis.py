@@ -1049,7 +1049,7 @@ class AnalysisResultTests(unittest.TestCase):
             validate_analysis_input(root, fact_dir, legacy_input, resolved, registry)
 
     def test_real_run_replay_is_read_only_and_preserves_top3_script_and_frame_scope(self):
-        run_dir = Path("/Users/shuzida/Desktop/FDE客户/小仙炖/qianchuan-meta-skill/runs/run-20260830-20260904")
+        run_dir = ROOT / "runs" / "run-20260830-20260904"
         if not run_dir.is_dir():
             self.skipTest("real replay fixture is not mounted")
         request_path = run_dir / "analysis" / "analysis-request.json"
