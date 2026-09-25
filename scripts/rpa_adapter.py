@@ -9,6 +9,7 @@ import time
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
+from date_policy import validate_period
 
 from path_safety import artifact_path, validate_material_id
 from rpa_csv_parser import RpaCsvError, parse_diagnosis_csv
@@ -136,10 +137,10 @@ def build_diagnosis_params(material_id, start_date, end_date):
         material_id = validate_material_id(material_id)
     except ValueError as exc:
         raise RpaAdapterError("candidate_pool_invalid: %s" % exc, "candidate_pool_invalid") from exc
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(start_date)) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(end_date)):
-        raise RpaAdapterError("RPA dates must use YYYY-MM-DD")
-    if end_date < start_date:
-        raise RpaAdapterError("RPA end date cannot precede start date")
+    try:
+        validate_period(start_date, end_date)
+    except ValueError as exc:
+        raise RpaAdapterError(str(exc)) from exc
     return {"material_id": material_id, "date_type": "CUSTOM", "custom_start_date": str(start_date), "custom_end_date": str(end_date)}
 
 

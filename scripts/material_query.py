@@ -1,8 +1,8 @@
 import re
-from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from field_registry import FieldRegistryError
+from date_policy import validate_period
 
 
 class MaterialQueryError(ValueError):
@@ -50,16 +50,10 @@ def _decimal_text(value):
 def _validate_period(value):
     if not isinstance(value, dict):
         raise MaterialQueryError("period must be an object")
-    start = _text(value.get("startDate"))
-    end = _text(value.get("endDate"))
     try:
-        start_date = date.fromisoformat(start)
-        end_date = date.fromisoformat(end)
+        return validate_period(value.get("startDate"), value.get("endDate"))
     except ValueError as exc:
-        raise MaterialQueryError("period dates must use YYYY-MM-DD") from exc
-    if start_date > end_date:
-        raise MaterialQueryError("period startDate must not be after endDate")
-    return {"startDate": start, "endDate": end}
+        raise MaterialQueryError(str(exc)) from exc
 
 
 def _normalize_filter(raw, registry, expected_kind):

@@ -25,6 +25,14 @@ def load_skill_form():
 
 
 class SkillDocumentTests(unittest.TestCase):
+    def test_derived_skill_keeps_runtime_date_policy(self):
+        fields = {field["key"]: field for field in load_skill_form()}
+        self.assertEqual(fields["date_range"]["max_policy"], "t_plus_2")
+        _, body = load_skill_document()
+        self.assertIn("## 从完整运行创建新 Skill", body)
+        self.assertIn("scripts/date_policy.py", body)
+        self.assertIn("非法日期不会调用报表或 RPA", body)
+
     def test_pre_input_uses_the_natural_language_highlight_rule_contract(self):
         pre_input = load_skill_metadata().get("pre_input", "")
 

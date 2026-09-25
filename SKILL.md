@@ -18,7 +18,7 @@ compatibility:
 
 ### 查询范围
 
-先通过 `api_shop` 选择报表店铺，再通过 `rpa_shop` 选择 `account` 为数字千川广告主 ID 的 RPA 授权账号。报表取数前运行 `python "$SKILL_ROOT/scripts/resolve_advertiser_id.py" --shop-id "<api_shop.extra.shop_id>" --rpa-shop-id "<rpa_shop.extra.shop_id>"`，按所选 RPA 授权项查询当前授权列表，要求恰好一条记录且其 `account` 是数字 ID；再确认该 ID 在所选 API 店铺的广告主授权关系中恰好出现一次。无法确认时停止，不提交报表或 RPA 任务。将 `api_shop.extra.shop_id` 与命令返回的 `advertiserId` 写入 QuerySpec 的 `scope.shopId` / `scope.advertiserId`，将 `rpa_shop.extra.shop_id` 仅作为 `--rpa-shop-id` 传给诊断步骤。API 店铺 ID 与 RPA 授权项 ID 属于不同 ID 域，**不得比较是否相等**。日期范围为闭区间，起止日期均使用 `YYYY-MM-DD`。字段和操作符只能来自 `config/asset-field-registry-v1.json`；维度和指标条件按 `AND` 处理。
+先通过 `api_shop` 选择报表店铺，再通过 `rpa_shop` 选择 `account` 为数字千川广告主 ID 的 RPA 授权账号。报表取数前运行 `python "$SKILL_ROOT/scripts/resolve_advertiser_id.py" --shop-id "<api_shop.extra.shop_id>" --rpa-shop-id "<rpa_shop.extra.shop_id>"`，按所选 RPA 授权项查询当前授权列表，要求恰好一条记录且其 `account` 是数字 ID；再确认该 ID 在所选 API 店铺的广告主授权关系中恰好出现一次。无法确认时停止，不提交报表或 RPA 任务。将 `api_shop.extra.shop_id` 与命令返回的 `advertiserId` 写入 QuerySpec 的 `scope.shopId` / `scope.advertiserId`，将 `rpa_shop.extra.shop_id` 仅作为 `--rpa-shop-id` 传给诊断步骤。API 店铺 ID 与 RPA 授权项 ID 属于不同 ID 域，**不得比较是否相等**。日期范围为闭区间，起止日期均使用 `YYYY-MM-DD`；按北京时间计算，结束日期最晚为执行日前 2 天（T+2）。昨天、今天及未来日期必须在外部取数前拒绝，不得因用户说“昨天”而放宽或静默改日期。未指定日报统计日时可提议前天；明确指定不可用日期时请用户改选。字段和操作符只能来自 `config/asset-field-registry-v1.json`；维度和指标条件按 `AND` 处理。
 
 ### 指标筛选
 
@@ -242,3 +242,11 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
 新运行统一写入用户工作对象目录下的 `$WORKSPACE_ROOT/千川数据资源/`，技能安装目录只保留代码、配置与参考资料。所有会写文件的入口都必须显式提供输出路径，并拒绝技能安装目录内的目标；动态 RPA 客户端也必须显式传 `--output-dir`。原有技能内 `runs/`、`千川数据资源/` 仅作为历史只读兼容目录，不搬动、不覆盖；如需恢复或继续生成产物，先完整复制到工作对象目录并从副本接续。每个运行目录保存解析后的配置、`source-data/`、候选素材、脱敏查询回执和 `run-receipt.json`；RPA 运行另保存诊断 CSV、records、`rpa/videos/` 中的原视频、可选 JPEG 和 `top_materials_rpa_ready.json`。配置、查询范围或高光帧规则变化时必须使用新的输出目录。
 
 `query` 成功不代表 RPA 已完成。RPA 仅在目标数量的素材均成功处理并保存视频后才完整；失败素材会按保存的排名顺序由后续候选补位，仍不会超过 `targetTopN`。当前保留经下载上限校验的原视频，不做隐式压缩；如需压缩，后续必须显式声明目标编码、码率/尺寸上限、保留源文件还是替换源文件，并为压缩产物另写入路径、大小和 SHA-256。长期工件不保存凭证。`verify-run` 完全离线，可校验已完成目录的相对路径、哈希、JSON、视频与 JPEG 工件，不读取凭证也不调用外部服务。
+
+## 从完整运行创建新 Skill
+
+用户在完成取数、事实校验、分析与报告后要求固化本流程时，先以**本次已成功的运行回执**为依据：记录授权账号的字段类型（不保存凭证）、QuerySpec/HighlightSpec、`runId`、事实包 manifest 哈希、分析请求与已验证结果、报告输出及缺口。把用户可变的店铺、广告主、日期、TopN、筛选和分析问题做成新 Skill 的入参；把运行产物只作为开发证据，不写死客户 ID、日期、路径或报告结论。新 Skill 中分别保留“取数→事实校验→分析→报告”的状态门禁，只有前一阶段成功才进入后一阶段；失败保留现场和可恢复入口，不用旧报告冒充本轮结果。
+
+派生 Skill 的日期表单须声明 `max_policy: t_plus_2`，说明“前天及以前”，但表单只是第一道提示。新 Skill 的每条实时取数路径在请求报表或诊断 RPA **之前**都必须调用随包交付的 `scripts/date_policy.py` 的 `validate_period`（或委托本元技能的 `QuerySpec`/取数入口），并让非零退出阻断网络请求。若新 Skill 独立安装，须将该日期校验代码与调用点、测试一同纳入自己的包；仅引用本文件或只复制表单不算完成。日报需同时取统计日 T 和 T-1 时，默认 T 为北京时间前天；明确请求昨天时返回可用上限并请用户改选，不自动替用户改日。可用命令：`python "$SKILL_ROOT/scripts/date_policy.py" --start-date YYYY-MM-DD --end-date YYYY-MM-DD`。
+
+交付派生包前至少验证北京时间边界 T-2 通过、T-1/今天/未来拒绝、开始晚于结束拒绝；断言非法日期不会调用报表或 RPA；检查新包中的脚本、表单、依赖、报告资源和回执路径均存在且可从干净解包目录运行。若该流程引入直接连接器调用，不得绕过上述日期门禁、授权关系与事实校验。

@@ -9,6 +9,7 @@ import tempfile
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
+from date_policy import validate_period
 
 
 FUNCTION_CODE = "OCEANENGINE_UNI_PROMOTION_PLAN_DATA_REQUESTS_ZDY"
@@ -199,8 +200,10 @@ def _validate_field_contract(order_by):
 def _business_params(advertiser_id, start_date, end_date, *, order_by=None):
     if not str(advertiser_id).isdigit():
         raise ReportClientError("advertiser ID is invalid")
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(start_date)) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(end_date)):
-        raise ReportClientError("report dates must use YYYY-MM-DD")
+    try:
+        validate_period(start_date, end_date)
+    except ValueError as exc:
+        raise ReportClientError(str(exc)) from exc
     resolved_order_by = list(order_by or [{"field": "stat_cost_for_overall_roi2", "type": 2}])
     _validate_field_contract(resolved_order_by)
     return {
