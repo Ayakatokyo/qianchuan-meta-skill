@@ -328,6 +328,24 @@ def _field_ids(field_manifest):
     return result
 
 
+def _detail_scope_rows(rows, manifest):
+    material_ids = manifest.get("materialIds")
+    if material_ids is None:
+        return [], []
+    if not isinstance(material_ids, list) or any(
+        not isinstance(material_id, str) or not material_id.strip() for material_id in material_ids
+    ):
+        raise OverviewReportError("fact-pack materialIds must be a list of material IDs")
+    if len(set(material_ids)) != len(material_ids):
+        raise OverviewReportError("fact-pack materialIds are duplicated")
+    rows_by_id = {row["materialId"]: row for row in rows}
+    if len(rows_by_id) != len(rows):
+        raise OverviewReportError("structured source material IDs are duplicated")
+    if any(material_id not in rows_by_id for material_id in material_ids):
+        raise OverviewReportError("fact-pack materialId is missing from structured source")
+    return material_ids, [rows_by_id[material_id] for material_id in material_ids]
+
+
 def build_overview_data(run_dir, registry_path, io_cache=None):
     run_root = Path(run_dir).resolve()
     io_cache = io_cache or CommandFileCache(run_root)
@@ -421,10 +439,13 @@ def build_overview_data(run_dir, registry_path, io_cache=None):
         "fields": fields,
         "defaultFieldIds": default_field_ids,
         "rows": rows,
+        "detailMaterialIds": [],
+        "detailRows": [],
     }
     manifest_path = run_root / "fact-pack" / "manifest.json"
     if manifest_path.is_file():
         manifest = _read_json(manifest_path, "fact-pack manifest", dict)
+        model["detailMaterialIds"], model["detailRows"] = _detail_scope_rows(rows, manifest)
         quality = manifest.get("quality") if isinstance(manifest.get("quality"), dict) else {}
         model["diagnosisAttribution"] = quality.get("diagnosisAttribution", {"status": "not_assessed", "excludedMaterialIds": []})
     else:
@@ -492,7 +513,7 @@ def render_overview_html(model):
 * { box-sizing: border-box; }
 body { margin: 0; padding: 32px; background: var(--bg); }
 main { max-width: 1120px; margin: 0 auto; }
-h1 { margin: 0 0 22px; font-size: 30px; line-height: 1.25; letter-spacing: -.02em; }
+h1 { margin: 0; font-size: 30px; line-height: 1.25; letter-spacing: -.02em; }
 .quality-alert { margin: 0 0 18px; padding: 14px 16px; border: 1px solid #f59e0b; border-radius: 12px; background: #fffbeb; color: #78350f; line-height: 1.5; }
 .quality-alert[hidden] { display: none; }
 .toolbar, .summary, .pager { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -564,6 +585,13 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 .pager { justify-content: space-between; padding: 14px 2px; color: var(--muted); font-size: 14px; }
 .section-nav { display: flex; gap: 8px; margin: 0 0 16px; }
 .section-nav button.active { border-color: var(--accent); background: var(--accent); color: white; }
+.report-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
+.data-scope-switch { display: flex; flex: 0 0 auto; gap: 10px; }
+.data-scope-switch button { width: 150px; height: 54px; padding: 0 12px; border-color: var(--accent); border-radius: 9px; background: white; color: var(--accent); font-size: 16px; font-weight: 650; line-height: 1.3; }
+.data-scope-switch button:hover:not(:disabled) { border-color: #1d4ed8; background: var(--accent-soft); color: var(--accent); }
+.data-scope-switch button.active { background: var(--accent); color: white; }
+.data-scope-switch button.active:hover:not(:disabled) { border-color: #1d4ed8; background: #1d4ed8; color: white; }
+@media (max-width: 760px) { .report-header { align-items: stretch; flex-direction: column; } .data-scope-switch { width: 100%; } .data-scope-switch button { flex: 1; width: auto; min-width: 0; } }
 [data-section-panel][hidden] { display: none; }
 .audience-section { display: grid; gap: 16px; }
 .chart-grid { display: grid; gap: 16px; }
@@ -646,6 +674,8 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 .filter-config-column h3 { margin: 0 0 6px; font-size: 16px; }
 .filter-config-note { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .filter-config-list { display: grid; gap: 10px; margin: 0; }
+.filter-config-column--highlights .filter-config-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.filter-config-item--zero-second { grid-column: 1 / -1; }
 .filter-config-item { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
 .filter-config-item dt { color: var(--muted); font-size: 12px; }
 .filter-config-item dd { margin: 6px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.55; }
@@ -742,7 +772,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 .chart-tooltip[hidden] { display: none; }
 @media (max-width: 900px) { .field-modal-body { grid-template-columns: 160px minmax(0, 1fr); } .field-modal-selected { grid-column: 2; max-height: 190px; border-top: 1px solid var(--line); } }
 @media (max-width: 1100px) { .highlight-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-@media (max-width: 700px) { body { padding: 18px 12px; } h1 { font-size: 24px; } input[type=search] { min-width: 0; } .field-modal { padding: 10px; } .field-modal-panel { height: calc(100vh - 20px); } .field-modal-body { display: flex; flex-direction: column; } .field-modal-groups { display: flex; gap: 6px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); } .field-modal-groups button { flex: 0 0 auto; width: auto; margin: 0; white-space: nowrap; } .field-modal-selected { max-height: 190px; border-top: 1px solid var(--line); border-left: 0; } .field-option-grid { grid-template-columns: 1fr; } .field-modal-footer { align-items: flex-end; flex-direction: column; } .field-modal-footer-actions { width: 100%; } .field-modal-footer-actions button { flex: 1; } .field-modal-footer p { align-self: flex-start; } .material-name-column { min-width: 300px; width: 300px; } .chart-grid { grid-template-columns: 1fr; } .donut-layout, .script-formula-donut, .filter-config-layout { grid-template-columns: 1fr; } .donut-layout svg, .script-formula-donut svg { margin: 0 auto; } .highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { body { padding: 18px 12px; } h1 { font-size: 24px; } input[type=search] { min-width: 0; } .field-modal { padding: 10px; } .field-modal-panel { height: calc(100vh - 20px); } .field-modal-body { display: flex; flex-direction: column; } .field-modal-groups { display: flex; gap: 6px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); } .field-modal-groups button { flex: 0 0 auto; width: auto; margin: 0; white-space: nowrap; } .field-modal-selected { max-height: 190px; border-top: 1px solid var(--line); border-left: 0; } .field-option-grid { grid-template-columns: 1fr; } .field-modal-footer { align-items: flex-end; flex-direction: column; } .field-modal-footer-actions { width: 100%; } .field-modal-footer p { align-self: flex-start; } .material-name-column { min-width: 300px; width: 300px; } .chart-grid { grid-template-columns: 1fr; } .donut-layout, .script-formula-donut, .filter-config-layout { grid-template-columns: 1fr; } .filter-config-column--highlights .filter-config-list { grid-template-columns: 1fr; } .donut-layout svg, .script-formula-donut svg { margin: 0 auto; } .highlight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
  .single-formula-workspace { display: grid; gap: 14px; }
  .single-formula-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
  .single-formula-toolbar h3 { margin: 0; font-size: 18px; }
@@ -771,15 +801,15 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
 </head>
 <body>
 <main>
-<h1>千川素材榜单数据工作台</h1>
+<header class="report-header"><h1>千川素材榜单数据工作台</h1><div class="data-scope-switch" role="group" aria-label="素材数据口径"><button type="button" class="active" data-scope="all" aria-pressed="true">全量素材</button><button type="button" data-scope="detail" aria-pressed="false">详情素材</button></div></header>
 <div id="quality-alert" class="quality-alert" role="alert" hidden></div>
 <nav class="section-nav" aria-label="报告部分">
   <button type="button" class="active" data-section="filters">素材筛选条件</button>
-  <button type="button" data-section="materials">素材榜单</button>
-  <button type="button" data-section="audience">人群数据</button>
-  <button type="button" data-section="scripts">脚本内容公式</button>
-  <button type="button" data-section="highlights">高光帧数据</button>
-  <button type="button" data-section="single-material">单素材数据</button>
+  <button type="button" data-section="materials">全量素材榜单</button>
+  <button type="button" data-section="audience" data-detail-section hidden>人群数据</button>
+  <button type="button" data-section="scripts" data-detail-section hidden>脚本内容公式</button>
+  <button type="button" data-section="highlights" data-detail-section hidden>高光帧数据</button>
+  <button type="button" data-section="single-material" data-detail-section hidden>单素材数据</button>
 </nav>
 <section id="filters-panel" class="audience-section" data-section-panel="filters">
   <div class="filter-config-shell"><h2>素材筛选条件</h2><div id="filter-config"></div></div>
@@ -934,6 +964,8 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   }
   const defaultFieldIds = Array.isArray(model.defaultFieldIds) ? model.defaultFieldIds.filter(id => fieldMap[id]) : presentationFields.filter(field => field.defaultVisible).map(field => field.id);
   const state = { query: "", visibleFieldIds: orderedVisibleFieldIds(defaultFieldIds), draftFieldIds: null, fieldSearch: "", activeFieldGroup: fieldGroupNames[0] || "", sort: { field: initialSort.field || null, direction: initialSort.direction || "none" }, page: 1 };
+  const scopeState = { current: "all", sections: { all: "filters", detail: "filters" } };
+  const dataScopeButtons = [...document.querySelectorAll("[data-scope]")];
   const search = document.getElementById("search");
   const fieldModal = document.getElementById("field-management");
   const fieldGroups = document.getElementById("field-groups");
@@ -1014,9 +1046,9 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     add(filterConfigLabels.filters, context.filters);
     add(filterConfigLabels.ranking, context.ranking);
     const highlightEntries = Array.isArray(model.highlightFilterContext) ? model.highlightFilterContext : [];
-    const renderColumn = (title, note, items, empty) => `<section class="filter-config-column"><h3>${escaped(title)}</h3><p class="filter-config-note">${escaped(note)}</p>${items.length ? `<dl class="filter-config-list">${items.map(item => `<div class="filter-config-item"><dt>${escaped(item.label)}</dt><dd>${escaped(item.value)}</dd></div>`).join("")}</dl>` : `<div class="empty">${escaped(empty)}</div>`}</section>`;
+    const renderColumn = (title, note, items, empty, highlights = false) => `<section class="filter-config-column${highlights ? " filter-config-column--highlights" : ""}"><h3>${escaped(title)}</h3><p class="filter-config-note">${escaped(note)}</p>${items.length ? `<dl class="filter-config-list">${items.map(item => `<div class="filter-config-item${highlights && item.label === "0秒画面" ? " filter-config-item--zero-second" : ""}"><dt>${escaped(item.label)}</dt><dd>${escaped(item.value)}</dd></div>`).join("")}</dl>` : `<div class="empty">${escaped(empty)}</div>`}</section>`;
     const target = document.getElementById("filter-config");
-    target.innerHTML = `<div class="filter-config-layout">${renderColumn("素材列表筛选条件", "仅展示本次实际影响素材入选或排序的条件。", entries, "未配置有效素材列表条件")}${renderColumn("高光帧筛选标准", "仅展示本次实际启用的高光帧选择规则。", highlightEntries, "未配置有效高光帧筛选标准")}</div>`;
+    target.innerHTML = `<div class="filter-config-layout">${renderColumn("素材列表筛选条件", "仅展示本次实际影响素材入选或排序的条件。", entries, "未配置有效素材列表条件")}${renderColumn("高光帧筛选标准", "仅展示本次实际启用的高光帧选择规则。", highlightEntries, "未配置有效高光帧筛选标准", true)}</div>`;
   }
 
   const singleDefaultFieldIds = [
@@ -1314,7 +1346,12 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   function matchingRows() {
     const needle = state.query;
     const normalizedNeedle = normalize(needle);
-    const rows = model.rows.filter(row => {
+    const detailMaterialIds = Array.isArray(model.detailMaterialIds) ? model.detailMaterialIds : singleMaterials.map(item => item.materialId);
+    const detailSet = new Set(detailMaterialIds);
+    const scopedRows = scopeState.current === "detail"
+      ? (Array.isArray(model.detailRows) ? model.detailRows : model.rows.filter(row => detailSet.has(row.materialId)))
+      : model.rows;
+    const rows = scopedRows.filter(row => {
       if (!normalizedNeedle) return true;
       return normalize(row.materialId).includes(normalize(needle)) || normalize(row.values.roi2_material_video_name).includes(normalize(needle));
     });
@@ -1433,6 +1470,8 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
   }
 
   function activateSection(section) {
+    if (scopeState.current === "all" && section !== "filters" && section !== "materials") section = "filters";
+    scopeState.sections[scopeState.current] = section;
     document.querySelectorAll("[data-section]").forEach(item => item.classList.toggle("active", item.dataset.section === section));
     document.querySelectorAll("[data-section-panel]").forEach(panel => { panel.hidden = panel.dataset.sectionPanel !== section; });
     if (section === "filters") renderFilterConfig();
@@ -1442,6 +1481,25 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     if (section === "single-material") singleRender();
     if (section !== "scripts") hideScriptFormulaTooltip();
     if (section !== "audience") hideChartTooltip();
+  }
+
+  function switchDataScope(nextScope) {
+    if (nextScope === scopeState.current) return;
+    const currentSection = scopeState.sections[scopeState.current];
+    scopeState.current = nextScope;
+    const detail = scopeState.current === "detail";
+    dataScopeButtons.forEach(button => {
+      const active = button.dataset.scope === nextScope;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    document.querySelectorAll("[data-detail-section]").forEach(button => { button.hidden = !detail; });
+    document.querySelector('.section-nav [data-section="materials"]').textContent = detail ? "详情素材榜单" : "全量素材榜单";
+    state.page = 1;
+    const nextSection = currentSection === "filters" || currentSection === "materials"
+      ? currentSection : "filters";
+    activateSection(nextSection);
+    render();
   }
 
   function openSingleMaterialDetail(materialId) {
@@ -2031,6 +2089,7 @@ mark { padding: 0 2px; background: #fff0a8; border-radius: 3px; }
     const section = event.currentTarget.dataset.section;
     activateSection(section);
   }));
+  dataScopeButtons.forEach(button => button.addEventListener("click", () => switchDataScope(button.dataset.scope)));
   document.getElementById("script-formula-secondary-back").addEventListener("click", () => {
     scriptFormulaState.selectedPrimary = null;
     renderScriptFormula();

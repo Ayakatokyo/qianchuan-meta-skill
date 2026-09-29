@@ -231,6 +231,26 @@ def _attach_highlight_facts(run_dir, *, valid=True):
 
 
 class OverviewProjectionTests(unittest.TestCase):
+    def test_detail_leaderboard_uses_fact_pack_material_scope_and_api_metrics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = _make_run(Path(temp_dir))
+            _write_json(run_dir / "fact-pack" / "manifest.json", {
+                "materialIds": ["m-2", "m-1"],
+            })
+            model = build_overview_data(run_dir, REGISTRY_PATH)
+
+        self.assertEqual([row["materialId"] for row in model["rows"]], ["m-1", "m-2", "m-3"])
+        self.assertEqual(model["detailMaterialIds"], ["m-2", "m-1"])
+        self.assertEqual([row["materialId"] for row in model["detailRows"]], ["m-2", "m-1"])
+        self.assertEqual(model["detailRows"][0]["values"]["stat_cost_for_overall_roi2"], 80)
+
+    def test_detail_leaderboard_rejects_material_missing_from_api_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = _make_run(Path(temp_dir))
+            _write_json(run_dir / "fact-pack" / "manifest.json", {"materialIds": ["m-9"]})
+            with self.assertRaisesRegex(OverviewReportError, "fact-pack materialId is missing"):
+                build_overview_data(run_dir, REGISTRY_PATH)
+
     def test_overview_exposes_diagnosis_warning_without_labelling_materials_duplicates(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = _make_run(Path(temp_dir))
@@ -425,6 +445,23 @@ class OverviewHtmlTests(unittest.TestCase):
         }
         html = render_overview_html(model)
 
+        self.assertIn('class="data-scope-switch" role="group" aria-label="素材数据口径"', html)
+        self.assertEqual(html.count('data-scope="all"'), 1)
+        self.assertEqual(html.count('data-scope="detail"'), 1)
+        self.assertIn('data-scope="all" aria-pressed="true">全量素材</button>', html)
+        self.assertIn('data-scope="detail" aria-pressed="false">详情素材</button>', html)
+        self.assertIn('data-section="materials">全量素材榜单</button>', html)
+        self.assertIn('detail ? "详情素材榜单" : "全量素材榜单"', html)
+        self.assertIn('.filter-config-column--highlights .filter-config-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }', html)
+        self.assertIn('filter-config-item--zero-second', html)
+        self.assertIn('.data-scope-switch button.active { background: var(--accent); color: white; }', html)
+        self.assertIn('currentSection === "filters" || currentSection === "materials"', html)
+        self.assertIn('? currentSection : "filters"', html)
+        self.assertIn('data-section="audience" data-detail-section hidden', html)
+        self.assertIn('data-section="scripts" data-detail-section hidden', html)
+        self.assertIn('data-section="highlights" data-detail-section hidden', html)
+        self.assertIn('data-section="single-material" data-detail-section hidden', html)
+        self.assertIn('switchDataScope(button.dataset.scope)', html)
         self.assertIn('data-section="filters"', html)
         self.assertLess(html.index('data-section="filters"'), html.index('data-section="materials"'))
         self.assertIn('id="filters-panel"', html)

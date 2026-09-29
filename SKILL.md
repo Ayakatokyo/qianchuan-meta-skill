@@ -155,7 +155,7 @@ uv run --with-requirements "$SKILL_ROOT/requirements.txt" python "$SKILL_ROOT/sc
 
 只有 `run --execute-rpa` 在 RPA、records、抽帧和批量验证均成功后，才会自动生成 `fact-pack/`；成功回执的 `factPack` 阶段会记录 manifest 路径、`targetTopN` 和分类计数。仅 `query` 或未授权的 `run` 不会创建或声称完成事实包。也可以对已有完成目录显式执行 `build-fact-pack`，但 query-only、RPA 部分失败或工件不完整时命令会非零退出。
 
-阶段一取数成功并通过事实包校验后，必须继续执行 `render-overview` 生成阶段一素材总览报告。该命令只读取当前运行目录中的已校验素材汇总、事实包和可用详情证据，校验所引用文件后生成 JSON/HTML 并复制报告所需的已验证本地媒体；不重新查询、不重跑 RPA、不调用模型，也不重建事实包或重新抽帧。默认输出 `overview/overview-data.json` 和 `overview/index.html`。报告是事实投影工作台，包含素材榜单、查询上下文、可选字段，以及在证据可用时展示的人群、脚本、高光帧、9:16 单素材视频预览和单素材详情；报告会把已验证视频复制到相对 `assets/single-material/videos/`。不可用数据必须保留明确的 unavailable/gap 状态，不得补零或生成商业结论。命令返回 `status=succeeded`、`validation.status=passed` 且两个文件均存在后，阶段一报告才算完成；来源文件缺失、记录数不一致、字段未注册或写入失败时必须阻断阶段一交接。
+阶段一取数成功并通过事实包校验后，必须继续执行 `render-overview` 生成阶段一素材总览报告。该命令只读取当前运行目录中的已校验素材汇总、事实包和可用详情证据，校验所引用文件后生成 JSON/HTML 并复制报告所需的已验证本地媒体；不重新查询、不重跑 RPA、不调用模型，也不重建事实包或重新抽帧。默认输出 `overview/overview-data.json` 和 `overview/index.html`。报告是事实投影工作台：右上角并排的“全量素材”“详情素材”按钮切换数据口径；两种口径均保留素材筛选条件、可选字段和各自素材榜单。全量榜单使用 API 返回的全部素材；详情榜单仅使用事实包中已选详情素材 ID 对应的 API 指标，详情界面另展示人群、脚本内容公式、高光帧、9:16 单素材视频预览和单素材详情。原有各板块交互和组件不因口径切换改变；报告会把已验证视频复制到相对 `assets/single-material/videos/`。不可用数据必须保留明确的 unavailable/gap 状态，不得补零或生成商业结论。命令返回 `status=succeeded`、`validation.status=passed` 且两个文件均存在后，阶段一报告才算完成；来源文件缺失、记录数不一致、字段未注册、详情素材 ID 无法对应 API 素材或写入失败时必须阻断阶段一交接。
 
 `render-overview` 是阶段一一次性报告门禁：同一进程内完成来源绑定、记录计数、路径安全、媒体哈希、报告资产复制和输出文件收据，重复高光资产只物理复制一次。工作流已经完成运行目录与事实包校验后，报告成功不得再例行重复执行 `verify-run` 或 `verify-fact-pack`，也禁止拆成多条临时脚本逐项反复检查一致性、排序、倍率、脱敏、结构和资源。只有 `render-overview` 返回失败、收据缺失，或用户明确要求专项审计时，才针对失败门禁执行一次定向诊断；修复后只重跑一次 `render-overview`。
 
