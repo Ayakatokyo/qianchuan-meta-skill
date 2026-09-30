@@ -109,7 +109,7 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("102 个指标", body)
         self.assertIn("metricFilters", body)
         self.assertIn("ranking.field", body)
-        self.assertIn("未提供排序条件时按连接器返回的原始顺序输出", body)
+        self.assertIn("未提供排序条件时默认按整体消耗", body)
 
     def test_runtime_outputs_are_kept_outside_the_skill_installation(self):
         _, body = load_skill_document()

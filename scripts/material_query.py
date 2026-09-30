@@ -111,6 +111,8 @@ def parse_query_config(raw, registry):
     dimension_filters = [_normalize_filter(item, registry, "dimension") for item in raw.get("dimensionFilters", [])]
     metric_filters = [_normalize_filter(item, registry, "metric") for item in raw.get("metricFilters", [])]
     sort = raw.get("sort")
+    if sort is None:
+        sort = {"field": "stat_cost_for_roi2", "direction": "desc"}
     if sort is not None:
         if not isinstance(sort, dict):
             raise MaterialQueryError("sort must be an object")

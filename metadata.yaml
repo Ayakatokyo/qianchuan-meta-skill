@@ -34,7 +34,7 @@ pre_input: |
   千川广告主ID：__field:rpa_shop__（必填）
   时间范围：__field:date_range__
   详情素材数：__field:top_n__（包含互动时序、人群、脚本和高光帧数据，默认10）
-  素材筛选与排序：__field:material_filter_sort__（可选；例如筛选“整体消耗”>=10000，再按“净成交ROI”降序；排序指标和排序方向均可留空）。
+  素材筛选与排序：__field:material_filter_sort__（可选；例如筛选“整体消耗”>=10000，再按“净成交ROI”降序；未填写条件时不加筛选，默认按“整体消耗”降序排列）。
   是否同时生成高光帧图片：__field:highlight_mode__（选择否时无需填写高光帧规则）
   高光帧规则：__field:highlight_rules__（选择是时填写；可用指标：整体点击次数、整体流失数、整体点赞次数、整体评论次数、整体转发次数、整体新增粉丝数；规则案例：保留封面，提取整体点击次数局部峰值3帧、整体转发次数最高值2帧，不提取其他指标）
 skill_form:
@@ -75,7 +75,7 @@ skill_form:
   - key: material_filter_sort
     type: textarea
     label: 筛选与排序条件
-    description: 可选；用自然语言描述指标阈值、排序字段和方向；不填写则保留连接器原始顺序
+    description: 可选；用自然语言描述指标阈值、排序字段和方向；不填写则不加筛选，默认按整体消耗降序排列
     placeholder: "例如：整体消耗 >= 10000，再按净成交 ROI 降序"
     required: false
     rows: 3

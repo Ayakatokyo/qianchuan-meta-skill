@@ -60,7 +60,7 @@ class MaterialQueryTests(unittest.TestCase):
         self.assertEqual(result["materials"][0]["metrics"]["total_prepay_and_pay_settle_roi2_1h"], "2")
         self.assertEqual(result["receipt"]["excluded"][0]["materialId"], "m-3")
 
-    def test_preserves_source_order_when_sort_is_not_configured(self):
+    def test_defaults_to_overall_spend_desc_when_sort_is_not_configured(self):
         query = parse_query_config(
             {
                 "schemaVersion": 1,
@@ -74,19 +74,18 @@ class MaterialQueryTests(unittest.TestCase):
             self.registry,
         )
 
-        result = execute_material_query(
-            [
-                origin_row("m-2", "素材二", "直播素材", 20, 40, 2),
-                origin_row("m-1", "素材一", "直播素材", 10, 10, 1.5),
-            ],
-            query,
-            self.registry,
-        )
+        rows = [
+            origin_row("m-2", "素材二", "直播素材", 20, 40, 2),
+            origin_row("m-1", "素材一", "直播素材", 10, 10, 1.5),
+        ]
+        rows[0]["metrics"]["stat_cost_for_roi2"] = {"Value": "10"}
+        rows[1]["metrics"]["stat_cost_for_roi2"] = {"Value": "30"}
+        result = execute_material_query(rows, query, self.registry)
 
-        self.assertEqual([item["materialId"] for item in result["materials"]], ["m-2", "m-1"])
-        self.assertIsNone(result["receipt"]["sort"])
-        self.assertIsNone(result["materials"][0]["rankingMetric"])
-        self.assertIsNone(result["materials"][0]["sortValue"])
+        self.assertEqual([item["materialId"] for item in result["materials"]], ["m-1", "m-2"])
+        self.assertEqual(result["receipt"]["sort"], {"field": "stat_cost_for_roi2", "direction": "desc"})
+        self.assertEqual(result["materials"][0]["rankingMetric"], "stat_cost_for_roi2")
+        self.assertEqual(result["materials"][0]["sortValue"], "30")
 
     def test_rejects_business_aliases_and_uses_direct_zero_values(self):
         invalid = dict(self.query)

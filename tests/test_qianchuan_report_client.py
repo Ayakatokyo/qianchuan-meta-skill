@@ -155,7 +155,7 @@ class QianchuanReportClientTests(unittest.TestCase):
         self.assertIn("stat_cost_for_overall_roi2", business_params["metrics"])
         self.assertIn("stat_cost_for_roi2", business_params["metrics"])
         self.assertEqual(
-            business_params["orderBy"], [{"field": "stat_cost_for_overall_roi2", "type": 2}]
+            business_params["orderBy"], [{"field": "stat_cost_for_roi2", "type": 2}]
         )
         self.assertEqual(
             session.post_call["json"]["business_params"]["startTime"], "2026-08-01 00:00:00"

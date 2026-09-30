@@ -76,14 +76,16 @@ class ConfigSpecTests(unittest.TestCase):
         self.assertEqual(expanded["collection"], {"candidateTopN": 27, "targetTopN": 9})
         self.assertEqual(query_spec_to_query_config(expanded)["candidateTopN"], 27)
 
-    def test_query_spec_allows_missing_ranking_for_source_order_output(self):
+    def test_query_spec_defaults_missing_ranking_to_overall_spend_desc(self):
         spec = query_spec()
         del spec["ranking"]
 
         resolved = resolve_query_spec(spec, self.registry)
 
-        self.assertIsNone(resolved["ranking"])
-        self.assertIsNone(query_spec_to_query_config(resolved)["sort"])
+        expected = {"field": "stat_cost_for_roi2", "direction": "desc"}
+        self.assertEqual(resolved["ranking"], expected)
+        self.assertEqual(query_spec_to_query_config(resolved)["sort"], expected)
+        self.assertEqual(resolve_query_spec(query_spec(ranking=None), self.registry)["ranking"], expected)
 
     def test_query_spec_rejects_candidate_pool_smaller_than_target(self):
         with self.assertRaisesRegex(ConfigSpecError, "candidateTopN"):

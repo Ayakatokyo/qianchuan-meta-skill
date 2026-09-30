@@ -204,7 +204,7 @@ def _business_params(advertiser_id, start_date, end_date, *, order_by=None):
         validate_period(start_date, end_date)
     except ValueError as exc:
         raise ReportClientError(str(exc)) from exc
-    resolved_order_by = list(order_by or [{"field": "stat_cost_for_overall_roi2", "type": 2}])
+    resolved_order_by = list(order_by or [{"field": "stat_cost_for_roi2", "type": 2}])
     _validate_field_contract(resolved_order_by)
     return {
         "advertiserId": int(advertiser_id),
