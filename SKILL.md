@@ -81,6 +81,8 @@ QuerySpec 的 `field` 必须来自 `config/asset-field-registry-v1.json`。注�
 
 ## 执行
 
+`config/example-config.json` 和 `config/query-preview-config.json` 中的 `advertiserId` 为全零占位值，仅用于示例与离线校验；真实采集前必须替换为用户所选授权账号的广告主 ID。
+
 `validate` 不访问外部服务；`query` 使用 `ENV_BACKEND_HOST`、`YUCE_AUTHORIZATION`，以及 `YUCE_SESSION_ID` 或 `YCSESSIONID` 调用千川报表连接器。`YUCE_SESSION_ID` 仅用于 Agent 会话标识；RPA 与报表连接器的网关 Cookie 一律采用 `YCSESSIONID` → `YUCE_AUTHORIZATION`，不得将短会话标识写入 `YCSESSIONID`。凭证不得进入 Spec、Git、日志或运行工件。
 
 详情 RPA 的唯一静态身份是 `rpa.conn.juliang.qc.material.analysis.video.live.diagnosis`，只保存在 `scripts/rpa_dynamic_client.py`。每次取数先执行 `detail`/`schema` 获取实时 `platformCode`、`inParamJsonSchemaText` 或 `inParamList`，再用一个完整业务 JSON 执行 `validate`；完整 `run/workflow --execute-rpa` 会再次反查详情、重复校验、走异步 task/status，并下载解析 CSV。独立动态详情 `fetch`（包括 `--no-download`）在任何远端请求前拒绝，必须使用带首批门禁的完整入口。禁止把详情返回的 `id` 当作 connector code，禁止补 `_ACCOUNT_PASSWORD`，也不能继续使用同步 `/invoke` 执行详情 RPA。外层工具执行真实详情采集时显式设置 3600 秒超时。
